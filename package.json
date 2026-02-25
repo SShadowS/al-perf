@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/index.ts",
   "bin": {
-    "al-profile": "src/cli/index.ts"
+    "al-profile": "src/cli/index.ts",
+    "al-profile-mcp": "src/mcp/index.ts"
   },
   "scripts": {
     "dev": "bun run src/cli/index.ts",

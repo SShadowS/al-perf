@@ -13,6 +13,10 @@ export { runSourceDetectors } from "./source/source-patterns.js";
 export { findCompanionZip, extractCompanionZip } from "./source/zip-extractor.js";
 export { createALParser, parseALSource } from "./source/parser-init.js";
 
+// MCP server
+export { createMcpServer } from "./mcp/server.js";
+export type { McpServerOptions } from "./mcp/server.js";
+
 // Types
 export type { RawProfile, RawProfileNode, ParsedProfile, ProfileType } from "./types/profile.js";
 export type { ProcessedProfile, ProcessedNode } from "./types/processed.js";
