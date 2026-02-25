@@ -82,6 +82,15 @@ describe("detectEventSubscriberIssues", () => {
     expect(match!.suggestion).toBeDefined();
   });
 
+  test("detects event subscriber with record ops in loops as warning", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectEventSubscriberIssues(index);
+
+    const match = patterns.find((p) => p.id === "event-subscriber-with-loop-ops");
+    expect(match).toBeDefined();
+    expect(match!.severity).toBe("warning");
+  });
+
   test("does not flag non-subscriber procedures", async () => {
     const index = await buildSourceIndex("test/fixtures/source");
     const patterns = detectEventSubscriberIssues(index);

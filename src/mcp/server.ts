@@ -448,4 +448,24 @@ Record retrieval operations (FindSet, FindFirst, etc.) without a preceding SetLo
 call. Without SetLoadFields, Business Central loads all fields from the database,
 which can be wasteful for tables with many or large fields.
 **Fix:** Add SetLoadFields before record retrieval to load only the fields you need.
+
+## Source-Only Patterns (no profile needed)
+
+### Nested Loops
+**Severity:** warning
+A loop nested inside another loop. Nested loops multiply iteration counts
+and can cause severe performance degradation, especially with record operations.
+**Fix:** Pre-load inner data before the outer loop, or use bulk operations.
+
+### Unfiltered FindSet
+**Severity:** warning
+A FindSet/FindFirst/FindLast call without any preceding SetRange() or SetFilter()
+on the same record variable. This queries all records in the table.
+**Fix:** Add SetRange() or SetFilter() before record retrieval to limit the result set.
+
+### Event Subscriber with Loops
+**Severity:** info/warning
+An event subscriber procedure that contains loops or record operations inside loops.
+Event subscribers are implicit call points that are easy to overlook during tuning.
+**Fix:** Review the subscriber for performance impact and consider batching operations.
 `;

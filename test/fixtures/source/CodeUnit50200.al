@@ -46,4 +46,16 @@ codeunit 50200 "Advanced Patterns"
             SalesLine.TestField("Quantity");
         until SalesLine.Next() = 0;
     end;
+
+    [EventSubscriber(ObjectType::Table, Database::Customer, 'OnAfterModifyEvent', '', true, true)]
+    local procedure OnAfterModifyCustomer(var Rec: Record Customer)
+    var
+        AuditLog: Record "Audit Log";
+    begin
+        AuditLog.SetRange("Source No.", Rec."No.");
+        AuditLog.FindSet();
+        repeat
+            AuditLog.Modify();
+        until AuditLog.Next() = 0;
+    end;
 }

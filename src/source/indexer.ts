@@ -105,8 +105,7 @@ const NESTING_NODE_TYPES = new Set([
  * Check if the lines preceding a node contain an [EventSubscriber] attribute.
  * Looks up to 5 lines before the node's start row.
  */
-function checkEventSubscriber(source: string, nodeStartRow: number): boolean {
-  const lines = source.split("\n");
+function checkEventSubscriber(lines: string[], nodeStartRow: number): boolean {
   const start = Math.max(0, nodeStartRow - 5);
   for (let i = start; i < nodeStartRow; i++) {
     if (/\[EventSubscriber\b/i.test(lines[i])) {
@@ -397,6 +396,7 @@ export async function indexALFile(
     return null;
   }
 
+  const sourceLines = source.split("\n");
   const tree = await parseALSource(source);
   const root = tree.rootNode;
 
@@ -438,7 +438,7 @@ export async function indexALFile(
           lineStart: child.startPosition.row + 1,
           lineEnd: child.endPosition.row + 1,
           features,
-          isEventSubscriber: checkEventSubscriber(source, child.startPosition.row),
+          isEventSubscriber: checkEventSubscriber(sourceLines, child.startPosition.row),
         });
       } else if (
         child.type === "named_trigger" ||
