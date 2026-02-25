@@ -6,6 +6,7 @@ import { registerCompareCommand } from "./commands/compare.js";
 import { explainCommand } from "./commands/explain.js";
 import { sourceMapCommand } from "./commands/source-map.js";
 import { registerMcpCommand } from "./commands/mcp.js";
+import { registerGateCommand } from "./commands/gate.js";
 
 const program = new Command();
 
@@ -20,5 +21,6 @@ registerCompareCommand(program);
 program.addCommand(explainCommand);
 program.addCommand(sourceMapCommand);
 registerMcpCommand(program);
+registerGateCommand(program);
 
 program.parse();
