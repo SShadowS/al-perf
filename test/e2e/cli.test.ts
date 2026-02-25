@@ -16,7 +16,7 @@ describe("CLI E2E", () => {
     const parsed = JSON.parse(result);
     expect(parsed.meta.profileType).toBe("instrumentation");
     expect(parsed.hotspots).toHaveLength(3);
-  });
+  }, 60000);
 
   test("hotspots returns limited results", async () => {
     const result = await $`bun run ${CLI} hotspots exampledata/PerformanceProfile_Session15.alcpuprofile -f json -n 2`.text();

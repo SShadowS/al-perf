@@ -42,7 +42,8 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
   // 2. Summary
   lines.push(chalk.bold("Summary"));
   lines.push(`  ${result.summary.oneLiner}`);
-  lines.push(`  Type: ${result.meta.profileType} | Nodes: ${result.meta.totalNodes} nodes | Max Depth: ${result.meta.maxDepth}`);
+  const sourceTag = result.meta.sourceAvailable ? chalk.green("source available") : chalk.gray("no source");
+  lines.push(`  Type: ${result.meta.profileType} | Nodes: ${result.meta.totalNodes} nodes | Max Depth: ${result.meta.maxDepth} | ${sourceTag}`);
   if (result.meta.samplingInterval !== undefined) {
     lines.push(`  Sampling Interval: ${formatTime(result.meta.samplingInterval)}`);
   }
