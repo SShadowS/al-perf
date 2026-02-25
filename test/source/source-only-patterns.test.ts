@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { buildSourceIndex } from "../../src/source/indexer.js";
 import {
   detectNestedLoops,
+  detectUnfilteredFindSet,
   runSourceOnlyDetectors,
 } from "../../src/source/source-only-patterns.js";
 
@@ -23,6 +24,44 @@ describe("detectNestedLoops", () => {
     const index = await buildSourceIndex("test/fixtures/source");
     const patterns = detectNestedLoops(index);
 
+    const falsePositive = patterns.find((p) =>
+      p.involvedMethods.some((m) => m.includes("ProcessRecords") && m.includes("50100")),
+    );
+    expect(falsePositive).toBeUndefined();
+  });
+});
+
+describe("detectUnfilteredFindSet", () => {
+  test("detects FindSet without SetRange/SetFilter", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectUnfilteredFindSet(index);
+
+    // CodeUnit50200 UnfilteredQuery has Customer.FindSet() without SetRange/SetFilter
+    const match = patterns.find((p) =>
+      p.involvedMethods.some((m) => m.includes("UnfilteredQuery")),
+    );
+    expect(match).toBeDefined();
+    expect(match!.id).toBe("unfiltered-findset");
+    expect(match!.severity).toBe("warning");
+    expect(match!.suggestion).toBeDefined();
+  });
+
+  test("does not flag FindSet with preceding SetRange", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectUnfilteredFindSet(index);
+
+    // CodeUnit50200 FilteredQuery has SetRange before FindSet — should NOT appear
+    const falsePositive = patterns.find((p) =>
+      p.involvedMethods.some((m) => m.includes("FilteredQuery")),
+    );
+    expect(falsePositive).toBeUndefined();
+  });
+
+  test("does not flag FindSet with preceding SetFilter", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectUnfilteredFindSet(index);
+
+    // CodeUnit50100 ProcessRecords has SetRange before FindSet — should NOT appear
     const falsePositive = patterns.find((p) =>
       p.involvedMethods.some((m) => m.includes("ProcessRecords") && m.includes("50100")),
     );

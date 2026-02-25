@@ -49,11 +49,57 @@ export function detectNestedLoops(index: SourceIndex): DetectedPattern[] {
 }
 
 /**
+ * Detect FindSet/FindFirst/FindLast without any preceding SetRange/SetFilter
+ * on the same record variable within the same procedure.
+ * Severity: warning.
+ */
+export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
+  const FIND_OPS = new Set(["FindSet", "FindFirst", "FindLast"]);
+  const FILTER_OPS = new Set(["SetRange", "SetFilter"]);
+  const patterns: DetectedPattern[] = [];
+
+  for (const obj of index.objects.values()) {
+    const allMembers = [...obj.procedures, ...obj.triggers];
+    for (const member of allMembers) {
+      const ops = member.features.recordOps;
+      const findOps = ops.filter((op) => FIND_OPS.has(op.type));
+
+      // Collect all record variables that have SetRange or SetFilter
+      const filteredVars = new Set<string>();
+      for (const op of ops) {
+        if (FILTER_OPS.has(op.type) && op.recordVariable) {
+          filteredVars.add(op.recordVariable.toLowerCase());
+        }
+      }
+
+      for (const op of findOps) {
+        const varLower = op.recordVariable?.toLowerCase() ?? "";
+        if (varLower && !filteredVars.has(varLower)) {
+          patterns.push({
+            id: "unfiltered-findset",
+            severity: "warning",
+            title: `${op.type} without filters on ${op.recordVariable} in ${member.name}`,
+            description: `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter(). This queries all records in the table, which can be extremely slow on large tables.`,
+            impact: 0,
+            involvedMethods: [memberLabel(member)],
+            evidence: `${op.type}() at line ${op.line} on ${op.recordVariable} with no SetRange/SetFilter`,
+            suggestion: "Add SetRange() or SetFilter() before the record retrieval to limit the result set. Querying entire tables causes full table scans.",
+          });
+        }
+      }
+    }
+  }
+
+  return patterns;
+}
+
+/**
  * Run all source-only pattern detectors and return results sorted by impact descending.
  */
 export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
   const allPatterns: DetectedPattern[] = [
     ...detectNestedLoops(index),
+    ...detectUnfilteredFindSet(index),
   ];
 
   allPatterns.sort((a, b) => b.impact - a.impact);
