@@ -155,6 +155,23 @@ describe("MCP Tool: analyze_source", () => {
   });
 });
 
+describe("MCP Tool: gate_check", () => {
+  test("returns pass verdict for profile within thresholds", async () => {
+    const { client } = await createTestClient();
+    const result = await client.callTool({
+      name: "gate_check",
+      arguments: {
+        profilePath: "test/fixtures/sampling-minimal.alcpuprofile",
+        maxCritical: 100,
+      },
+    });
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(parsed.verdict).toBe("pass");
+    expect(parsed.counts).toBeDefined();
+  });
+});
+
 describe("MCP Resources", () => {
   test("pattern-docs resource returns pattern documentation", async () => {
     const { client } = await createTestClient();

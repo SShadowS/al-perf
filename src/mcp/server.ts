@@ -271,6 +271,81 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
   );
 
+  // --- gate_check ---
+  server.registerTool(
+    "gate_check",
+    {
+      title: "Quality Gate Check",
+      description: "CI/CD quality gate — checks if a profile exceeds pattern thresholds. Returns pass/fail verdict with pattern counts. Use this to validate that a profile meets quality standards before deployment.",
+      inputSchema: {
+        profilePath: z.string().describe("Path to the .alcpuprofile file"),
+        sourcePath: z.string().optional().describe("Path to AL source directory"),
+        maxCritical: z.number().int().min(0).default(0).describe("Max critical patterns before failing (default: 0)"),
+        maxWarning: z.number().int().min(0).optional().describe("Max warning patterns before failing (default: unlimited)"),
+      },
+    },
+    async ({ profilePath, sourcePath, maxCritical, maxWarning }) => {
+      try {
+        let resolvedSourcePath = sourcePath ?? options?.defaultSourcePath;
+        let cleanup: (() => Promise<void>) | undefined;
+
+        if (!resolvedSourcePath) {
+          const zipPath = findCompanionZip(profilePath);
+          if (zipPath) {
+            const extracted = await extractCompanionZip(zipPath);
+            resolvedSourcePath = extracted.extractDir;
+            cleanup = extracted.cleanup;
+          }
+        }
+
+        const analysis = await analyzeProfile(profilePath, {
+          includePatterns: true,
+          sourcePath: resolvedSourcePath,
+        });
+
+        if (cleanup) await cleanup();
+
+        const counts = { critical: 0, warning: 0, info: 0 };
+        for (const p of analysis.patterns) {
+          counts[p.severity]++;
+        }
+
+        const violations: string[] = [];
+        if (counts.critical > maxCritical) {
+          violations.push(`critical: ${counts.critical} > ${maxCritical}`);
+        }
+        if (maxWarning !== undefined && counts.warning > maxWarning) {
+          violations.push(`warning: ${counts.warning} > ${maxWarning}`);
+        }
+
+        const verdict = violations.length === 0 ? "pass" : "fail";
+
+        const result = {
+          verdict,
+          profilePath,
+          counts,
+          thresholds: { maxCritical, maxWarning: maxWarning ?? null },
+          violations,
+          patterns: analysis.patterns.map((p) => ({
+            severity: p.severity,
+            title: p.title,
+            impact: p.impact,
+            suggestion: p.suggestion,
+          })),
+        };
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // --- Resources ---
 
   server.registerResource(
