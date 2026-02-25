@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { registerAnalyzeCommand } from "./commands/analyze.js";
 import { registerHotspotsCommand } from "./commands/hotspots.js";
 import { registerCompareCommand } from "./commands/compare.js";
+import { explainCommand } from "./commands/explain.js";
 
 const program = new Command();
 
@@ -14,5 +15,6 @@ program
 registerAnalyzeCommand(program);
 registerHotspotsCommand(program);
 registerCompareCommand(program);
+program.addCommand(explainCommand);
 
 program.parse();
