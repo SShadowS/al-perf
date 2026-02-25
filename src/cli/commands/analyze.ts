@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { resolve } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
+import { explainAnalysis, type ExplainModel } from "../../explain/explainer.js";
 import { findCompanionZip, extractCompanionZip } from "../../source/zip-extractor.js";
 import { SourceIndexCache } from "../../source/cache.js";
 
@@ -17,6 +18,9 @@ export function registerAnalyzeCommand(program: Command) {
     .option("--no-patterns", "Skip pattern detection")
     .option("-s, --source <path>", "Path to AL source directory (enables source correlation)")
     .option("--cache", "Cache source index for faster re-analysis")
+    .option("--explain", "Append AI-generated analysis summary (requires ANTHROPIC_API_KEY)")
+    .option("--model <model>", "Model for --explain: sonnet (default) or opus", "sonnet")
+    .option("--api-key <key>", "Anthropic API key (default: ANTHROPIC_API_KEY env var)")
     .action(async (profilePath: string, opts: any) => {
       // Resolve source path: explicit --source, or auto-detect companion zip
       let sourcePath: string | undefined = opts.source;
@@ -46,6 +50,23 @@ export function registerAnalyzeCommand(program: Command) {
         sourcePath: opts.cache ? undefined : sourcePath,
         sourceIndex,
       });
+      // Run LLM explanation if --explain is provided
+      if (opts.explain) {
+        const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) {
+          console.error("Warning: --explain requires an API key. Set ANTHROPIC_API_KEY or use --api-key.");
+        } else {
+          try {
+            result.explanation = await explainAnalysis(result, {
+              apiKey,
+              model: opts.model as ExplainModel,
+            });
+          } catch (err: any) {
+            console.error(`Warning: --explain failed: ${err.message}`);
+          }
+        }
+      }
+
       console.log(formatAnalysis(result, opts.format as OutputFormat));
 
       // Clean up temp dir if we extracted from companion zip
