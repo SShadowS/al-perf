@@ -1,0 +1,50 @@
+import { describe, test, expect } from "bun:test";
+import { analyzeProfile } from "../../../src/core/analyzer.js";
+import { formatAnalysisMarkdown } from "../../../src/cli/formatters/markdown.js";
+
+const FIXTURES = "test/fixtures";
+
+describe("formatAnalysisMarkdown", () => {
+  test("includes markdown header", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("# AL Profile Analysis");
+  });
+
+  test("includes summary section", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("## Summary");
+    expect(output).toContain("sampling");
+  });
+
+  test("includes hotspots as markdown table", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("## Top Hotspots");
+    expect(output).toContain("| # |");
+    expect(output).toContain("ProcessLine");
+  });
+
+  test("includes detected patterns with severity badges", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("## Detected Patterns");
+    expect(output).toMatch(/\*\*(CRITICAL|WARNING|INFO)\*\*/);
+  });
+
+  test("includes app breakdown", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("## App Breakdown");
+    expect(output).toContain("My Extension");
+  });
+
+  test("includes suggestion when pattern has one", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    if (result.patterns.some(p => p.suggestion)) {
+      expect(output).toContain("**Suggestion:**");
+    }
+  });
+});
