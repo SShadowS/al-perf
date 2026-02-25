@@ -9,6 +9,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
+    "emitDeclarationOnly": true,
     "types": ["bun-types"]
   },
   "include": ["src/**/*.ts"],
