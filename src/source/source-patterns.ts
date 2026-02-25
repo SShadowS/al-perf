@@ -43,6 +43,7 @@ export function detectCalcFieldsInLoop(
         impact: method.selfTime * method.hitCount,
         involvedMethods: [methodLabel(method)],
         evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
+        suggestion: "Move CalcFields() before the loop, or use SetLoadFields() to pre-load only the fields you need.",
       });
     }
   }
@@ -83,6 +84,7 @@ export function detectModifyInLoop(
         impact: method.selfTime * method.hitCount,
         involvedMethods: [methodLabel(method)],
         evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
+        suggestion: "Collect changes and apply them after the loop, or use ModifyAll() if applicable.",
       });
     }
   }
@@ -124,6 +126,7 @@ export function detectRecordOpInLoop(
         impact: method.selfTime * method.hitCount,
         involvedMethods: [methodLabel(method)],
         evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
+        suggestion: "Restructure to reduce database calls inside the loop. Consider loading data before the loop with a single query.",
       });
     }
   }
@@ -174,6 +177,7 @@ export function detectMissingSetLoadFields(
           impact: method.selfTime,
           involvedMethods: [methodLabel(method)],
           evidence: `${op.type}() at line ${op.line} without SetLoadFields for ${op.recordVariable ?? "unknown variable"}`,
+          suggestion: "Add SetLoadFields() before record retrieval to load only the fields you need, reducing I/O.",
         });
       }
     }

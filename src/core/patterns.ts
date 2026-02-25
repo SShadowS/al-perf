@@ -29,6 +29,7 @@ export const detectSingleMethodDominance: PatternDetector = (
         impact: node.selfTime,
         involvedMethods: [formatMethodRef(node)],
         evidence: `selfTimePercent = ${node.selfTimePercent.toFixed(1)}% (threshold: 50%)`,
+        suggestion: "Investigate this method for tight computation loops or excessive calls. Consider caching results or reducing call frequency.",
       });
     }
   }
@@ -55,6 +56,7 @@ export const detectHighHitCount: PatternDetector = (
         impact: node.selfTime,
         involvedMethods: [formatMethodRef(node), formatMethodRef(node.parent)],
         evidence: `hitCount ratio = ${(node.hitCount / node.parent.hitCount).toFixed(1)}x (threshold: 10x)`,
+        suggestion: "High hit count suggests this method is called very frequently. Check if callers can batch operations or if an event subscriber is firing too often.",
       });
     }
   }
@@ -84,6 +86,7 @@ export const detectDeepCallStack: PatternDetector = (
       impact: deepestNodes.reduce((sum, n) => sum + n.selfTime, 0),
       involvedMethods,
       evidence: `maxDepth = ${profile.maxDepth} (threshold: 30)`,
+      suggestion: "Deep call stacks can indicate excessive indirection. Review the call chain for unnecessary layers or consider flattening the architecture.",
     },
   ];
 };
@@ -124,6 +127,7 @@ export const detectRepeatedSiblings: PatternDetector = (
           impact: totalImpact,
           involvedMethods: [formatMethodRef(node), formatMethodRef(representative)],
           evidence: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
+          suggestion: "The same method is called repeatedly at the same call site. Consider batching these calls or caching the result.",
         });
       }
     }
@@ -164,6 +168,7 @@ export const detectEventSubscriberHotspot: PatternDetector = (
       impact: totalImpact,
       involvedMethods,
       evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${eventNodes.length} methods (threshold: 10%)`,
+      suggestion: "This event subscriber is consuming significant time. Review whether it needs to run for every event, or if it can be filtered or optimized.",
     },
   ];
 };

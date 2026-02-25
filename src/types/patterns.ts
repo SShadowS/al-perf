@@ -8,6 +8,7 @@ export interface DetectedPattern {
   impact: number;                 // Estimated microseconds
   involvedMethods: string[];      // "FunctionName (ObjectType ObjectId)"
   evidence: string;
+  suggestion?: string;
 }
 
 export type PatternDetector = (

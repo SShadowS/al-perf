@@ -16,6 +16,8 @@ describe("detectSingleMethodDominance", () => {
     expect(patterns[0].id).toBe("single-method-dominance");
     expect(patterns[0].severity).toBe("critical");
     expect(patterns[0].involvedMethods[0]).toContain("ProcessLine");
+    expect(patterns[0].suggestion).toBeDefined();
+    expect(typeof patterns[0].suggestion).toBe("string");
   });
 });
 
@@ -59,5 +61,11 @@ describe("runDetectors", () => {
 
     // Should detect at least idle-time dominance
     expect(patterns.length).toBeGreaterThanOrEqual(1);
+
+    // All returned patterns should have a suggestion
+    for (const pattern of patterns) {
+      expect(pattern.suggestion).toBeDefined();
+      expect(typeof pattern.suggestion).toBe("string");
+    }
   });
 });
