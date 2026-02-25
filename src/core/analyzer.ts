@@ -14,6 +14,8 @@ export interface AnalyzeOptions {
   appFilter?: string[];
   includePatterns?: boolean;
   sourcePath?: string;
+  /** Pre-built source index — skips buildSourceIndex when provided */
+  sourceIndex?: SourceIndex;
 }
 
 export interface CompareOptions {
@@ -59,10 +61,12 @@ export async function analyzeProfile(
   const patterns = includePatterns ? runDetectors(processed) : [];
 
   // Source correlation
-  let sourceIndex: SourceIndex | undefined;
-  const sourceAvailable = !!options?.sourcePath;
-  if (options?.sourcePath && includePatterns) {
-    sourceIndex = await buildSourceIndex(options.sourcePath);
+  let sourceIndex: SourceIndex | undefined = options?.sourceIndex;
+  const sourceAvailable = !!options?.sourcePath || !!sourceIndex;
+  if ((options?.sourcePath || sourceIndex) && includePatterns) {
+    if (!sourceIndex) {
+      sourceIndex = await buildSourceIndex(options!.sourcePath!);
+    }
     const sourcePatterns = runSourceDetectors(methods, sourceIndex);
     patterns.push(...sourcePatterns);
     patterns.sort((a, b) => b.impact - a.impact);

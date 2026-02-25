@@ -1,7 +1,9 @@
 import type { Command } from "commander";
+import { resolve } from "path";
 import { buildSourceIndex } from "../../source/indexer.js";
 import { runSourceOnlyDetectors } from "../../source/source-only-patterns.js";
 import type { DetectedPattern } from "../../types/patterns.js";
+import { SourceIndexCache } from "../../source/cache.js";
 
 export interface SourceAnalysisResult {
   files: number;
@@ -75,8 +77,15 @@ export function registerAnalyzeSourceCommand(program: Command) {
     .description("Analyze AL source files for structural patterns (no profile needed)")
     .argument("<source-dir>", "Path to directory containing .al source files")
     .option("-f, --format <format>", "Output format: text|json", "text")
+    .option("--cache", "Cache source index for faster re-analysis")
     .action(async (sourceDir: string, opts: any) => {
-      const index = await buildSourceIndex(sourceDir);
+      let index;
+      if (opts.cache) {
+        const cache = new SourceIndexCache(resolve(sourceDir, ".al-profile-cache"));
+        index = await cache.getOrBuild(sourceDir);
+      } else {
+        index = await buildSourceIndex(sourceDir);
+      }
       const findings = runSourceOnlyDetectors(index);
 
       // Also run the inline structural checks (record ops in loops) from the index

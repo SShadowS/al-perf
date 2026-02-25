@@ -1,6 +1,8 @@
 import type { Command } from "commander";
+import { resolve } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import { findCompanionZip, extractCompanionZip } from "../../source/zip-extractor.js";
+import { SourceIndexCache } from "../../source/cache.js";
 
 export interface GateResult {
   verdict: "pass" | "fail";
@@ -19,6 +21,7 @@ export function registerGateCommand(program: Command) {
     .option("--max-critical <n>", "Max critical patterns before failing (default: 0)", "0")
     .option("--max-warning <n>", "Max warning patterns before failing (default: unlimited)")
     .option("-s, --source <path>", "Path to AL source directory")
+    .option("--cache", "Cache source index for faster re-analysis")
     .option("-f, --format <format>", "Output format: text|json", "text")
     .action(async (profilePath: string, opts: any) => {
       const maxCritical = parseInt(opts.maxCritical, 10);
@@ -36,9 +39,17 @@ export function registerGateCommand(program: Command) {
         }
       }
 
+      // Build source index via cache when --cache is provided
+      let sourceIndex;
+      if (sourcePath && opts.cache) {
+        const cache = new SourceIndexCache(resolve(sourcePath, ".al-profile-cache"));
+        sourceIndex = await cache.getOrBuild(sourcePath);
+      }
+
       const analysis = await analyzeProfile(profilePath, {
         includePatterns: true,
-        sourcePath,
+        sourcePath: opts.cache ? undefined : sourcePath,
+        sourceIndex,
       });
 
       if (cleanup) await cleanup();

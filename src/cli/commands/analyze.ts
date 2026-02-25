@@ -1,7 +1,9 @@
 import type { Command } from "commander";
+import { resolve } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
 import { findCompanionZip, extractCompanionZip } from "../../source/zip-extractor.js";
+import { SourceIndexCache } from "../../source/cache.js";
 
 export function registerAnalyzeCommand(program: Command) {
   program
@@ -14,6 +16,7 @@ export function registerAnalyzeCommand(program: Command) {
     .option("--app-filter <names>", "Focus on specific app(s), comma-separated")
     .option("--no-patterns", "Skip pattern detection")
     .option("-s, --source <path>", "Path to AL source directory (enables source correlation)")
+    .option("--cache", "Cache source index for faster re-analysis")
     .action(async (profilePath: string, opts: any) => {
       // Resolve source path: explicit --source, or auto-detect companion zip
       let sourcePath: string | undefined = opts.source;
@@ -28,12 +31,20 @@ export function registerAnalyzeCommand(program: Command) {
         }
       }
 
+      // Build source index via cache when --cache is provided
+      let sourceIndex;
+      if (sourcePath && opts.cache) {
+        const cache = new SourceIndexCache(resolve(sourcePath, ".al-profile-cache"));
+        sourceIndex = await cache.getOrBuild(sourcePath);
+      }
+
       const result = await analyzeProfile(profilePath, {
         top: parseInt(opts.top, 10),
         threshold: parseFloat(opts.threshold) * 1000,
         appFilter: opts.appFilter?.split(",").map((s: string) => s.trim()),
         includePatterns: opts.patterns !== false,
-        sourcePath,
+        sourcePath: opts.cache ? undefined : sourcePath,
+        sourceIndex,
       });
       console.log(formatAnalysis(result, opts.format as OutputFormat));
 
