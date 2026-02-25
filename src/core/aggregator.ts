@@ -1,11 +1,6 @@
-import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
+import type { ProcessedProfile } from "../types/processed.js";
 import type { AppBreakdown, ObjectBreakdown, MethodBreakdown } from "../types/aggregated.js";
-
-function formatMethodRef(node: ProcessedNode): string {
-  const { functionName } = node.callFrame;
-  const { objectType, objectId } = node.applicationDefinition;
-  return `${functionName} (${objectType} ${objectId})`;
-}
+import { formatMethodRef } from "./patterns.js";
 
 export function aggregateByApp(profile: ProcessedProfile): AppBreakdown[] {
   const map = new Map<string, AppBreakdown>();

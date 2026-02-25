@@ -3,21 +3,7 @@ import Table from "cli-table3";
 import type { AnalysisResult, ComparisonResult, MethodDelta } from "../../output/types.js";
 import type { MethodBreakdown, AppBreakdown } from "../../types/aggregated.js";
 import type { DetectedPattern } from "../../types/patterns.js";
-
-/**
- * Format microseconds into a human-readable time string.
- * >=1M -> seconds, >=1K -> ms, else microseconds
- */
-export function formatTime(us: number): string {
-  const abs = Math.abs(us);
-  if (abs >= 1_000_000) {
-    return `${(us / 1_000_000).toFixed(1)}s`;
-  }
-  if (abs >= 1_000) {
-    return `${(us / 1_000).toFixed(1)}ms`;
-  }
-  return `${Math.round(us)}\u00b5s`;
-}
+import { formatTime } from "../../core/analyzer.js";
 
 /**
  * Build a simple bar chart string using filled/empty blocks.
