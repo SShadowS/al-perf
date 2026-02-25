@@ -52,6 +52,11 @@ export function registerAnalyzeCommand(program: Command) {
       });
       // Run LLM explanation if --explain is provided
       if (opts.explain) {
+        const model = opts.model ?? "sonnet";
+        if (model !== "sonnet" && model !== "opus") {
+          console.error(`Error: --model must be "sonnet" or "opus", got "${model}"`);
+          process.exit(1);
+        }
         const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
           console.error("Warning: --explain requires an API key. Set ANTHROPIC_API_KEY or use --api-key.");
@@ -59,10 +64,11 @@ export function registerAnalyzeCommand(program: Command) {
           try {
             result.explanation = await explainAnalysis(result, {
               apiKey,
-              model: opts.model as ExplainModel,
+              model: model as ExplainModel,
             });
-          } catch (err: any) {
-            console.error(`Warning: --explain failed: ${err.message}`);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`Warning: --explain failed: ${message}`);
           }
         }
       }
