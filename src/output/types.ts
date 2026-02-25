@@ -1,6 +1,13 @@
 import type { AppBreakdown, ObjectBreakdown, MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
 
+export interface SourceCorrelation {
+  file: string;
+  lineStart: number;
+  lineEnd: number;
+  snippet?: string;
+}
+
 export interface AnalysisResult {
   meta: {
     profilePath: string;
@@ -10,6 +17,7 @@ export interface AnalysisResult {
     totalNodes: number;
     maxDepth: number;
     samplingInterval?: number;
+    sourceAvailable: boolean;
     analyzedAt: string;
   };
   summary: {

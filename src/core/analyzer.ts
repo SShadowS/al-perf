@@ -2,7 +2,10 @@ import { parseProfile } from "./parser.js";
 import { processProfile } from "./processor.js";
 import { aggregateByApp, aggregateByMethod, aggregateByObject } from "./aggregator.js";
 import { runDetectors } from "./patterns.js";
+import { buildSourceIndex } from "../source/indexer.js";
+import { runSourceDetectors } from "../source/source-patterns.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
+import type { SourceIndex } from "../types/source-index.js";
 import type { AnalysisResult, ComparisonResult, MethodDelta } from "../output/types.js";
 
 export interface AnalyzeOptions {
@@ -10,6 +13,7 @@ export interface AnalyzeOptions {
   threshold?: number;
   appFilter?: string[];
   includePatterns?: boolean;
+  sourcePath?: string;
 }
 
 export interface CompareOptions {
@@ -53,6 +57,16 @@ export async function analyzeProfile(
 
   const includePatterns = options?.includePatterns !== false;
   const patterns = includePatterns ? runDetectors(processed) : [];
+
+  // Source correlation
+  let sourceIndex: SourceIndex | undefined;
+  const sourceAvailable = !!options?.sourcePath;
+  if (options?.sourcePath && includePatterns) {
+    sourceIndex = await buildSourceIndex(options.sourcePath);
+    const sourcePatterns = runSourceDetectors(methods, sourceIndex);
+    patterns.push(...sourcePatterns);
+    patterns.sort((a, b) => b.impact - a.impact);
+  }
 
   // Filter out IdleTime from hotspots
   let hotspots = methods.filter((m) => !isIdle(m));
@@ -107,6 +121,7 @@ export async function analyzeProfile(
       totalNodes: processed.nodeCount,
       maxDepth: processed.maxDepth,
       samplingInterval: processed.samplingInterval,
+      sourceAvailable,
       analyzedAt: new Date().toISOString(),
     },
     summary: {
