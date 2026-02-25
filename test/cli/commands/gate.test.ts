@@ -26,10 +26,8 @@ describe("CLI gate command", () => {
     await proc.exited;
     const text = await new Response(proc.stdout).text();
     const result = JSON.parse(text);
-    expect(result.verdict).toMatch(/^(pass|fail)$/);
-    expect(result.counts.critical).toBeDefined();
-    expect(result.counts.warning).toBeDefined();
-    expect(result.counts.info).toBeDefined();
+    expect(result.verdict).toBe("fail");
+    expect(proc.exitCode).toBe(1);
   });
 
   test("--help lists gate command", async () => {

@@ -7,6 +7,7 @@
  *
  * Usage: bun run examples/performance-review.ts <profile-path> [source-path]
  */
+// When installed via npm, import from "al-profile-analyzer" instead
 import { analyzeProfile } from "../src/index.js";
 
 const profilePath = process.argv[2];

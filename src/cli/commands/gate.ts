@@ -6,9 +6,9 @@ export interface GateResult {
   verdict: "pass" | "fail";
   profilePath: string;
   counts: { critical: number; warning: number; info: number };
-  thresholds: { maxCritical: number; maxWarning: number };
+  thresholds: { maxCritical: number; maxWarning: number | null };
   violations: string[];
-  patterns: Array<{ severity: string; title: string; impact: number }>;
+  patterns: Array<{ severity: string; title: string; impact: number; suggestion?: string }>;
 }
 
 export function registerGateCommand(program: Command) {
@@ -62,12 +62,13 @@ export function registerGateCommand(program: Command) {
         verdict,
         profilePath,
         counts,
-        thresholds: { maxCritical, maxWarning: maxWarning === Infinity ? -1 : maxWarning },
+        thresholds: { maxCritical, maxWarning: maxWarning === Infinity ? null : maxWarning },
         violations,
         patterns: analysis.patterns.map((p) => ({
           severity: p.severity,
           title: p.title,
           impact: p.impact,
+          suggestion: p.suggestion,
         })),
       };
 
