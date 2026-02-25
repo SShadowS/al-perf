@@ -23,7 +23,7 @@ export const explainCommand = new Command("explain")
   .description("Deep dive into a specific method from a profile")
   .argument("<profile>", "Path to .alcpuprofile file")
   .argument("<method>", "Method/function name to explain")
-  .option("-f, --format <format>", "Output format: auto|terminal|json", "auto")
+  .option("-f, --format <format>", "Output format: auto|terminal|json|markdown", "auto")
   .option("--object-id <id>", "Object ID to disambiguate")
   .action(async (profilePath: string, methodName: string, opts) => {
     const parsed = await parseProfile(profilePath);

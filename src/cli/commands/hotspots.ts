@@ -7,7 +7,7 @@ export function registerHotspotsCommand(program: Command) {
     .command("hotspots")
     .description("Quick hotspot summary from an AL CPU profile")
     .argument("<profile>", "Path to .alcpuprofile file")
-    .option("-f, --format <format>", "Output format: auto|terminal|json", "auto")
+    .option("-f, --format <format>", "Output format: auto|terminal|json|markdown", "auto")
     .option("-n, --top <number>", "Number of hotspots", "5")
     .action(async (profilePath: string, opts: any) => {
       const result = await analyzeProfile(profilePath, {

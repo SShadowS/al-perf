@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { analyzeProfile } from "../../../src/core/analyzer.js";
-import { formatAnalysisMarkdown } from "../../../src/cli/formatters/markdown.js";
+import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
+import { formatAnalysisMarkdown, formatComparisonMarkdown } from "../../../src/cli/formatters/markdown.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -45,6 +45,49 @@ describe("formatAnalysisMarkdown", () => {
     const output = formatAnalysisMarkdown(result);
     if (result.patterns.some(p => p.suggestion)) {
       expect(output).toContain("**Suggestion:**");
+    }
+  });
+});
+
+describe("formatComparisonMarkdown", () => {
+  test("includes comparison header", async () => {
+    const result = await compareProfiles(
+      "exampledata/PerformanceProfile_Session6.alcpuprofile",
+      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+    );
+    const output = formatComparisonMarkdown(result);
+    expect(output).toContain("# AL Profile Comparison");
+  });
+
+  test("includes before/after paths", async () => {
+    const result = await compareProfiles(
+      "exampledata/PerformanceProfile_Session6.alcpuprofile",
+      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+    );
+    const output = formatComparisonMarkdown(result);
+    expect(output).toContain("**Before:**");
+    expect(output).toContain("**After:**");
+  });
+
+  test("includes delta summary with direction", async () => {
+    const result = await compareProfiles(
+      "exampledata/PerformanceProfile_Session6.alcpuprofile",
+      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+    );
+    const output = formatComparisonMarkdown(result);
+    expect(output).toContain("## Delta Summary");
+    expect(output).toMatch(/SLOWER|FASTER|UNCHANGED/);
+  });
+
+  test("includes regressions table if present", async () => {
+    const result = await compareProfiles(
+      "exampledata/PerformanceProfile_Session6.alcpuprofile",
+      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+    );
+    const output = formatComparisonMarkdown(result);
+    if (result.regressions.length > 0) {
+      expect(output).toContain("## Regressions");
+      expect(output).toContain("| Function |");
     }
   });
 });

@@ -14,6 +14,10 @@ describe("resolveFormat", () => {
     expect(resolveFormat("json")).toBe("json");
   });
 
+  test("returns markdown when given markdown", () => {
+    expect(resolveFormat("markdown")).toBe("markdown");
+  });
+
   test("returns terminal or json for auto based on TTY", () => {
     const result = resolveFormat("auto");
     expect(["terminal", "json"]).toContain(result);
@@ -33,6 +37,13 @@ describe("formatAnalysis", () => {
     const output = formatAnalysis(result, "terminal");
     expect(output).toContain("sampling");
     expect(output).toContain("3 nodes");
+  });
+
+  test("formats as markdown when markdown is specified", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysis(result, "markdown");
+    expect(output).toContain("# AL Profile Analysis");
+    expect(output).toContain("## Top Hotspots");
   });
 });
 
@@ -55,5 +66,14 @@ describe("formatComparison", () => {
     const output = formatComparison(result, "terminal");
     expect(output).toContain("Before");
     expect(output).toContain("After");
+  });
+
+  test("formats as markdown when markdown is specified", async () => {
+    const result = await compareProfiles(
+      "exampledata/PerformanceProfile_Session6.alcpuprofile",
+      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+    );
+    const output = formatComparison(result, "markdown");
+    expect(output).toContain("# AL Profile Comparison");
   });
 });

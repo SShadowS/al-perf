@@ -5,7 +5,7 @@ import { resolveFormat } from "../formatters/auto.js";
 export const sourceMapCommand = new Command("source-map")
   .description("Build and inspect the AL source index")
   .argument("<source-path>", "Path to AL source directory")
-  .option("-f, --format <format>", "Output format: auto|terminal|json", "auto")
+  .option("-f, --format <format>", "Output format: auto|terminal|json|markdown", "auto")
   .action(async (sourcePath: string, opts) => {
     const index = await buildSourceIndex(sourcePath);
     const format = resolveFormat(opts.format);
