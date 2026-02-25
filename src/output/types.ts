@@ -23,6 +23,7 @@ export interface AnalysisResult {
   patterns: DetectedPattern[];
   appBreakdown: AppBreakdown[];
   objectBreakdown: ObjectBreakdown[];
+  explanation?: string;
 }
 
 export interface ComparisonResult {
