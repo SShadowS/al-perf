@@ -159,6 +159,9 @@ export class SourceIndexCache {
     const resolvedDir = resolve(dirPath);
     const cacheFile = join(this.cacheDir, cacheKeyForDir(resolvedDir));
 
+    // Compute the directory hash once upfront
+    const currentHash = computeDirHash(resolvedDir);
+
     // Try loading from cache
     if (existsSync(cacheFile)) {
       try {
@@ -166,7 +169,6 @@ export class SourceIndexCache {
         const entry: CacheEntry = JSON.parse(raw);
 
         if (entry.version === CACHE_VERSION) {
-          const currentHash = computeDirHash(resolvedDir);
           if (entry.dirHash === currentHash) {
             return deserializeIndex(entry.index);
           }
@@ -179,12 +181,25 @@ export class SourceIndexCache {
     // Build fresh index
     const index = await buildSourceIndex(resolvedDir);
 
-    // Store in cache
-    const currentHash = computeDirHash(resolvedDir);
+    // Store in cache — reuse the hash computed above
+    this.store(cacheFile, currentHash, resolvedDir, index);
+
+    return index;
+  }
+
+  /**
+   * Write a cache entry to disk.
+   */
+  private store(
+    cacheFile: string,
+    dirHash: string,
+    resolvedDir: string,
+    index: SourceIndex,
+  ): void {
     const alFiles = walkALFiles(resolvedDir);
     const entry: CacheEntry = {
       version: CACHE_VERSION,
-      dirHash: currentHash,
+      dirHash,
       timestamp: Date.now(),
       fileCount: alFiles.length,
       index: serializeIndex(index),
@@ -195,8 +210,6 @@ export class SourceIndexCache {
     }
 
     writeFileSync(cacheFile, JSON.stringify(entry), "utf-8");
-
-    return index;
   }
 
   /**
