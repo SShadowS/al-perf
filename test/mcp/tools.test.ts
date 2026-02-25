@@ -154,3 +154,45 @@ describe("MCP Tool: analyze_source", () => {
     expect(parsed.findings.length).toBeGreaterThan(0);
   });
 });
+
+describe("MCP Resources", () => {
+  test("pattern-docs resource returns pattern documentation", async () => {
+    const { client } = await createTestClient();
+    const result = await client.readResource({
+      uri: "resource://al-profiler/pattern-docs",
+    });
+    expect(result.contents).toBeDefined();
+    expect(result.contents.length).toBe(1);
+    const text = result.contents[0].text as string;
+    expect(text).toContain("Single Method Dominance");
+    expect(text).toContain("CalcFields in Loop");
+  });
+
+  test("last-analysis resource returns null when no analysis done", async () => {
+    const { client } = await createTestClient();
+    const result = await client.readResource({
+      uri: "resource://al-profiler/last-analysis",
+    });
+    expect(result.contents).toBeDefined();
+    const text = result.contents[0].text as string;
+    const parsed = JSON.parse(text);
+    expect(parsed).toBeNull();
+  });
+
+  test("last-analysis resource returns result after analyze_profile", async () => {
+    const { client } = await createTestClient();
+
+    await client.callTool({
+      name: "analyze_profile",
+      arguments: { profilePath: "test/fixtures/sampling-minimal.alcpuprofile" },
+    });
+
+    const result = await client.readResource({
+      uri: "resource://al-profiler/last-analysis",
+    });
+    const text = result.contents[0].text as string;
+    const parsed = JSON.parse(text);
+    expect(parsed).not.toBeNull();
+    expect(parsed.meta.profileType).toBe("sampling");
+  });
+});

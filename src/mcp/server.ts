@@ -269,5 +269,102 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
   );
 
+  // --- Resources ---
+
+  server.registerResource(
+    "pattern-docs",
+    "resource://al-profiler/pattern-docs",
+    {
+      title: "Pattern Documentation",
+      description: "Reference documentation for all detected patterns (profile-only and source-correlated).",
+      mimeType: "text/markdown",
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: PATTERN_DOCS,
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    "last-analysis",
+    "resource://al-profiler/last-analysis",
+    {
+      title: "Last Analysis Result",
+      description: "The most recent AnalysisResult from analyze_profile. Returns null if no analysis has been run yet.",
+      mimeType: "application/json",
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(lastAnalysis, null, 2),
+        },
+      ],
+    }),
+  );
+
   return server;
 }
+
+const PATTERN_DOCS = `# AL Profile Pattern Reference
+
+## Profile-Only Patterns (no source needed)
+
+### Single Method Dominance
+**Severity:** warning
+One method consuming a disproportionate share (>40%) of total self time.
+Usually indicates a tight computation loop or a method called extremely frequently.
+
+### High Hit Count
+**Severity:** info
+A method with an unusually high number of hits (samples). May indicate a frequently
+invoked event subscriber or a hot inner loop.
+
+### Deep Call Stack
+**Severity:** info
+Call stack depth exceeding expected norms (>15 levels). Can indicate excessive indirection,
+recursive logic, or deeply nested event chains.
+
+### Repeated Siblings
+**Severity:** warning
+Multiple sibling nodes with the same call frame, suggesting the same method is called
+repeatedly at the same call site — a candidate for batching or caching.
+
+### Event Subscriber Hotspot
+**Severity:** warning
+An event subscriber consuming significant self time. Event subscribers are implicit
+call points that are easy to overlook during performance tuning.
+
+## Source-Correlated Patterns (require AL source)
+
+### CalcFields in Loop
+**Severity:** warning
+A CalcFields() call found inside a loop body (repeat/for/foreach/while). CalcFields
+performs a database round-trip per call — inside a loop this becomes an N+1 query pattern.
+**Fix:** Move CalcFields before the loop, or use SetLoadFields to pre-load needed fields.
+
+### Modify in Loop
+**Severity:** warning
+A Modify() call inside a loop body. Each Modify causes a database write. Inside a loop,
+this can cause severe performance degradation.
+**Fix:** Collect changes and apply them after the loop, or use ModifyAll if possible.
+
+### Record Operation in Loop
+**Severity:** info
+A record operation (FindSet, FindFirst, Get, etc.) inside a loop body. Each call is a
+database round-trip.
+**Fix:** Consider restructuring to reduce database calls inside the loop.
+
+### Missing SetLoadFields
+**Severity:** info
+Record retrieval operations (FindSet, FindFirst, etc.) without a preceding SetLoadFields
+call. Without SetLoadFields, Business Central loads all fields from the database,
+which can be wasteful for tables with many or large fields.
+**Fix:** Add SetLoadFields before record retrieval to load only the fields you need.
+`;
