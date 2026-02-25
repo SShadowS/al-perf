@@ -5,6 +5,7 @@ import { registerHotspotsCommand } from "./commands/hotspots.js";
 import { registerCompareCommand } from "./commands/compare.js";
 import { explainCommand } from "./commands/explain.js";
 import { sourceMapCommand } from "./commands/source-map.js";
+import { registerMcpCommand } from "./commands/mcp.js";
 
 const program = new Command();
 
@@ -18,5 +19,6 @@ registerHotspotsCommand(program);
 registerCompareCommand(program);
 program.addCommand(explainCommand);
 program.addCommand(sourceMapCommand);
+registerMcpCommand(program);
 
 program.parse();
