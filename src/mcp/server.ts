@@ -6,6 +6,7 @@ import { processProfile } from "../core/processor.js";
 import { aggregateByMethod } from "../core/aggregator.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { findCompanionZip, extractCompanionZip } from "../source/zip-extractor.js";
+import type { AnalysisResult } from "../output/types.js";
 
 export interface McpServerOptions {
   defaultSourcePath?: string;
@@ -17,7 +18,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     version: "0.1.0",
   });
 
-  let lastAnalysis: unknown = null;
+  let lastAnalysis: AnalysisResult | null = null;
 
   server.registerTool(
     "analyze_profile",
@@ -53,6 +54,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         });
 
         lastAnalysis = result;
+        // Safe to cleanup before return: result is fully materialized in memory (no lazy refs to temp dir)
         if (cleanup) await cleanup();
 
         return {
