@@ -7,6 +7,7 @@ import { explainCommand } from "./commands/explain.js";
 import { sourceMapCommand } from "./commands/source-map.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerGateCommand } from "./commands/gate.js";
+import { registerAnalyzeSourceCommand } from "./commands/analyze-source.js";
 
 const program = new Command();
 
@@ -22,5 +23,6 @@ program.addCommand(explainCommand);
 program.addCommand(sourceMapCommand);
 registerMcpCommand(program);
 registerGateCommand(program);
+registerAnalyzeSourceCommand(program);
 
 program.parse();

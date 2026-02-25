@@ -10,11 +10,13 @@ export { buildSourceIndex, indexALFile } from "./source/indexer.js";
 export { matchToSource, matchAllHotspots } from "./source/locator.js";
 export { extractSnippet, annotateSnippet, readSourceLines } from "./source/snippets.js";
 export { runSourceDetectors } from "./source/source-patterns.js";
+export { runSourceOnlyDetectors } from "./source/source-only-patterns.js";
 export { findCompanionZip, extractCompanionZip } from "./source/zip-extractor.js";
 export { createALParser, parseALSource } from "./source/parser-init.js";
 
 // CLI types
 export type { GateResult } from "./cli/commands/gate.js";
+export type { SourceAnalysisResult } from "./cli/commands/analyze-source.js";
 
 // MCP server
 export { createMcpServer } from "./mcp/server.js";
