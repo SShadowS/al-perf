@@ -12,6 +12,7 @@ Analyze Business Central `.alcpuprofile` files to find performance bottlenecks, 
 - **MCP server** — Expose all analysis as tools for AI agents (Claude Code, etc.)
 - **CI/CD gate** — Fail pipelines when critical patterns exceed thresholds
 - **Static analysis** — Analyze AL source files without a profile
+- **AI explanation** — LLM-powered natural language interpretation of analysis results
 
 ## Requirements
 
@@ -48,6 +49,12 @@ bun run src/cli/index.ts analyze profile.alcpuprofile -f json
 
 # Markdown output (for reports)
 bun run src/cli/index.ts analyze profile.alcpuprofile -f markdown
+
+# With AI-powered explanation (requires ANTHROPIC_API_KEY)
+bun run src/cli/index.ts analyze profile.alcpuprofile --explain
+
+# Use Opus model for deeper analysis
+bun run src/cli/index.ts analyze profile.alcpuprofile --explain --model opus
 ```
 
 ### Quick hotspots

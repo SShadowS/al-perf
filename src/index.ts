@@ -15,6 +15,10 @@ export { findCompanionZip, extractCompanionZip } from "./source/zip-extractor.js
 export { createALParser, parseALSource } from "./source/parser-init.js";
 export { SourceIndexCache } from "./source/cache.js";
 
+// Explainer
+export { explainAnalysis, trimResultForPrompt, SYSTEM_PROMPT } from "./explain/explainer.js";
+export type { ExplainOptions, ExplainModel } from "./explain/explainer.js";
+
 // CLI types
 export type { GateResult } from "./cli/commands/gate.js";
 export type { SourceAnalysisResult } from "./cli/commands/analyze-source.js";
