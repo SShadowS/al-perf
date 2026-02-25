@@ -1,4 +1,4 @@
-import type { SyntaxNode } from "web-tree-sitter";
+import type { Node as SyntaxNode } from "web-tree-sitter";
 import { parseALSource } from "./parser-init.js";
 import { readFileSync } from "fs";
 import { resolve, relative } from "path";

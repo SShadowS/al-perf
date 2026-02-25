@@ -115,7 +115,7 @@ async function inflateData(
   const writer = ds.writable.getWriter();
   const reader = ds.readable.getReader();
 
-  writer.write(compressedData);
+  writer.write(compressedData as BufferSource);
   writer.close();
 
   const chunks: Uint8Array[] = [];
