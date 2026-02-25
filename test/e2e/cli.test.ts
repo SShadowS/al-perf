@@ -16,6 +16,7 @@ describe("CLI E2E", () => {
     const parsed = JSON.parse(result);
     expect(parsed.meta.profileType).toBe("instrumentation");
     expect(parsed.hotspots).toHaveLength(3);
+  // Increased timeout: auto companion zip detection adds I/O for extraction + source indexing
   }, 60000);
 
   test("hotspots returns limited results", async () => {

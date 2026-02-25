@@ -66,6 +66,8 @@ async function readZipEntries(
     const sig = view.getUint32(offset, true);
     if (sig !== 0x04034b50) break; // Local file header signature
 
+    // NOTE: This reader does not handle entries with data descriptors (bit 3 of general purpose flags).
+    // AL companion zips from Business Central do not use data descriptors, so this is acceptable.
     const compressionMethod = view.getUint16(offset + 8, true);
     const compressedSize = view.getUint32(offset + 18, true);
     const uncompressedSize = view.getUint32(offset + 22, true);

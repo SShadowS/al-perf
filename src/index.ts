@@ -16,7 +16,7 @@ export { createALParser, parseALSource } from "./source/parser-init.js";
 // Types
 export type { RawProfile, RawProfileNode, ParsedProfile, ProfileType } from "./types/profile.js";
 export type { ProcessedProfile, ProcessedNode } from "./types/processed.js";
-export type { AnalysisResult, ComparisonResult, MethodDelta, SourceCorrelation } from "./output/types.js";
+export type { AnalysisResult, ComparisonResult, MethodDelta } from "./output/types.js";
 export type { AppBreakdown, ObjectBreakdown, MethodBreakdown } from "./types/aggregated.js";
 export type { DetectedPattern, PatternSeverity } from "./types/patterns.js";
 export type {

@@ -37,7 +37,7 @@ describe("annotateSnippet", () => {
     annotations.set(3, "FlowField in loop");
     annotations.set(4, "Consider ModifyAll");
 
-    const result = annotateSnippet(source, 8, annotations);
+    const result = annotateSnippet(source, annotations);
     expect(result).toContain("\u2190 FlowField in loop");
     expect(result).toContain("\u2190 Consider ModifyAll");
   });

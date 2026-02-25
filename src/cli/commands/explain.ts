@@ -25,7 +25,6 @@ export const explainCommand = new Command("explain")
   .argument("<method>", "Method/function name to explain")
   .option("-f, --format <format>", "Output format: auto|terminal|json", "auto")
   .option("--object-id <id>", "Object ID to disambiguate")
-  .option("-s, --source <path>", "Path to AL source directory")
   .action(async (profilePath: string, methodName: string, opts) => {
     const parsed = await parseProfile(profilePath);
     const processed = processProfile(parsed);

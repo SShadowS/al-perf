@@ -42,12 +42,10 @@ export async function extractSnippet(
 /**
  * Annotate a snippet with markers on specific lines.
  * @param snippet The source snippet (plain text, no line numbers)
- * @param startLine The 1-based line number of the first line in the snippet
  * @param annotations Map from relative line number (1-based within snippet) to annotation text
  */
 export function annotateSnippet(
   snippet: string,
-  startLine: number,
   annotations: Map<number, string>,
 ): string {
   const lines = snippet.split("\n");
