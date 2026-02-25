@@ -1,0 +1,73 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": {
+        "functionName": "OnRun",
+        "scriptId": "CodeUnit_50000",
+        "url": "al-preview://allang/Codeunit/50000/Codeunit_50000.dal",
+        "lineNumber": 10,
+        "columnNumber": 8
+      },
+      "hitCount": 5,
+      "children": [2],
+      "declaringApplication": {
+        "appName": "My Extension",
+        "appPublisher": "Me",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "My Processor",
+        "objectId": 50000
+      },
+      "frameIdentifier": 12345
+    },
+    {
+      "id": 2,
+      "callFrame": {
+        "functionName": "ProcessLine",
+        "scriptId": "CodeUnit_50000",
+        "url": "al-preview://allang/Codeunit/50000/Codeunit_50000.dal",
+        "lineNumber": 25,
+        "columnNumber": 8
+      },
+      "hitCount": 20,
+      "children": [],
+      "declaringApplication": {
+        "appName": "My Extension",
+        "appPublisher": "Me",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "My Processor",
+        "objectId": 50000
+      },
+      "frameIdentifier": 67890
+    },
+    {
+      "id": 3,
+      "callFrame": {
+        "functionName": "IdleTime",
+        "scriptId": "TableData_0",
+        "url": "al-preview://allang/Undefined",
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "hitCount": 10,
+      "children": [],
+      "applicationDefinition": {
+        "objectType": "TableData",
+        "objectName": "IdleTime",
+        "objectId": 0
+      },
+      "frameIdentifier": 0
+    }
+  ],
+  "startTime": 63793000000000000,
+  "endTime":   63793000003500000,
+  "samples": [2, 2, 3, 2, 2],
+  "timeDeltas": [0, 100000, 100000, 100000, 100000],
+  "kind": 1
+}

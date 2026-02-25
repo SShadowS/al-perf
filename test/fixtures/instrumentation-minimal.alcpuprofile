@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": {
+        "functionName": "OnRun",
+        "scriptId": "CodeUnit_50000",
+        "url": "al-preview://allang/Codeunit/50000/Codeunit_50000.dal",
+        "lineNumber": 10,
+        "columnNumber": 8
+      },
+      "hitCount": 1,
+      "children": [2],
+      "positionTicks": [
+        { "line": 10, "column": 8, "ticks": 1, "executionTime": 500000 }
+      ],
+      "declaringApplication": {
+        "appName": "My Extension",
+        "appPublisher": "Me",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "My Processor",
+        "objectId": 50000
+      },
+      "frameIdentifier": 12345,
+      "startTime": 63791355211203262,
+      "endTime": 63791355211703262,
+      "isIncompleteMeasurement": false,
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 2,
+      "callFrame": {
+        "functionName": "ProcessLine",
+        "scriptId": "CodeUnit_50000",
+        "url": "al-preview://allang/Codeunit/50000/Codeunit_50000.dal",
+        "lineNumber": 25,
+        "columnNumber": 8
+      },
+      "hitCount": 1,
+      "children": [],
+      "positionTicks": [
+        { "line": 25, "column": 8, "ticks": 1, "executionTime": 200000 },
+        { "line": 30, "column": 8, "ticks": 1, "executionTime": 150000 }
+      ],
+      "declaringApplication": {
+        "appName": "My Extension",
+        "appPublisher": "Me",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "My Processor",
+        "objectId": 50000
+      },
+      "frameIdentifier": 67890,
+      "startTime": 63791355211303262,
+      "endTime": 63791355211653262
+    }
+  ],
+  "startTime": 63791355211203262,
+  "endTime": 63791355211703262,
+  "samples": [1, 2],
+  "timeDeltas": [0, 100000],
+  "sampleExecutionTimes": [500000, 350000]
+}
