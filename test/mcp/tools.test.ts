@@ -143,6 +143,18 @@ describe("MCP Tool: analyze_source", () => {
     expect(parsed.objects.length).toBeGreaterThan(0);
   });
 
+  test("includes detected patterns from source-only detectors", async () => {
+    const { client } = await createTestClient();
+    const result = await client.callTool({
+      name: "analyze_source",
+      arguments: { sourcePath: "test/fixtures/source" },
+    });
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(parsed.detectedPatterns).toBeDefined();
+    expect(parsed.detectedPatterns.length).toBeGreaterThan(0);
+  });
+
   test("reports structural findings for source", async () => {
     const { client } = await createTestClient();
     const result = await client.callTool({

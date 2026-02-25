@@ -5,6 +5,7 @@ import { parseProfile } from "../core/parser.js";
 import { processProfile } from "../core/processor.js";
 import { aggregateByMethod } from "../core/aggregator.js";
 import { buildSourceIndex } from "../source/indexer.js";
+import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
 import { findCompanionZip, extractCompanionZip } from "../source/zip-extractor.js";
 import type { AnalysisResult } from "../output/types.js";
 
@@ -253,10 +254,13 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           }
         }
 
+        const detectedPatterns = runSourceOnlyDetectors(index);
+
         const result = {
           files: index.files.length,
           objects,
           findings,
+          detectedPatterns,
         };
 
         return {
