@@ -44,8 +44,8 @@ describe("indexALFile", () => {
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);
-    expect(index.files.length).toBe(2);
-    expect(index.objects.size).toBe(2);
+    expect(index.files.length).toBe(3);
+    expect(index.objects.size).toBe(3);
 
     const procList = index.procedures.get("processrecords");
     expect(procList).toBeDefined();
