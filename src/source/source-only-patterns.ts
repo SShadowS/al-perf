@@ -94,12 +94,57 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 }
 
 /**
+ * Detect event subscriber procedures that have complex features (loops, many record ops).
+ * Event subscribers are implicit call points that are easy to overlook.
+ * Severity: info (warning if they contain record ops in loops).
+ */
+export function detectEventSubscriberIssues(index: SourceIndex): DetectedPattern[] {
+  const patterns: DetectedPattern[] = [];
+
+  for (const obj of index.objects.values()) {
+    for (const proc of obj.procedures) {
+      if (!proc.isEventSubscriber) continue;
+
+      const hasLoops = proc.features.loops.length > 0;
+      const hasRecordOpsInLoops = proc.features.recordOpsInLoops.length > 0;
+
+      if (hasRecordOpsInLoops) {
+        patterns.push({
+          id: "event-subscriber-with-loop-ops",
+          severity: "warning",
+          title: `Event subscriber ${proc.name} has record operations inside loops`,
+          description: `Event subscriber ${proc.name} in ${proc.file} (line ${proc.lineStart}) contains ${proc.features.recordOpsInLoops.length} record operation(s) inside loops. Event subscribers are called implicitly and their performance impact is easy to overlook.`,
+          impact: 0,
+          involvedMethods: [memberLabel(proc)],
+          evidence: `${proc.features.recordOpsInLoops.length} record op(s) in loops within event subscriber`,
+          suggestion: "Review this event subscriber for performance impact. Consider batching operations or reducing work done inside loops.",
+        });
+      } else if (hasLoops) {
+        patterns.push({
+          id: "event-subscriber-with-loops",
+          severity: "info",
+          title: `Event subscriber ${proc.name} contains loops`,
+          description: `Event subscriber ${proc.name} in ${proc.file} (line ${proc.lineStart}) contains ${proc.features.loops.length} loop(s). Event subscribers are called implicitly for every event invocation.`,
+          impact: 0,
+          involvedMethods: [memberLabel(proc)],
+          evidence: `${proc.features.loops.length} loop(s) in event subscriber`,
+          suggestion: "Ensure loop iterations are bounded and consider whether this subscriber needs to run for every event invocation.",
+        });
+      }
+    }
+  }
+
+  return patterns;
+}
+
+/**
  * Run all source-only pattern detectors and return results sorted by impact descending.
  */
 export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
   const allPatterns: DetectedPattern[] = [
     ...detectNestedLoops(index),
     ...detectUnfilteredFindSet(index),
+    ...detectEventSubscriberIssues(index),
   ];
 
   allPatterns.sort((a, b) => b.impact - a.impact);

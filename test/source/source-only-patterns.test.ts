@@ -3,6 +3,7 @@ import { buildSourceIndex } from "../../src/source/indexer.js";
 import {
   detectNestedLoops,
   detectUnfilteredFindSet,
+  detectEventSubscriberIssues,
   runSourceOnlyDetectors,
 } from "../../src/source/source-only-patterns.js";
 
@@ -64,6 +65,29 @@ describe("detectUnfilteredFindSet", () => {
     // CodeUnit50100 ProcessRecords has SetRange before FindSet — should NOT appear
     const falsePositive = patterns.find((p) =>
       p.involvedMethods.some((m) => m.includes("ProcessRecords") && m.includes("50100")),
+    );
+    expect(falsePositive).toBeUndefined();
+  });
+});
+
+describe("detectEventSubscriberIssues", () => {
+  test("detects event subscriber with loops", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectEventSubscriberIssues(index);
+
+    const match = patterns.find((p) =>
+      p.involvedMethods.some((m) => m.includes("OnBeforePostSalesDoc")),
+    );
+    expect(match).toBeDefined();
+    expect(match!.suggestion).toBeDefined();
+  });
+
+  test("does not flag non-subscriber procedures", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectEventSubscriberIssues(index);
+
+    const falsePositive = patterns.find((p) =>
+      p.involvedMethods.some((m) => m.includes("ProcessRecords")),
     );
     expect(falsePositive).toBeUndefined();
   });

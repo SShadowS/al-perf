@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, test } from "bun:test";
 import { indexALFile, buildSourceIndex } from "../../src/source/indexer.js";
 import { resolve } from "path";
 
@@ -39,6 +39,20 @@ describe("indexALFile", () => {
     expect(lookupRecords!.features.loops[0].type).toBe("for");
     expect(lookupRecords!.features.recordOpsInLoops.length).toBeGreaterThan(0);
   });
+});
+
+test("detects EventSubscriber attribute on procedures", async () => {
+  const index = await buildSourceIndex(fixturesDir);
+  const obj = index.objects.get("Codeunit_50200");
+  expect(obj).toBeDefined();
+
+  const eventSub = obj!.procedures.find((p) => p.name === "OnBeforePostSalesDoc");
+  expect(eventSub).toBeDefined();
+  expect(eventSub!.isEventSubscriber).toBe(true);
+
+  const normal = obj!.procedures.find((p) => p.name === "ProcessNestedLoops");
+  expect(normal).toBeDefined();
+  expect(normal!.isEventSubscriber).toBe(false);
 });
 
 describe("buildSourceIndex", () => {

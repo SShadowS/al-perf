@@ -43,6 +43,7 @@ export interface ProcedureInfo {
   lineStart: number;
   lineEnd: number;
   features: ProcedureFeatures;
+  isEventSubscriber: boolean;
 }
 
 export interface TriggerInfo {

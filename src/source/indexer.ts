@@ -102,6 +102,21 @@ const NESTING_NODE_TYPES = new Set([
 ]);
 
 /**
+ * Check if the lines preceding a node contain an [EventSubscriber] attribute.
+ * Looks up to 5 lines before the node's start row.
+ */
+function checkEventSubscriber(source: string, nodeStartRow: number): boolean {
+  const lines = source.split("\n");
+  const start = Math.max(0, nodeStartRow - 5);
+  for (let i = start; i < nodeStartRow; i++) {
+    if (/\[EventSubscriber\b/i.test(lines[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Strip surrounding double quotes from a quoted_identifier node's text.
  */
 function stripQuotes(text: string): string {
@@ -423,6 +438,7 @@ export async function indexALFile(
           lineStart: child.startPosition.row + 1,
           lineEnd: child.endPosition.row + 1,
           features,
+          isEventSubscriber: checkEventSubscriber(source, child.startPosition.row),
         });
       } else if (
         child.type === "named_trigger" ||
