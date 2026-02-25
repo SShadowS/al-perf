@@ -109,6 +109,13 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
     lines.push("");
   }
 
+  // 6. AI Analysis (optional)
+  if (result.explanation) {
+    lines.push(chalk.bold("AI Analysis"));
+    lines.push(`  ${result.explanation.split("\n").join("\n  ")}`);
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 

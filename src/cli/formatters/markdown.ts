@@ -109,6 +109,14 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
     lines.push("");
   }
 
+  // 6. AI Analysis (optional)
+  if (result.explanation) {
+    lines.push("## AI Analysis");
+    lines.push("");
+    lines.push(result.explanation);
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 

@@ -47,6 +47,20 @@ describe("formatAnalysisMarkdown", () => {
       expect(output).toContain("**Suggestion:**");
     }
   });
+
+  test("includes explanation section when present", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    result.explanation = "This profile shows significant time in ProcessLine.";
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("## AI Analysis");
+    expect(output).toContain("This profile shows significant time in ProcessLine.");
+  });
+
+  test("omits explanation section when not present", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).not.toContain("## AI Analysis");
+  });
 });
 
 describe("formatComparisonMarkdown", () => {
