@@ -25,7 +25,8 @@
     "build": "tsc",
     "prepublishOnly": "bun run build",
     "test": "bun test",
-    "test:watch": "bun test --watch"
+    "test:watch": "bun test --watch",
+    "web": "bun run web/server.ts"
   },
   "keywords": ["business-central", "al", "performance", "profiler", "mcp", "alcpuprofile"],
   "license": "MIT",
