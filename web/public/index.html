@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AL Profile Analyzer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <!-- Drop Zone -->
+    <div id="dropzone">
+      <div class="icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <div class="primary-text">Drop your .alcpuprofile and companion .zip here</div>
+      <div class="secondary-text">Both files recommended for the deepest analysis. Profile alone works too.</div>
+      <input type="file" id="file-input" multiple hidden>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading" class="hidden">
+      <div class="spinner"></div>
+      <div>Analyzing profile...</div>
+    </div>
+
+    <!-- Results -->
+    <div id="results" class="hidden">
+      <div id="summary-section"></div>
+      <div id="hotspots-section"></div>
+      <div id="patterns-section"></div>
+      <div id="app-breakdown-section"></div>
+      <div id="object-breakdown-section"></div>
+      <div id="explanation-section"></div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error" class="hidden">
+      <p id="error-message"></p>
+      <button id="try-again">Try Again</button>
+    </div>
+  </main>
+
+  <!-- New Analysis Button -->
+  <button id="new-analysis" class="hidden">New Analysis</button>
+</body>
+</html>
