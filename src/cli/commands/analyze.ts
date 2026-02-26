@@ -5,6 +5,8 @@ import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
 import { explainAnalysis, type ExplainModel } from "../../explain/explainer.js";
 import { findCompanionZip, extractCompanionZip } from "../../source/zip-extractor.js";
 import { SourceIndexCache } from "../../source/cache.js";
+import type { SourceIndex } from "../../types/source-index.js";
+import { withStatus } from "../status.js";
 
 export function registerAnalyzeCommand(program: Command) {
   program
@@ -29,27 +31,33 @@ export function registerAnalyzeCommand(program: Command) {
       if (!sourcePath) {
         const zipPath = findCompanionZip(profilePath);
         if (zipPath) {
-          const extracted = await extractCompanionZip(zipPath);
+          const extracted = await withStatus("Extracting companion source archive...", () =>
+            extractCompanionZip(zipPath),
+          );
           sourcePath = extracted.extractDir;
           cleanup = extracted.cleanup;
         }
       }
 
       // Build source index via cache when --cache is provided
-      let sourceIndex;
+      let sourceIndex: SourceIndex | undefined;
       if (sourcePath && opts.cache) {
         const cache = new SourceIndexCache(resolve(sourcePath, ".al-profile-cache"));
-        sourceIndex = await cache.getOrBuild(sourcePath);
+        sourceIndex = await withStatus("Building source index...", () =>
+          cache.getOrBuild(sourcePath!),
+        );
       }
 
-      const result = await analyzeProfile(profilePath, {
-        top: parseInt(opts.top, 10),
-        threshold: parseFloat(opts.threshold) * 1000,
-        appFilter: opts.appFilter?.split(",").map((s: string) => s.trim()),
-        includePatterns: opts.patterns !== false,
-        sourcePath: opts.cache ? undefined : sourcePath,
-        sourceIndex,
-      });
+      const result = await withStatus("Analyzing profile...", () =>
+        analyzeProfile(profilePath, {
+          top: parseInt(opts.top, 10),
+          threshold: parseFloat(opts.threshold) * 1000,
+          appFilter: opts.appFilter?.split(",").map((s: string) => s.trim()),
+          includePatterns: opts.patterns !== false,
+          sourcePath: opts.cache ? undefined : sourcePath,
+          sourceIndex,
+        }),
+      );
       // Run LLM explanation if --explain is provided
       if (opts.explain) {
         const model = opts.model ?? "sonnet";
@@ -62,10 +70,13 @@ export function registerAnalyzeCommand(program: Command) {
           console.error("Warning: --explain requires an API key. Set ANTHROPIC_API_KEY or use --api-key.");
         } else {
           try {
-            result.explanation = await explainAnalysis(result, {
-              apiKey,
-              model: model as ExplainModel,
-            });
+            const modelLabel = model === "opus" ? "Opus" : "Sonnet";
+            result.explanation = await withStatus(`Generating AI explanation (Claude ${modelLabel})...`, () =>
+              explainAnalysis(result, {
+                apiKey,
+                model: model as ExplainModel,
+              }),
+            );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --explain failed: ${message}`);
