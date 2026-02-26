@@ -39,7 +39,10 @@ function formatTime(us) {
 function renderResults(data) {
   const results = document.getElementById("results");
   if (results) {
-    results.innerHTML = "<pre>" + JSON.stringify(data, null, 2) + "</pre>";
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(data, null, 2);
+    results.innerHTML = "";
+    results.appendChild(pre);
   }
 }
 
@@ -126,8 +129,10 @@ document.addEventListener("DOMContentLoaded", () => {
     dropzone.classList.add("dragover");
   });
 
-  dropzone.addEventListener("dragleave", () => {
-    dropzone.classList.remove("dragover");
+  dropzone.addEventListener("dragleave", (e) => {
+    if (!dropzone.contains(e.relatedTarget)) {
+      dropzone.classList.remove("dragover");
+    }
   });
 
   dropzone.addEventListener("drop", (e) => {
