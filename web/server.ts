@@ -1,4 +1,4 @@
-import { resolve, join, extname } from "path";
+import { resolve, join } from "path";
 import { mkdir, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { analyzeProfile } from "../src/core/analyzer.js";
@@ -49,7 +49,7 @@ async function serveStatic(pathname: string): Promise<Response | null> {
  */
 async function handleAnalyze(req: Request): Promise<Response> {
   const contentType = req.headers.get("content-type") || "";
-  if (!contentType.includes("multipart/form-data")) {
+  if (!contentType.startsWith("multipart/form-data")) {
     return Response.json(
       { error: "Content-Type must be multipart/form-data" },
       { status: 400 },
@@ -89,7 +89,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
 
     // Run analysis
     const result = await analyzeProfile(profilePath, {
-      top: 10,
+      top: 20,
       includePatterns: true,
       sourcePath,
     });
