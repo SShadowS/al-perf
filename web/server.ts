@@ -1,4 +1,4 @@
-import { resolve, join } from "path";
+import { resolve, join, basename } from "path";
 import { mkdir, rm, readFile, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { analyzeProfile } from "../src/core/analyzer.js";
@@ -97,14 +97,16 @@ async function handleAnalyze(req: Request): Promise<Response> {
     // Write uploads to a per-request temp directory
     tempDir = await makeTempDir();
 
-    const profilePath = join(tempDir, profileFile.name || "profile.alcpuprofile");
+    const safeProfileName = basename(profileFile.name || "profile.alcpuprofile");
+    const profilePath = join(tempDir, safeProfileName);
     await Bun.write(profilePath, profileFile);
 
     // Handle optional source zip
     let sourcePath: string | undefined;
     const sourceFile = formData.get("source");
     if (sourceFile && sourceFile instanceof File) {
-      const zipPath = join(tempDir, sourceFile.name || "source.zip");
+      const safeZipName = basename(sourceFile.name || "source.zip");
+      const zipPath = join(tempDir, safeZipName);
       await Bun.write(zipPath, sourceFile);
       const extracted = await extractCompanionZip(zipPath);
       sourcePath = extracted.extractDir;
@@ -157,6 +159,18 @@ async function handleAnalyze(req: Request): Promise<Response> {
   }
 }
 
+const CSP_HEADERS = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'",
+};
+
+function withSecurityHeaders(response: Response): Response {
+  for (const [key, value] of Object.entries(CSP_HEADERS)) {
+    response.headers.set(key, value);
+  }
+  return response;
+}
+
 export const server = Bun.serve({
   hostname: "0.0.0.0",
   port: PORT,
@@ -178,21 +192,21 @@ export const server = Bun.serve({
     if (url.pathname === "/api/analyze" && req.method === "POST") {
       const res = await handleAnalyze(req);
       console.log(`${new Date().toISOString()} ${ip} POST /api/analyze ${res.status} ${Date.now() - start}ms`);
-      return res;
+      return withSecurityHeaders(res);
     }
 
     if (url.pathname === "/api/stats" && req.method === "GET") {
       const stats = await loadStats();
-      return Response.json(stats);
+      return withSecurityHeaders(Response.json(stats));
     }
 
     // Static file serving
     if (req.method === "GET") {
       const staticResponse = await serveStatic(url.pathname);
-      if (staticResponse) return staticResponse;
+      if (staticResponse) return withSecurityHeaders(staticResponse);
     }
 
-    return Response.json({ error: "Not found" }, { status: 404 });
+    return withSecurityHeaders(Response.json({ error: "Not found" }, { status: 404 }));
   },
 });
 

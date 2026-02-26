@@ -46,11 +46,14 @@ function escapeHtml(str) {
 
 /**
  * Render markdown to HTML using the marked library.
- * Sanitizes output by escaping HTML in the raw input first.
+ * Strips raw HTML tags from input before parsing to prevent XSS
+ * (e.g. from prompt injection in LLM output).
  */
 function renderMarkdown(text) {
   if (typeof marked !== "undefined") {
-    return marked.parse(text);
+    // Strip raw HTML before markdown parsing to prevent XSS
+    const sanitized = text.replace(/<[^>]*>/g, "");
+    return marked.parse(sanitized);
   }
   // Fallback if marked didn't load: escaped pre-formatted text
   const pre = document.createElement("pre");

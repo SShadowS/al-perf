@@ -1,7 +1,11 @@
 import { existsSync } from "fs";
 import { mkdir, writeFile, rm } from "fs/promises";
-import { resolve, dirname, basename } from "path";
+import { resolve, dirname, basename, sep } from "path";
 import { tmpdir } from "os";
+
+/** Size limits to prevent decompression bombs */
+export const MAX_ENTRY_SIZE = 50 * 1024 * 1024; // 50MB per file
+export const MAX_TOTAL_SIZE = 500 * 1024 * 1024; // 500MB total extraction
 
 /**
  * Find a companion .zip file for a given profile path.
@@ -39,6 +43,10 @@ export async function extractCompanionZip(zipPath: string): Promise<ExtractResul
   for (const entry of entries) {
     if (entry.name.toLowerCase().endsWith(".al")) {
       const outputPath = resolve(extractDir, entry.name);
+      // Zip slip protection: ensure resolved path stays inside extractDir
+      if (!outputPath.startsWith(extractDir + sep) && outputPath !== extractDir) {
+        continue;
+      }
       await mkdir(dirname(outputPath), { recursive: true });
       await writeFile(outputPath, entry.data);
       alFileCount++;
@@ -60,6 +68,7 @@ async function readZipEntries(
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
   const entries: { name: string; data: Uint8Array }[] = [];
+  let totalDecompressedSize = 0;
 
   let offset = 0;
   while (offset < bytes.length - 4) {
@@ -86,17 +95,32 @@ async function readZipEntries(
       continue;
     }
 
+    // Decompression bomb protection: skip entries with declared size over limit
+    if (uncompressedSize > MAX_ENTRY_SIZE) {
+      offset = dataStart + compressedSize;
+      continue;
+    }
+
     let data: Uint8Array;
     if (compressionMethod === 0) {
       // Stored (no compression)
       data = compressedData;
     } else if (compressionMethod === 8) {
       // Deflate
-      data = await inflateData(compressedData, uncompressedSize);
+      data = await inflateData(compressedData, MAX_ENTRY_SIZE);
     } else {
       // Unsupported compression method — skip
       offset = dataStart + compressedSize;
       continue;
+    }
+
+    // Enforce per-entry and total size limits on actual decompressed data
+    if (data.length > MAX_ENTRY_SIZE) {
+      continue;
+    }
+    totalDecompressedSize += data.length;
+    if (totalDecompressedSize > MAX_TOTAL_SIZE) {
+      break;
     }
 
     entries.push({ name, data });
@@ -108,10 +132,11 @@ async function readZipEntries(
 
 /**
  * Decompress deflate-raw data using DecompressionStream.
+ * Enforces a maxSize limit to prevent decompression bombs.
  */
 async function inflateData(
   compressedData: Uint8Array,
-  _uncompressedSize: number,
+  maxSize: number,
 ): Promise<Uint8Array> {
   const ds = new DecompressionStream("deflate-raw");
   const writer = ds.writable.getWriter();
@@ -127,6 +152,10 @@ async function inflateData(
     if (done) break;
     chunks.push(value);
     totalLength += value.length;
+    if (totalLength > maxSize) {
+      await reader.cancel();
+      throw new Error(`Decompressed size exceeds limit of ${maxSize} bytes`);
+    }
   }
 
   const result = new Uint8Array(totalLength);
