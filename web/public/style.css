@@ -179,6 +179,14 @@ main {
   margin-top: 0.5rem;
 }
 
+/* Stats line */
+#stats {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-top: 1rem;
+}
+
 /* Tables */
 .table-wrapper {
   overflow-x: auto;

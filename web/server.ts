@@ -1,13 +1,36 @@
 import { resolve, join } from "path";
-import { mkdir, rm } from "fs/promises";
+import { mkdir, rm, readFile, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { analyzeProfile } from "../src/core/analyzer.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
 import { explainAnalysis } from "../src/explain/explainer.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
+const STATS_FILE = resolve(import.meta.dir, "stats.json");
 const MAX_BODY_SIZE = 100 * 1024 * 1024; // 100MB
 const PORT = parseInt(process.env.PORT || "3010", 10);
+
+interface Stats {
+  totalAnalyses: number;
+  dailyCounts: Record<string, number>;
+}
+
+async function loadStats(): Promise<Stats> {
+  try {
+    const raw = await readFile(STATS_FILE, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return { totalAnalyses: 0, dailyCounts: {} };
+  }
+}
+
+async function recordAnalysis(): Promise<void> {
+  const stats = await loadStats();
+  stats.totalAnalyses++;
+  const today = new Date().toISOString().slice(0, 10);
+  stats.dailyCounts[today] = (stats.dailyCounts[today] || 0) + 1;
+  await writeFile(STATS_FILE, JSON.stringify(stats, null, 2));
+}
 
 /**
  * Create a unique temporary directory for a request's uploaded files.
@@ -105,6 +128,9 @@ async function handleAnalyze(req: Request): Promise<Response> {
       }
     }
 
+    // Record successful analysis for stats
+    recordAnalysis().catch(() => {});
+
     return Response.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -153,6 +179,11 @@ export const server = Bun.serve({
       const res = await handleAnalyze(req);
       console.log(`${new Date().toISOString()} ${ip} POST /api/analyze ${res.status} ${Date.now() - start}ms`);
       return res;
+    }
+
+    if (url.pathname === "/api/stats" && req.method === "GET") {
+      const stats = await loadStats();
+      return Response.json(stats);
     }
 
     // Static file serving
