@@ -55,7 +55,7 @@ export async function explainAnalysis(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 1024,
+    max_tokens: 2048,
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -66,5 +66,9 @@ export async function explainAnalysis(
   });
 
   const textBlock = response.content.find((b) => b.type === "text");
-  return textBlock?.text ?? "";
+  let text = textBlock?.text ?? "";
+  if (response.stop_reason === "max_tokens") {
+    text += "\n\n*(Response truncated)*";
+  }
+  return text;
 }
