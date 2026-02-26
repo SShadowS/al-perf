@@ -89,24 +89,45 @@ function markdownToHtml(escaped) {
   }
   flushList();
 
-  // Join blocks, collapsing consecutive empty strings into paragraph breaks
+  // Join blocks — block-level elements (h3, ul) stand alone; text wraps in <p>
   let html = "";
+  let inParagraph = false;
+
+  function closeParagraph() {
+    if (inParagraph) {
+      html += "</p>";
+      inParagraph = false;
+    }
+  }
+
   let prevEmpty = false;
   for (const block of outputBlocks) {
     if (block === "") {
+      closeParagraph();
       prevEmpty = true;
       continue;
     }
-    if (prevEmpty && html.length > 0) {
-      html += "</p><p>";
+
+    const isBlockElement = block.startsWith("<h3>") || block.startsWith("<ul>");
+    if (isBlockElement) {
+      closeParagraph();
+      html += block;
+      prevEmpty = false;
+      continue;
     }
-    if (html.length > 0 && !prevEmpty) {
+
+    if (!inParagraph) {
+      html += "<p>";
+      inParagraph = true;
+    } else if (prevEmpty) {
+      html += "</p><p>";
+    } else {
       html += "<br>";
     }
     html += block;
     prevEmpty = false;
   }
-  html = "<p>" + html + "</p>";
+  closeParagraph();
 
   // Bold: **text** (must be done before italic)
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
@@ -149,7 +170,7 @@ function renderSummary(data) {
 
   const stats = [
     { label: "Type", value: capitalize(data.meta.profileType) },
-    { label: "Duration", value: formatTime(data.meta.totalSelfTime) },
+    { label: "Duration", value: formatTime(data.meta.totalDuration) },
     { label: "Nodes", value: String(data.meta.totalNodes) },
     { label: "Max Depth", value: String(data.meta.maxDepth) },
   ];
