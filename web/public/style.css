@@ -26,9 +26,107 @@ body {
 }
 
 main {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 2rem;
+}
+
+/* Results layout with sidebar */
+#results {
+  display: flex;
+  gap: 2rem;
+}
+
+#results-content {
+  flex: 1;
+  min-width: 0;
+}
+
+#results-content > div {
+  scroll-margin-top: 1rem;
+}
+
+#sidebar {
+  position: sticky;
+  top: 2rem;
+  align-self: flex-start;
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+  padding-left: 0.75rem;
+}
+
+#sidebar-nav {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#sidebar-nav li {
+  margin: 0;
+}
+
+#sidebar-nav a {
+  display: block;
+  padding: 0.4rem 0.75rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.85rem;
+  border-left: 2px solid transparent;
+  border-radius: 0 4px 4px 0;
+  transition: all 0.15s ease;
+}
+
+#sidebar-nav a:hover {
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+#sidebar-nav a.active {
+  color: var(--accent-cyan);
+  border-left-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.05);
+}
+
+@media (max-width: 900px) {
+  #results {
+    flex-direction: column;
+  }
+  #sidebar {
+    position: static;
+    width: 100%;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1rem;
+  }
+  .sidebar-title {
+    display: none;
+  }
+  #sidebar-nav {
+    display: flex;
+    gap: 0.25rem;
+  }
+  #sidebar-nav a {
+    white-space: nowrap;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 4px 4px 0 0;
+  }
+  #sidebar-nav a.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent-cyan);
+  }
 }
 
 /* Card base */
@@ -217,6 +315,94 @@ tr:nth-child(even) {
   font-size: 0.9rem;
 }
 
+/* Markdown content inside explanation card */
+#explanation-section .card h1,
+#explanation-section .card h2,
+#explanation-section .card h3,
+#explanation-section .card h4 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 1.25rem 0 0.5rem;
+  color: var(--text-primary);
+}
+
+#explanation-section .card h1:first-child,
+#explanation-section .card h2:first-child,
+#explanation-section .card h3:first-child {
+  margin-top: 0;
+}
+
+#explanation-section .card p {
+  margin: 0.5rem 0;
+  line-height: 1.6;
+}
+
+#explanation-section .card ul,
+#explanation-section .card ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+#explanation-section .card li {
+  margin: 0.25rem 0;
+  line-height: 1.5;
+}
+
+#explanation-section .card code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  background: var(--bg-primary);
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+  color: var(--accent-cyan);
+}
+
+#explanation-section .card strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+#explanation-section .card hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 1.25rem 0;
+}
+
+#explanation-section .card table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+}
+
+#explanation-section .card th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+#explanation-section .card td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+#explanation-section .card tr:last-child td {
+  border-bottom: none;
+}
+
+#explanation-section .card blockquote {
+  border-left: 3px solid var(--accent-cyan);
+  margin: 0.75rem 0;
+  padding: 0.5rem 1rem;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border-radius: 0 4px 4px 0;
+}
+
 /* Source badge */
 .source-badge {
   display: inline-flex;
@@ -245,7 +431,7 @@ tr:nth-child(even) {
 
 /* Hidden state */
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 /* Loading */

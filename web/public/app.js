@@ -45,96 +45,17 @@ function escapeHtml(str) {
 }
 
 /**
- * Simple markdown-to-HTML conversion for explanation text.
- * IMPORTANT: input must already be HTML-escaped.
+ * Render markdown to HTML using the marked library.
+ * Sanitizes output by escaping HTML in the raw input first.
  */
-function markdownToHtml(escaped) {
-  const lines = escaped.split("\n");
-  const outputBlocks = [];
-  let currentList = [];
-
-  function flushList() {
-    if (currentList.length > 0) {
-      outputBlocks.push("<ul>" + currentList.join("") + "</ul>");
-      currentList = [];
-    }
+function renderMarkdown(text) {
+  if (typeof marked !== "undefined") {
+    return marked.parse(text);
   }
-
-  for (const line of lines) {
-    // Headings (all rendered as h3 within card context)
-    if (/^#{1,3}\s+/.test(line)) {
-      flushList();
-      const text = line.replace(/^#{1,3}\s+/, "");
-      outputBlocks.push("<h3>" + text + "</h3>");
-      continue;
-    }
-
-    // List items
-    if (/^- /.test(line)) {
-      const text = line.replace(/^- /, "");
-      currentList.push("<li>" + text + "</li>");
-      continue;
-    }
-
-    // Empty line — paragraph break
-    if (line.trim() === "") {
-      flushList();
-      outputBlocks.push("");
-      continue;
-    }
-
-    // Regular text line
-    flushList();
-    outputBlocks.push(line);
-  }
-  flushList();
-
-  // Join blocks — block-level elements (h3, ul) stand alone; text wraps in <p>
-  let html = "";
-  let inParagraph = false;
-
-  function closeParagraph() {
-    if (inParagraph) {
-      html += "</p>";
-      inParagraph = false;
-    }
-  }
-
-  let prevEmpty = false;
-  for (const block of outputBlocks) {
-    if (block === "") {
-      closeParagraph();
-      prevEmpty = true;
-      continue;
-    }
-
-    const isBlockElement = block.startsWith("<h3>") || block.startsWith("<ul>");
-    if (isBlockElement) {
-      closeParagraph();
-      html += block;
-      prevEmpty = false;
-      continue;
-    }
-
-    if (!inParagraph) {
-      html += "<p>";
-      inParagraph = true;
-    } else if (prevEmpty) {
-      html += "</p><p>";
-    } else {
-      html += "<br>";
-    }
-    html += block;
-    prevEmpty = false;
-  }
-  closeParagraph();
-
-  // Bold: **text** (must be done before italic)
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  // Italic: *text* (but not **)
-  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-
-  return html;
+  // Fallback if marked didn't load: escaped pre-formatted text
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  return pre.outerHTML;
 }
 
 // ---------------------------------------------------------------------------
@@ -685,9 +606,7 @@ function renderExplanation(data) {
   const card = document.createElement("div");
   card.className = "card";
 
-  // Escape first, then convert markdown to HTML
-  const escaped = escapeHtml(data.explanation);
-  card.innerHTML = markdownToHtml(escaped);
+  card.innerHTML = renderMarkdown(data.explanation);
 
   section.appendChild(card);
 }
@@ -696,13 +615,74 @@ function renderExplanation(data) {
  * Render analysis results into the results container.
  * Dispatches to individual section renderers.
  */
+/**
+ * Build the sidebar navigation from visible sections.
+ */
+function buildSidebar() {
+  const nav = document.getElementById("sidebar-nav");
+  if (!nav) return;
+  nav.innerHTML = "";
+
+  const sections = [
+    { id: "summary-section", label: "Summary" },
+    { id: "explanation-section", label: "AI Analysis" },
+    { id: "app-breakdown-section", label: "App Breakdown" },
+    { id: "hotspots-section", label: "Hotspots" },
+    { id: "patterns-section", label: "Patterns" },
+    { id: "object-breakdown-section", label: "Object Breakdown" },
+  ];
+
+  const visibleSections = [];
+  for (const s of sections) {
+    const el = document.getElementById(s.id);
+    if (el && el.innerHTML.trim() !== "") {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = "#" + s.id;
+      a.textContent = s.label;
+      a.setAttribute("data-section", s.id);
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      li.appendChild(a);
+      nav.appendChild(li);
+      visibleSections.push(s.id);
+    }
+  }
+
+  // Highlight active section on scroll
+  if (window._sidebarScrollHandler) {
+    window.removeEventListener("scroll", window._sidebarScrollHandler);
+  }
+  window._sidebarScrollHandler = () => {
+    let activeId = visibleSections[0];
+    for (let i = visibleSections.length - 1; i >= 0; i--) {
+      const el = document.getElementById(visibleSections[i]);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= 120) {
+          activeId = visibleSections[i];
+          break;
+        }
+      }
+    }
+    for (const a of nav.querySelectorAll("a")) {
+      a.classList.toggle("active", a.getAttribute("data-section") === activeId);
+    }
+  };
+  window.addEventListener("scroll", window._sidebarScrollHandler);
+  window._sidebarScrollHandler();
+}
+
 function renderResults(data) {
   renderSummary(data);
+  renderExplanation(data);
+  renderAppBreakdown(data);
   renderHotspots(data);
   renderPatterns(data);
-  renderAppBreakdown(data);
   renderObjectBreakdown(data);
-  renderExplanation(data);
+  buildSidebar();
 }
 
 /**

@@ -85,4 +85,9 @@ describe("web server", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("responds 200 to OPTIONS requests", async () => {
+    const res = await fetch(`${BASE}/`, { method: "OPTIONS" });
+    expect(res.status).toBe(200);
+  });
 });

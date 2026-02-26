@@ -3,10 +3,11 @@ import { mkdir, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { analyzeProfile } from "../src/core/analyzer.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
+import { explainAnalysis } from "../src/explain/explainer.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 const MAX_BODY_SIZE = 100 * 1024 * 1024; // 100MB
-const PORT = parseInt(process.env.PORT || "3000", 10);
+const PORT = parseInt(process.env.PORT || "3010", 10);
 
 /**
  * Create a unique temporary directory for a request's uploaded files.
@@ -94,9 +95,21 @@ async function handleAnalyze(req: Request): Promise<Response> {
       sourcePath,
     });
 
+    // Always run AI explanation if API key is available
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (apiKey) {
+      try {
+        result.explanation = await explainAnalysis(result, { apiKey, model: "sonnet" });
+      } catch {
+        // Non-fatal — analysis still returns without explanation
+      }
+    }
+
     return Response.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error(`[analyze error] ${message}`);
+    if (err instanceof Error && err.stack) console.error(err.stack);
     return Response.json({ error: message }, { status: 500 });
   } finally {
     // Clean up source extraction temp dir
@@ -119,14 +132,27 @@ async function handleAnalyze(req: Request): Promise<Response> {
 }
 
 export const server = Bun.serve({
+  hostname: "0.0.0.0",
   port: PORT,
   maxRequestBodySize: MAX_BODY_SIZE,
   async fetch(req) {
+    const start = Date.now();
+    const ip = server.requestIP(req)?.address ?? "unknown";
+
+    // OPTIONS — used by reverse proxy for upstate checks
+    // Must be handled before URL parsing since HAProxy sends bare paths
+    if (req.method === "OPTIONS") {
+      console.log(`${new Date().toISOString()} ${ip} OPTIONS - 200 0ms`);
+      return new Response(null, { status: 200 });
+    }
+
     const url = new URL(req.url);
 
     // API routes
     if (url.pathname === "/api/analyze" && req.method === "POST") {
-      return handleAnalyze(req);
+      const res = await handleAnalyze(req);
+      console.log(`${new Date().toISOString()} ${ip} POST /api/analyze ${res.status} ${Date.now() - start}ms`);
+      return res;
     }
 
     // Static file serving
