@@ -714,8 +714,14 @@ async function handleFiles(files) {
     formData.append("source", sourceFile);
   }
 
-  // Show loading state
+  // Show loading state with elapsed timer
   showView("loading");
+  const timerEl = document.getElementById("elapsed-timer");
+  const startTime = Date.now();
+  const timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    timerEl.textContent = elapsed + "s elapsed";
+  }, 1000);
 
   try {
     const response = await fetch("/api/analyze", {
@@ -745,6 +751,8 @@ async function handleFiles(files) {
     document.getElementById("error-message").textContent =
       err.message || "Network error — could not reach the server";
     showView("error");
+  } finally {
+    clearInterval(timerInterval);
   }
 }
 

@@ -455,6 +455,12 @@ tr:nth-child(even) {
   100% { transform: rotate(360deg); }
 }
 
+#elapsed-timer {
+  color: var(--text-secondary);
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
 /* Error state */
 #error {
   background: rgba(239, 68, 68, 0.1);
