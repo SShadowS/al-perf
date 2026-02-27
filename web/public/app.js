@@ -768,17 +768,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const newAnalysisBtn = document.getElementById("new-analysis");
   const tryAgainBtn = document.getElementById("try-again");
 
-  // Fetch and display usage stats (non-blocking)
-  fetch("/api/stats")
-    .then((res) => (res.ok ? res.json() : Promise.reject()))
-    .then((stats) => {
-      if (stats.totalAnalyses > 0) {
-        const el = document.getElementById("stats");
-        el.textContent = stats.totalAnalyses + " analyses performed";
-        el.classList.remove("hidden");
-      }
-    })
-    .catch(() => {});
 
   // --- Drag-and-drop ---
   dropzone.addEventListener("dragenter", (e) => {
