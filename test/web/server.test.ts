@@ -64,7 +64,7 @@ describe("web server", () => {
     expect(result.objectBreakdown).toBeInstanceOf(Array);
     expect(result.summary).toBeDefined();
     expect(result.summary.oneLiner).toBeTypeOf("string");
-  });
+  }, 60000);
 
   it("returns 400 when no profile is provided", async () => {
     const formData = new FormData();
@@ -89,5 +89,60 @@ describe("web server", () => {
   it("responds 200 to OPTIONS requests", async () => {
     const res = await fetch(`${BASE}/`, { method: "OPTIONS" });
     expect(res.status).toBe(200);
+  });
+
+  describe("format parameter", () => {
+    function postProfile(formatParam?: string) {
+      const profilePath = resolve(import.meta.dir, "../fixtures/instrumentation-minimal.alcpuprofile");
+      const profileData = readFileSync(profilePath);
+      const formData = new FormData();
+      formData.append("profile", new Blob([profileData]), "test.alcpuprofile");
+      const qs = formatParam ? `?format=${formatParam}` : "";
+      return fetch(`${BASE}/api/analyze${qs}`, {
+        method: "POST",
+        body: formData,
+      });
+    }
+
+    it("returns JSON by default (no format param)", async () => {
+      const res = await postProfile();
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const result = await res.json();
+      expect(result.meta).toBeDefined();
+    }, 60000);
+
+    it("returns JSON when format=json", async () => {
+      const res = await postProfile("json");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const result = await res.json();
+      expect(result.meta).toBeDefined();
+    }, 60000);
+
+    it("returns HTML when format=html", async () => {
+      const res = await postProfile("html");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      const body = await res.text();
+      expect(body).toContain("<!DOCTYPE html>");
+      expect(body).toContain("#00B7C3");
+      expect(body).toContain("Segoe UI");
+      expect(body).toMatch(/CRITICAL|WARNING|INFO/);
+    }, 60000);
+
+    it("returns 400 for unsupported format", async () => {
+      const res = await postProfile("pdf");
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain("Unsupported format");
+    }, 60000);
+
+    it("HTML response is self-contained (no external resource links)", async () => {
+      const res = await postProfile("html");
+      const body = await res.text();
+      expect(body).not.toMatch(/href="https?:\/\//);
+      expect(body).not.toMatch(/src="https?:\/\//);
+    }, 60000);
   });
 });

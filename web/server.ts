@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { analyzeProfile } from "../src/core/analyzer.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
 import { explainAnalysis } from "../src/explain/explainer.js";
+import { formatAnalysisHtml } from "../src/cli/formatters/html.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 const STATS_FILE = resolve(import.meta.dir, "stats.json");
@@ -133,6 +134,22 @@ async function handleAnalyze(req: Request): Promise<Response> {
     // Record successful analysis for stats
     recordAnalysis().catch(() => {});
 
+    // Branch on requested output format
+    const url = new URL(req.url);
+    const format = url.searchParams.get("format");
+
+    if (format === "html") {
+      const html = formatAnalysisHtml(result);
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    if (format && format !== "json") {
+      return Response.json(
+        { error: `Unsupported format '${format}'. Supported: json, html` },
+        { status: 400 },
+      );
+    }
     return Response.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
