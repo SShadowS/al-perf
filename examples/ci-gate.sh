@@ -8,8 +8,8 @@
 # Usage in GitHub Actions:
 #   - run: bash examples/ci-gate.sh path/to/profile.alcpuprofile
 #
-# Prerequisites: bun installed, al-profile-analyzer available
-# Install: bun add al-profile-analyzer
+# Prerequisites: bun installed, al-perf available
+# Install: bun add al-perf
 
 set -euo pipefail
 

@@ -1,6 +1,6 @@
-# al-profile-analyzer
+# al-perf
 
-[![npm version](https://img.shields.io/npm/v/al-profile-analyzer)](https://www.npmjs.com/package/al-profile-analyzer)
+[![npm version](https://img.shields.io/npm/v/al-perf)](https://www.npmjs.com/package/al-perf)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Built with Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1?logo=bun)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -29,7 +29,7 @@ Works as a **CLI**, **web app**, **MCP server**, or **library**.
 
 ```bash
 # npm / bun
-bun add al-profile-analyzer
+bun add al-perf
 
 # From source
 git clone https://github.com/anthropics/al-perf.git
@@ -115,7 +115,7 @@ Expose all analysis tools to AI agents (Claude Code, Cursor, etc.):
 ## Library API
 
 ```typescript
-import { analyzeProfile, compareProfiles } from "al-profile-analyzer";
+import { analyzeProfile, compareProfiles } from "al-perf";
 
 const result = await analyzeProfile("profile.alcpuprofile", {
   top: 10,
@@ -131,11 +131,11 @@ for (const p of result.patterns) {
 ## Docker
 
 ```bash
-docker build -t al-profile-analyzer .
-docker run -p 3010:3010 al-profile-analyzer
+docker build -t al-perf .
+docker run -p 3010:3010 al-perf
 
 # With AI explanation
-docker run -p 3010:3010 -e ANTHROPIC_API_KEY=sk-ant-... al-profile-analyzer
+docker run -p 3010:3010 -e ANTHROPIC_API_KEY=sk-ant-... al-perf
 ```
 
 ## Pattern Reference

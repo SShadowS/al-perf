@@ -2,12 +2,12 @@
 /**
  * Example: Automated Performance Review Agent
  *
- * This script demonstrates using the al-profile-analyzer library
+ * This script demonstrates using the al-perf library
  * to build an automated performance review pipeline.
  *
  * Usage: bun run examples/performance-review.ts <profile-path> [source-path]
  */
-// When installed via npm, import from "al-profile-analyzer" instead
+// When installed via npm, import from "al-perf" instead
 import { analyzeProfile } from "../src/index.js";
 
 const profilePath = process.argv[2];
