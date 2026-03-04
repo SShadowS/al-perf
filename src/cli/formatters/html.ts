@@ -38,14 +38,24 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
 
   const hotspotsRows = result.hotspots
     .map((h: MethodBreakdown, i: number) => {
+      const gapStr = h.gapTime && h.gapTime > 0
+        ? ` <span style="color:#9F9700">+${formatTime(h.gapTime)} wait</span>`
+        : "";
+      const objectStr = h.sourceLocation
+        ? `${escapeHtml(h.objectType)} ${h.objectId}<br><span style="color:#505C6D;font-size:0.85em">${escapeHtml(h.sourceLocation.filePath)}:${h.sourceLocation.lineStart}</span>`
+        : `${escapeHtml(h.objectType)} ${h.objectId} (${escapeHtml(h.objectName)})`;
+      const calledByStr = h.calledBy.length > 0
+        ? escapeHtml(h.calledBy.slice(0, 3).join(", "))
+        : "\u2014";
       return `<tr>
         <td>${i + 1}</td>
         <td><strong>${escapeHtml(h.functionName)}</strong></td>
-        <td>${escapeHtml(h.objectType)} ${h.objectId} (${escapeHtml(h.objectName)})</td>
+        <td>${objectStr}</td>
         <td>${escapeHtml(h.appName)}</td>
-        <td>${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)</td>
+        <td>${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)${gapStr}</td>
         <td>${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%)</td>
         <td>${h.hitCount}</td>
+        <td style="font-size:0.85em">${calledByStr}</td>
       </tr>`;
     })
     .join("\n");
@@ -211,6 +221,9 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
       <tr><td>Max Depth</td><td>${result.meta.maxDepth}</td></tr>
       <tr><td>Source</td><td>${source}</td></tr>
       ${samplingRow}
+      ${result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0
+        ? `<tr><td>Built-in Overhead</td><td>${formatTime(result.meta.builtinSelfTime)}</td></tr>`
+        : ""}
     </table>
   </div>
 
@@ -218,7 +231,7 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     <h2>Top Hotspots</h2>
     <table>
       <thead>
-        <tr><th>#</th><th>Function</th><th>Object</th><th>App</th><th>Self Time</th><th>Total Time</th><th>Hits</th></tr>
+        <tr><th>#</th><th>Function</th><th>Object</th><th>App</th><th>Self Time</th><th>Total Time</th><th>Hits</th><th>Called By</th></tr>
       </thead>
       <tbody>
         ${hotspotsRows}

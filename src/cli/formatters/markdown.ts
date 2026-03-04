@@ -52,6 +52,9 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
   if (result.meta.samplingInterval !== undefined) {
     lines.push(`| Sampling Interval | ${formatTime(result.meta.samplingInterval)} |`);
   }
+  if (result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0) {
+    lines.push(`| Built-in Overhead | ${formatTime(result.meta.builtinSelfTime)} |`);
+  }
   lines.push("");
 
   // Pattern count
@@ -63,12 +66,18 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
   if (result.hotspots.length > 0) {
     lines.push("## Top Hotspots");
     lines.push("");
-    lines.push("| # | Function | Object | App | Self Time | Total Time | Hits |");
-    lines.push("| --- | --- | --- | --- | --- | --- | --- |");
+    lines.push("| # | Function | Object | App | Self Time | Total Time | Hits | Called By |");
+    lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
 
     result.hotspots.forEach((h: MethodBreakdown, i: number) => {
+      const selfTimeStr = `${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)`;
+      const gapStr = h.gapTime && h.gapTime > 0 ? ` +${formatTime(h.gapTime)} wait` : "";
+      const objectStr = h.sourceLocation
+        ? `${h.objectType} ${h.objectId} ([${h.sourceLocation.filePath}:${h.sourceLocation.lineStart}](${h.sourceLocation.filePath}))`
+        : `${h.objectType} ${h.objectId} (${h.objectName})`;
+      const calledByStr = h.calledBy.length > 0 ? h.calledBy.slice(0, 3).join(", ") : "-";
       lines.push(
-        `| ${i + 1} | **${h.functionName}** | ${h.objectType} ${h.objectId} (${h.objectName}) | ${h.appName} | ${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%) | ${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%) | ${h.hitCount} |`,
+        `| ${i + 1} | **${h.functionName}** | ${objectStr} | ${h.appName} | ${selfTimeStr}${gapStr} | ${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%) | ${h.hitCount} | ${calledByStr} |`,
       );
     });
 

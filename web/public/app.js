@@ -104,6 +104,12 @@ function renderSummary(data) {
       value: formatTime(data.meta.samplingInterval),
     });
   }
+  if (data.meta.builtinSelfTime != null && data.meta.builtinSelfTime > 0) {
+    stats.push({
+      label: "Built-in Overhead",
+      value: formatTime(data.meta.builtinSelfTime),
+    });
+  }
 
   for (const s of stats) {
     const stat = document.createElement("span");
@@ -266,10 +272,18 @@ function renderHotspots(data) {
       tdFunc.textContent = h.functionName;
       tr.appendChild(tdFunc);
 
-      // Object
+      // Object (with source location if available)
       const tdObj = document.createElement("td");
-      tdObj.textContent =
-        h.objectType + " " + h.objectId + " (" + h.objectName + ")";
+      if (h.sourceLocation) {
+        tdObj.innerHTML =
+          escapeHtml(h.objectType) + " " + h.objectId +
+          '<br><span style="color:var(--text-secondary);font-size:0.85em">' +
+          escapeHtml(h.sourceLocation.filePath) + ":" + h.sourceLocation.lineStart +
+          "</span>";
+      } else {
+        tdObj.textContent =
+          h.objectType + " " + h.objectId + " (" + h.objectName + ")";
+      }
       tr.appendChild(tdObj);
 
       // App
@@ -277,15 +291,18 @@ function renderHotspots(data) {
       tdApp.textContent = h.appName;
       tr.appendChild(tdApp);
 
-      // Self Time with bar
+      // Self Time with bar + optional gap time
       const tdSelf = document.createElement("td");
+      const gapHtml = h.gapTime && h.gapTime > 0
+        ? ' <span style="color:var(--warning-color,#9F9700)">+' + escapeHtml(formatTime(h.gapTime)) + ' wait</span>'
+        : "";
       tdSelf.innerHTML =
         escapeHtml(formatTime(h.selfTime)) +
         " (" +
         escapeHtml(h.selfTimePercent.toFixed(1)) +
         '%)<div class="bar-track"><div class="bar-fill" style="width:' +
         Math.min(h.selfTimePercent, 100) +
-        '%"></div></div>';
+        '%"></div></div>' + gapHtml;
       tr.appendChild(tdSelf);
 
       // Total Time with bar
