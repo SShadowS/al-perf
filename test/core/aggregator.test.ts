@@ -58,6 +58,35 @@ describe("aggregateByMethod", () => {
       expect(methods[i - 1].selfTime).toBeGreaterThanOrEqual(methods[i].selfTime);
     }
   });
+
+  test("computes wallClockTime and gapTime for instrumentation profiles", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/instrumentation-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const onRun = methods.find(m => m.functionName === "OnRun")!;
+    // OnRun: nodeStartTime=63791355211203262, nodeEndTime=63791355211703262
+    // wallClockTime = 500000, totalTime = 850000 (500000 self + 350000 child)
+    // Since totalTime > wallClockTime here, gapTime should be 0
+    expect(onRun.wallClockTime).toBeDefined();
+    expect(onRun.wallClockTime).toBe(500000);
+    expect(onRun.gapTime).toBe(0);
+
+    const processLine = methods.find(m => m.functionName === "ProcessLine")!;
+    // ProcessLine: wallClockTime = 350000, totalTime = 350000 => gapTime = 0
+    expect(processLine.wallClockTime).toBe(350000);
+    expect(processLine.gapTime).toBe(0);
+  });
+
+  test("wallClockTime is undefined for sampling profiles", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const onRun = methods.find(m => m.functionName === "OnRun")!;
+    expect(onRun.wallClockTime).toBeUndefined();
+    expect(onRun.gapTime).toBeUndefined();
+  });
 });
 
 describe("aggregateByObject", () => {

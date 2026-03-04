@@ -80,6 +80,12 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
     entry.totalTime += node.totalTime;
     entry.hitCount += node.hitCount;
 
+    // Track wall-clock time for instrumentation profiles (nodes with startTime/endTime)
+    if (node.nodeStartTime !== undefined && node.nodeEndTime !== undefined) {
+      const nodeDuration = node.nodeEndTime - node.nodeStartTime;
+      entry.wallClockTime = (entry.wallClockTime ?? 0) + nodeDuration;
+    }
+
     // Collect calledBy from parent
     if (node.parent) {
       const ref = formatMethodRef(node.parent);
@@ -107,6 +113,13 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
       profile.activeSelfTime > 0
         ? (entry.totalTime / profile.activeSelfTime) * 100
         : 0;
+  }
+
+  // Compute gapTime for methods with wallClockTime
+  for (const entry of map.values()) {
+    if (entry.wallClockTime !== undefined) {
+      entry.gapTime = Math.max(0, entry.wallClockTime - entry.totalTime);
+    }
   }
 
   // Sort by selfTime descending

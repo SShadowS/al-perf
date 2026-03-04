@@ -33,4 +33,8 @@ export interface MethodBreakdown {
   hitCount: number;
   calledBy: string[];
   calls: string[];
+  // Wall clock time (instrumentation only): sum of (nodeEndTime - nodeStartTime) across instances
+  wallClockTime?: number;
+  // Gap = wallClockTime - totalTime (estimated I/O / SQL wait time). Clamped to >= 0.
+  gapTime?: number;
 }
