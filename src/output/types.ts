@@ -35,7 +35,29 @@ export interface AnalysisResult {
   patterns: DetectedPattern[];
   appBreakdown: AppBreakdown[];
   objectBreakdown: ObjectBreakdown[];
+  tableBreakdown?: TableBreakdown[];
   explanation?: string;
+}
+
+export interface TableBreakdown {
+  tableName: string;
+  /** Total self time across all operations on this table */
+  totalSelfTime: number;
+  totalSelfTimePercent: number;
+  /** Breakdown by operation type */
+  operationBreakdown: TableOperationBreakdown[];
+  /** Number of distinct procedures that access this table */
+  callSiteCount: number;
+  /** Whether SetLoadFields is used anywhere for this table */
+  hasSetLoadFields: boolean;
+  /** Whether filters (SetRange/SetFilter) are used */
+  hasFilters: boolean;
+}
+
+export interface TableOperationBreakdown {
+  operation: string; // "FindSet", "Modify", "CalcFields", etc.
+  selfTime: number;
+  hitCount: number;
 }
 
 export interface ComparisonResult {

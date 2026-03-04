@@ -3,6 +3,7 @@ import { processProfile, isIdleNode } from "./processor.js";
 import { aggregateByApp, aggregateByMethod, aggregateByObject } from "./aggregator.js";
 import { runDetectors } from "./patterns.js";
 import { annotateEstimatedSavings } from "./what-if.js";
+import { buildTableBreakdown } from "./table-view.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceDetectors } from "../source/source-patterns.js";
 import { matchAllHotspots } from "../source/locator.js";
@@ -220,6 +221,9 @@ export async function analyzeProfile(
   const idlePenalty = idleRatio > 0.9 ? 20 : idleRatio > 0.7 ? 10 : 0;
   const healthScore = Math.max(0, Math.min(100, 100 - patternPenalty - idlePenalty));
 
+  // Build table-centric breakdown
+  const tableBreakdown = buildTableBreakdown(processed, sourceIndex);
+
   const durationStr = formatTime(processed.activeSelfTime);
   const topMethodStr = topMethod ? `${topMethod.percent}% in ${topMethod.name}` : "no dominant method";
   const oneLiner = `${durationStr} profile, ${topMethodStr}`;
@@ -252,6 +256,7 @@ export async function analyzeProfile(
     patterns,
     appBreakdown: apps,
     objectBreakdown: objects,
+    tableBreakdown: tableBreakdown.length > 0 ? tableBreakdown : undefined,
   };
 }
 

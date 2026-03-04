@@ -1,0 +1,98 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": { "functionName": "OnRun", "scriptId": "CU_50000", "url": "", "lineNumber": 10, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [2, 5],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Sales Processor", "objectId": 50000 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 1,
+      "startTime": 63791355211000000,
+      "endTime": 63791355212000000,
+      "positionTicks": [{ "line": 10, "column": 0, "ticks": 1, "executionTime": 50000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 2,
+      "callFrame": { "functionName": "FindSet", "scriptId": "Table_36", "url": "", "lineNumber": 0, "columnNumber": 0 },
+      "hitCount": 5,
+      "children": [],
+      "applicationDefinition": { "objectType": "TableData", "objectName": "Sales Header", "objectId": 36 },
+      "declaringApplication": { "appName": "Base Application", "appPublisher": "Microsoft", "appVersion": "24.0.0.0" },
+      "frameIdentifier": 2,
+      "startTime": 63791355211100000,
+      "endTime": 63791355211300000,
+      "positionTicks": [{ "line": 0, "column": 0, "ticks": 5, "executionTime": 200000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 5,
+      "callFrame": { "functionName": "ProcessLines", "scriptId": "CU_50000", "url": "", "lineNumber": 30, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [3, 4, 6, 7],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Sales Processor", "objectId": 50000 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 5,
+      "startTime": 63791355211300000,
+      "endTime": 63791355211900000,
+      "positionTicks": [{ "line": 30, "column": 0, "ticks": 1, "executionTime": 30000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 3,
+      "callFrame": { "functionName": "Modify", "scriptId": "Table_37", "url": "", "lineNumber": 0, "columnNumber": 0 },
+      "hitCount": 10,
+      "children": [],
+      "applicationDefinition": { "objectType": "TableData", "objectName": "Sales Line", "objectId": 37 },
+      "declaringApplication": { "appName": "Base Application", "appPublisher": "Microsoft", "appVersion": "24.0.0.0" },
+      "frameIdentifier": 3,
+      "startTime": 63791355211300000,
+      "endTime": 63791355211600000,
+      "positionTicks": [{ "line": 0, "column": 0, "ticks": 10, "executionTime": 300000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 4,
+      "callFrame": { "functionName": "CalcFields", "scriptId": "Table_36", "url": "", "lineNumber": 0, "columnNumber": 0 },
+      "hitCount": 5,
+      "children": [],
+      "applicationDefinition": { "objectType": "TableData", "objectName": "Sales Header", "objectId": 36 },
+      "declaringApplication": { "appName": "Base Application", "appPublisher": "Microsoft", "appVersion": "24.0.0.0" },
+      "frameIdentifier": 4,
+      "startTime": 63791355211600000,
+      "endTime": 63791355211750000,
+      "positionTicks": [{ "line": 0, "column": 0, "ticks": 5, "executionTime": 150000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 6,
+      "callFrame": { "functionName": "FindSet", "scriptId": "Table_37", "url": "", "lineNumber": 0, "columnNumber": 0 },
+      "hitCount": 3,
+      "children": [],
+      "applicationDefinition": { "objectType": "TableData", "objectName": "Sales Line", "objectId": 37 },
+      "declaringApplication": { "appName": "Base Application", "appPublisher": "Microsoft", "appVersion": "24.0.0.0" },
+      "frameIdentifier": 6,
+      "startTime": 63791355211750000,
+      "endTime": 63791355211850000,
+      "positionTicks": [{ "line": 0, "column": 0, "ticks": 3, "executionTime": 100000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 7,
+      "callFrame": { "functionName": "Insert", "scriptId": "Table_37", "url": "", "lineNumber": 0, "columnNumber": 0 },
+      "hitCount": 2,
+      "children": [],
+      "applicationDefinition": { "objectType": "TableData", "objectName": "Sales Line", "objectId": 37 },
+      "declaringApplication": { "appName": "Base Application", "appPublisher": "Microsoft", "appVersion": "24.0.0.0" },
+      "frameIdentifier": 7,
+      "startTime": 63791355211850000,
+      "endTime": 63791355211900000,
+      "positionTicks": [{ "line": 0, "column": 0, "ticks": 2, "executionTime": 50000 }],
+      "isBuiltinCodeUnitCall": false
+    }
+  ],
+  "startTime": 63791355211000000,
+  "endTime": 63791355212000000,
+  "sampleExecutionTimes": [50000, 200000, 30000, 300000, 150000, 100000, 50000]
+}

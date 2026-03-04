@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import Table from "cli-table3";
-import type { AnalysisResult, ComparisonResult, MethodDelta } from "../../output/types.js";
+import type { AnalysisResult, ComparisonResult, MethodDelta, TableBreakdown } from "../../output/types.js";
 import type { MethodBreakdown, AppBreakdown } from "../../types/aggregated.js";
 import type { DetectedPattern } from "../../types/patterns.js";
 import { formatTime } from "../../core/analyzer.js";
@@ -134,7 +134,41 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
     lines.push("");
   }
 
-  // 6. AI Analysis (optional)
+  // 6. Table Breakdown
+  if (result.tableBreakdown && result.tableBreakdown.length > 0) {
+    lines.push(chalk.bold("Table Breakdown"));
+
+    const tableBreakdownTable = new Table({
+      head: [
+        chalk.gray("Table"),
+        chalk.gray("Self Time"),
+        chalk.gray("Top Operation"),
+        chalk.gray("Call Sites"),
+        chalk.gray("SetLoadFields"),
+        chalk.gray("Filtered"),
+      ],
+      style: { head: [], border: [] },
+    });
+
+    for (const t of result.tableBreakdown) {
+      const topOp = t.operationBreakdown.length > 0
+        ? `${t.operationBreakdown[0].operation} (${formatTime(t.operationBreakdown[0].selfTime)})`
+        : "-";
+      tableBreakdownTable.push([
+        t.tableName,
+        `${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)`,
+        topOp,
+        String(t.callSiteCount),
+        t.hasSetLoadFields ? chalk.green("Yes") : chalk.gray("No"),
+        t.hasFilters ? chalk.green("Yes") : chalk.gray("No"),
+      ]);
+    }
+
+    lines.push(tableBreakdownTable.toString());
+    lines.push("");
+  }
+
+  // 7. AI Analysis (optional)
   if (result.explanation) {
     lines.push(chalk.bold("AI Analysis"));
     lines.push(`  ${result.explanation.split("\n").join("\n  ")}`);
