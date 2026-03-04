@@ -235,5 +235,21 @@ export function formatComparisonTerminal(result: ComparisonResult): string {
     lines.push("");
   }
 
+  // 7. Pattern Deltas
+  if (result.patternDeltas && result.patternDeltas.length > 0) {
+    lines.push(chalk.bold("Pattern Changes"));
+    lines.push("");
+    for (const d of result.patternDeltas) {
+      const icon = d.status === "new" ? chalk.red("+ NEW")
+        : d.status === "resolved" ? chalk.green("- RESOLVED")
+        : chalk.yellow("~ CHANGED");
+      const severityStr = d.status === "changed"
+        ? `${d.beforeSeverity} \u2192 ${d.severity}`
+        : d.severity;
+      lines.push(`  ${icon}  [${severityStr}] ${d.title} (${formatTime(d.impact)})`);
+    }
+    lines.push("");
+  }
+
   return lines.join("\n");
 }

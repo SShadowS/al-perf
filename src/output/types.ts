@@ -47,6 +47,17 @@ export interface ComparisonResult {
   improvements: MethodDelta[];
   newMethods: MethodBreakdown[];
   removedMethods: MethodBreakdown[];
+  patternDeltas: PatternDelta[];
+}
+
+export interface PatternDelta {
+  id: string;
+  title: string;
+  status: "new" | "resolved" | "changed";
+  severity: "critical" | "warning" | "info";
+  /** Severity in the before profile (undefined if new) */
+  beforeSeverity?: "critical" | "warning" | "info";
+  impact: number;
 }
 
 export interface MethodDelta {

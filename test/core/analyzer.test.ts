@@ -77,6 +77,28 @@ describe("compareProfiles", () => {
     expect(result.summary.deltaTime).toBeDefined();
   });
 
+  test("includes pattern deltas comparing same profile", async () => {
+    const result = await compareProfiles(
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+    );
+    // Same profile → all patterns exist in both → no deltas
+    expect(result.patternDeltas).toBeDefined();
+    expect(result.patternDeltas).toHaveLength(0);
+  });
+
+  test("identifies new and resolved patterns between different profiles", async () => {
+    const result = await compareProfiles(
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/recursive-profile.alcpuprofile`,
+    );
+    expect(result.patternDeltas).toBeDefined();
+    // Different profiles have different patterns, so we should see new and/or resolved
+    const newPatterns = result.patternDeltas.filter(d => d.status === "new");
+    const resolvedPatterns = result.patternDeltas.filter(d => d.status === "resolved");
+    expect(newPatterns.length + resolvedPatterns.length).toBeGreaterThan(0);
+  });
+
   test("identifies methods that appear in one profile but not the other", async () => {
     const result = await compareProfiles(
       `${FIXTURES}/sampling-minimal.alcpuprofile`,

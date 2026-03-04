@@ -7,7 +7,8 @@ import { runSourceDetectors } from "../source/source-patterns.js";
 import { matchAllHotspots } from "../source/locator.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { SourceIndex } from "../types/source-index.js";
-import type { AnalysisResult, ComparisonResult, MethodDelta } from "../output/types.js";
+import type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta } from "../output/types.js";
+import type { DetectedPattern } from "../types/patterns.js";
 
 export interface AnalyzeOptions {
   top?: number;
@@ -277,6 +278,71 @@ export async function compareProfiles(
   const deltaTime = afterTotalTime - beforeTotalTime;
   const deltaPercent = beforeTotalTime !== 0 ? (deltaTime / beforeTotalTime) * 100 : 0;
 
+  // Run pattern detection on both profiles and diff
+  const beforePatterns = runDetectors(beforeProcessed);
+  const afterPatterns = runDetectors(afterProcessed);
+
+  const patternKey = (p: DetectedPattern) =>
+    `${p.id}:${p.involvedMethods.slice().sort().join(",")}`;
+
+  const beforePatternMap = new Map<string, DetectedPattern>();
+  for (const p of beforePatterns) {
+    beforePatternMap.set(patternKey(p), p);
+  }
+  const afterPatternMap = new Map<string, DetectedPattern>();
+  for (const p of afterPatterns) {
+    afterPatternMap.set(patternKey(p), p);
+  }
+
+  const patternDeltas: PatternDelta[] = [];
+
+  // New patterns (in after but not before)
+  for (const [key, p] of afterPatternMap) {
+    if (!beforePatternMap.has(key)) {
+      patternDeltas.push({
+        id: p.id,
+        title: p.title,
+        status: "new",
+        severity: p.severity,
+        impact: p.impact,
+      });
+    }
+  }
+
+  // Resolved patterns (in before but not after)
+  for (const [key, p] of beforePatternMap) {
+    if (!afterPatternMap.has(key)) {
+      patternDeltas.push({
+        id: p.id,
+        title: p.title,
+        status: "resolved",
+        severity: p.severity,
+        impact: p.impact,
+      });
+    }
+  }
+
+  // Changed severity (same key, different severity)
+  for (const [key, afterP] of afterPatternMap) {
+    const beforeP = beforePatternMap.get(key);
+    if (beforeP && beforeP.severity !== afterP.severity) {
+      patternDeltas.push({
+        id: afterP.id,
+        title: afterP.title,
+        status: "changed",
+        severity: afterP.severity,
+        beforeSeverity: beforeP.severity,
+        impact: afterP.impact,
+      });
+    }
+  }
+
+  // Sort: new critical first, then resolved
+  patternDeltas.sort((a, b) => {
+    const statusOrder = { new: 0, changed: 1, resolved: 2 };
+    return statusOrder[a.status] - statusOrder[b.status];
+  });
+
   const sign = deltaTime >= 0 ? "+" : "";
   const oneLiner = `${sign}${formatTime(deltaTime)} (${sign}${deltaPercent.toFixed(1)}%), ${formatTime(beforeTotalTime)} -> ${formatTime(afterTotalTime)}`;
 
@@ -299,5 +365,6 @@ export async function compareProfiles(
     improvements: limitedImprovements,
     newMethods,
     removedMethods,
+    patternDeltas,
   };
 }
