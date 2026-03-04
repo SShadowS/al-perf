@@ -8,11 +8,12 @@ import type {
   ProcedureInfo,
   TriggerInfo,
   TableFieldInfo,
+  TableKeyInfo,
   EventCatalog,
 } from "../types/source-index.js";
 import { buildSourceIndex } from "./indexer.js";
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 interface SerializedIndex {
   files: ALFileInfo[];
@@ -35,6 +36,7 @@ interface SerializedObjectInfo {
   procedures: ProcedureInfo[];
   triggers: TriggerInfo[];
   fields: TableFieldInfo[];
+  keys: TableKeyInfo[];
 }
 
 interface CacheEntry {

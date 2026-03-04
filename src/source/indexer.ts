@@ -15,6 +15,7 @@ import type {
   DangerousCallInfo,
   VariableInfo,
   TableFieldInfo,
+  TableKeyInfo,
   EventPublisherInfo,
   EventSubscriberInfo,
   EventCatalog,
@@ -613,6 +614,56 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 }
 
 /**
+ * Extract key declarations from a table declaration node.
+ */
+function extractTableKeys(declNode: SyntaxNode): TableKeyInfo[] {
+  const keys: TableKeyInfo[] = [];
+
+  function walk(node: SyntaxNode) {
+    if (node.type === "key_declaration") {
+      const nameNode = node.namedChildren.find(c => c.type === "name");
+      const keyFieldList = node.namedChildren.find(c => c.type === "key_field_list");
+      const clusteredProp = node.namedChildren.find(c => c.type === "clustered_property");
+
+      const name = nameNode ? nameNode.text : "";
+      const fields: string[] = [];
+      if (keyFieldList) {
+        for (const child of keyFieldList.namedChildren) {
+          if (child.type === "quoted_identifier") {
+            fields.push(stripQuotes(child.text));
+          } else if (child.type === "identifier") {
+            fields.push(child.text);
+          }
+        }
+      }
+
+      let clustered = false;
+      if (clusteredProp) {
+        const boolNode = clusteredProp.namedChildren.find(c => c.type === "boolean");
+        clustered = boolNode?.text.toLowerCase() === "true";
+      }
+
+      if (name) {
+        keys.push({
+          name,
+          fields,
+          clustered,
+          line: node.startPosition.row + 1,
+        });
+      }
+      return;
+    }
+
+    for (const child of node.namedChildren) {
+      walk(child);
+    }
+  }
+
+  walk(declNode);
+  return keys;
+}
+
+/**
  * Parse a single AL file and return its ObjectInfo.
  */
 export async function indexALFile(
@@ -719,6 +770,11 @@ export async function indexALFile(
     ? extractTableFields(declNode)
     : [];
 
+  // Extract table keys (only for table/tableextension declarations)
+  const keys = (objectType === "Table" || objectType === "TableExtension")
+    ? extractTableKeys(declNode)
+    : [];
+
   return {
     objectType,
     objectName,
@@ -727,6 +783,7 @@ export async function indexALFile(
     procedures,
     triggers,
     fields,
+    keys,
   };
 }
 

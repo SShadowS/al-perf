@@ -89,6 +89,26 @@ test("extracts CalcFormula fields from table declarations", async () => {
   expect(noField!.calcFormulaType).toBeUndefined();
 });
 
+test("extracts table keys from table declaration", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "Table50400.al"), fixturesDir);
+  expect(result).toBeDefined();
+  expect(result!.keys).toBeDefined();
+  expect(result!.keys).toHaveLength(3);
+
+  const pk = result!.keys.find(k => k.name === "PK")!;
+  expect(pk).toBeDefined();
+  expect(pk.fields).toEqual(["No."]);
+  expect(pk.clustered).toBe(true);
+
+  const sk = result!.keys.find(k => k.name === "CustomerDate")!;
+  expect(sk).toBeDefined();
+  expect(sk.fields).toEqual(["Customer No.", "Posting Date"]);
+  expect(sk.clustered).toBe(false);
+
+  const amountIdx = result!.keys.find(k => k.name === "AmountIdx")!;
+  expect(amountIdx.fields).toEqual(["Amount"]);
+});
+
 test("builds event catalog from source attributes", async () => {
   const index = await buildSourceIndex(fixturesDir);
   expect(index.eventCatalog).toBeDefined();
@@ -121,8 +141,8 @@ test("builds event catalog from source attributes", async () => {
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);
-    expect(index.files.length).toBe(8);
-    expect(index.objects.size).toBe(8);
+    expect(index.files.length).toBe(9);
+    expect(index.objects.size).toBe(9);
 
     const procList = index.procedures.get("processrecords");
     expect(procList).toBeDefined();

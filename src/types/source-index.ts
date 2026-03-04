@@ -66,6 +66,7 @@ export interface ObjectInfo {
   procedures: ProcedureInfo[];
   triggers: TriggerInfo[];
   fields: TableFieldInfo[];
+  keys: TableKeyInfo[];
 }
 
 export interface TableFieldInfo {
@@ -74,6 +75,13 @@ export interface TableFieldInfo {
   dataType: string;
   calcFormulaType?: "Sum" | "Lookup" | "Count" | "Average" | "Min" | "Max" | "Exist";
   calcFormulaTable?: string;
+  line: number;
+}
+
+export interface TableKeyInfo {
+  name: string;
+  fields: string[];
+  clustered: boolean;
   line: number;
 }
 
