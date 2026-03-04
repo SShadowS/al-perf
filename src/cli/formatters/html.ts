@@ -1,3 +1,4 @@
+import { marked } from "marked";
 import type { AnalysisResult } from "../../output/types.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 import { formatTime } from "../../core/analyzer.js";
@@ -5,7 +6,8 @@ import { formatTime } from "../../core/analyzer.js";
 /**
  * Escape HTML special characters to prevent XSS.
  */
-function escapeHtml(str: string): string {
+function escapeHtml(str: string | undefined | null): string {
+  if (!str) return "";
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -29,6 +31,7 @@ function severityColor(severity: "critical" | "warning" | "info"): string {
 
 /**
  * Format a single analysis result as a self-contained BC-themed HTML page.
+ * Layout: AI Analysis → Profile Details → Hotspots → Patterns → App Breakdown.
  */
 export function formatAnalysisHtml(result: AnalysisResult): string {
   const pc = result.summary.patternCount;
@@ -78,11 +81,12 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     })
     .join("\n");
 
-  const explanationSection = result.explanation
-    ? `<div class="section">
-        <h2>AI Analysis</h2>
-        <div class="explanation">${escapeHtml(result.explanation)}</div>
-      </div>`
+  const explanationHtml = result.explanation
+    ? marked.parse(result.explanation)
+    : "";
+
+  const explanationSection = explanationHtml
+    ? `<div class="section explanation">${explanationHtml}</div>`
     : "";
 
   const source = result.meta.sourceAvailable ? "source available" : "no source";
@@ -153,15 +157,54 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     .suggestion { color: #00B7C3; margin-top: 4px; font-size: 0.9em; }
     .bar { height: 14px; background: #00B7C3; border-radius: 2px; min-width: 2px; }
     .meta-table td:first-child { font-weight: 600; width: 180px; }
-    .explanation { white-space: pre-wrap; }
+    .explanation h2, .explanation h3 { color: #212121; border-bottom: 1px solid #E0E0E0; }
+    .explanation h2 { font-size: 1.1em; margin: 20px 0 8px; }
+    .explanation h3 { font-size: 1em; margin: 16px 0 6px; }
+    .explanation p { margin: 8px 0; }
+    .explanation ul, .explanation ol { margin: 8px 0 8px 24px; }
+    .explanation li { margin: 4px 0; }
+    .explanation blockquote {
+      border-left: 3px solid #00B7C3;
+      padding: 8px 16px;
+      margin: 12px 0;
+      background: #F5FAFA;
+      color: #505C6D;
+    }
+    .explanation code {
+      background: #F5F5F5;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    .explanation pre {
+      background: #F5F5F5;
+      padding: 12px 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+    .explanation pre code { background: none; padding: 0; }
+    .explanation table {
+      border: 1px solid #E0E0E0;
+      margin: 12px 0;
+    }
+    .explanation table th { background: #F5F5F5; }
+    .explanation hr { border: none; border-top: 1px solid #E0E0E0; margin: 16px 0; }
+    .explanation strong { color: #212121; }
   </style>
 </head>
 <body>
-  <h1>AL Profile Analysis</h1>
+  <p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
+  <div class="badges">
+    <span class="badge" style="background:#EB6965">${pc.critical} Critical</span>
+    <span class="badge" style="background:#9F9700">${pc.warning} Warning</span>
+    <span class="badge" style="background:#505C6D">${pc.info} Info</span>
+  </div>
+
+  ${explanationSection}
 
   <div class="section">
-    <h2>Summary</h2>
-    <p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
+    <h2>Profile Details</h2>
     <table class="meta-table">
       <tr><td>Type</td><td>${escapeHtml(result.meta.profileType)}</td></tr>
       <tr><td>Nodes</td><td>${result.meta.totalNodes}</td></tr>
@@ -169,11 +212,6 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
       <tr><td>Source</td><td>${source}</td></tr>
       ${samplingRow}
     </table>
-    <div class="badges">
-      <span class="badge" style="background:#EB6965">${pc.critical} Critical</span>
-      <span class="badge" style="background:#9F9700">${pc.warning} Warning</span>
-      <span class="badge" style="background:#505C6D">${pc.info} Info</span>
-    </div>
   </div>
 
   ${result.hotspots.length > 0 ? `<div class="section">
@@ -204,8 +242,6 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
       </tbody>
     </table>
   </div>` : ""}
-
-  ${explanationSection}
 </body>
 </html>`;
 }

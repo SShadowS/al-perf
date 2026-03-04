@@ -199,7 +199,6 @@ export const server = Bun.serve({
     // OPTIONS — used by reverse proxy for upstate checks
     // Must be handled before URL parsing since HAProxy sends bare paths
     if (req.method === "OPTIONS") {
-      console.log(`${new Date().toISOString()} ${ip} OPTIONS - 200 0ms`);
       return new Response(null, { status: 200 });
     }
 
@@ -228,3 +227,4 @@ export const server = Bun.serve({
 });
 
 console.log(`AL Profile Analyzer web server running at http://localhost:${server.port}`);
+console.log(`AI explain: ${process.env.ANTHROPIC_API_KEY ? "enabled" : "disabled (set ANTHROPIC_API_KEY to enable)"}`);
