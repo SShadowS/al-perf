@@ -3,22 +3,23 @@
 > Brainstorming inventory for al-perf — cataloging every new metric, pattern, and analysis capability we could build, prioritized by effort vs impact.
 
 **Date:** 2026-03-04
-**Status:** Roadmap (not committed to implementation)
+**Updated:** 2026-03-04
+**Status:** Tier 1 complete. Roadmap for remaining items.
 
 ---
 
 ## Current State Summary
 
-**Core metrics:** Profile-level timing (totalDuration, activeSelfTime, idleSelfTime, maxDepth, nodeCount), per-node timing (selfTime, totalTime, hitCount, depth, percentages), aggregations by method/object/app, and two-profile comparison.
+**Core metrics:** Profile-level timing (totalDuration, activeSelfTime, idleSelfTime, maxDepth, nodeCount), per-node timing (selfTime, totalTime, hitCount, depth, percentages), aggregations by method/object/app, two-profile comparison, wall clock vs CPU gap analysis, cost per hit, method efficiency score, call amplification factor, built-in vs custom code classification, line-level hotspot map, and hotspot-to-source deep linking.
 
-**13 pattern detectors:**
-- Profile-only (5): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot
+**14 pattern detectors:**
+- Profile-only (6): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, **recursive-call**
 - Source-correlated (4): calcfields-in-loop, modify-in-loop, record-op-in-loop, missing-setloadfields
 - Source-only (4): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops
 
 **Source analysis (tree-sitter-al):** Extracts procedures, triggers, loops (4 types), record operations (19 types), nesting depth, event subscriber attributes.
 
-**What's NOT analyzed yet:** positionTicks line-level data, node startTime/endTime, timeDeltas variance, isIncompleteMeasurement, isBuiltinCodeUnitCall, appVersion, frameIdentifier, variable types, table keys, CalcField formulas, event publisher attributes, commit/error patterns, table relations.
+**What's NOT analyzed yet:** timeDeltas variance, isIncompleteMeasurement, appVersion, frameIdentifier, variable types, table keys, CalcField formulas, event publisher attributes, commit/error patterns, table relations.
 
 ---
 
@@ -26,7 +27,7 @@
 
 Fields already parsed and stored but never analyzed or surfaced.
 
-### 1.1 Line-Level Hotspot Map
+### 1.1 Line-Level Hotspot Map :white_check_mark: DONE
 
 For instrumentation profiles, break down each method's `positionTicks[]` to produce line-by-line time attribution. Currently we sum all positionTicks into a single selfTime per node. Each tick already has `line`, `column`, `executionTime`, and `ticks`. Surfacing these individually pinpoints the exact expensive line within a method.
 
@@ -45,7 +46,7 @@ Flag nodes where `isIncompleteMeasurement === true`. This field is defined in `R
 - **Impact:** Medium (humans) / High (agents)
 - **Dependencies:** None.
 
-### 1.3 Built-in vs Custom Code Separation
+### 1.3 Built-in vs Custom Code Separation :white_check_mark: DONE
 
 Use `isBuiltinCodeUnitCall` (defined but never checked) to separate system/platform overhead from custom application code. Enables a "your code only" view and helps developers focus on actionable code rather than BC infrastructure.
 
@@ -63,7 +64,7 @@ Include `appVersion` and `appPublisher` from `RawDeclaringApplication` in the `A
 - **Impact:** Medium (humans) / Medium (agents)
 - **Dependencies:** None.
 
-### 1.5 Wall Clock vs CPU Gap Analysis
+### 1.5 Wall Clock vs CPU Gap Analysis :white_check_mark: DONE
 
 For instrumentation profiles, each node has `startTime` and `endTime`. The wall-clock duration `(endTime - startTime)` minus the computed `totalTime` reveals "unaccounted time" — time spent in I/O waits, SQL roundtrips, or other non-AL execution. **This is one of the most diagnostic metrics for identifying SQL bottlenecks.**
 
@@ -106,7 +107,7 @@ Walk the call tree to find the single longest root-to-leaf path by totalTime. An
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** None.
 
-### 2.2 Call Amplification Factor
+### 2.2 Call Amplification Factor :white_check_mark: DONE
 
 For each parent-child edge, compute `child.hitCount / parent.hitCount`. High factors indicate inner loops or fan-out. Related to detectHighHitCount but surfaced as a continuous metric on every edge, not a binary pattern.
 
@@ -115,7 +116,7 @@ For each parent-child edge, compute `child.hitCount / parent.hitCount`. High fac
 - **Impact:** Medium (humans) / High (agents)
 - **Dependencies:** None.
 
-### 2.3 Method Efficiency Score
+### 2.3 Method Efficiency Score :white_check_mark: DONE
 
 Compute `selfTime / totalTime` per method. Ratio near 1.0 = compute-bound (optimize this method). Near 0.0 = orchestrator (optimize its callees). Prevents recommending optimization of a method that just delegates.
 
@@ -142,7 +143,7 @@ In instrumentation profiles, identify individual calls whose duration is signifi
 - **Impact:** High (humans) / Medium (agents)
 - **Dependencies:** Shares infrastructure with 1.5.
 
-### 2.6 Recursive Call Detection
+### 2.6 Recursive Call Detection :white_check_mark: DONE
 
 Walk the call tree to detect direct or indirect recursion (method appearing as its own ancestor). Report recursion depth and total time. More specific and actionable than the existing deep-call-stack pattern which doesn't explain *why* it's deep.
 
@@ -169,7 +170,7 @@ Compute the Gini coefficient of selfTime across all non-idle methods. Near 1.0 =
 - **Impact:** Medium (humans) / High (agents)
 - **Dependencies:** None.
 
-### 2.9 Cost Per Hit (Average Time Per Invocation)
+### 2.9 Cost Per Hit (Average Time Per Invocation) :white_check_mark: DONE
 
 Compute `selfTime / hitCount`. Normalizes away call frequency to reveal intrinsic cost. A method called 10,000 times at 100ms total (10us/call) is different from one called once at 100ms.
 
@@ -343,7 +344,7 @@ Given a detected pattern, estimate time savings if fixed. "CalcFields in loop, 5
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** None.
 
-### 4.2 Hotspot-to-Source Deep Link
+### 4.2 Hotspot-to-Source Deep Link :white_check_mark: DONE
 
 For each hotspot method, resolve its source file location via `matchToSource` and include file path, line range, and optionally code snippet. Currently source correlation only happens for pattern detection, not for the hotspot list itself.
 
@@ -540,20 +541,20 @@ Mark detected patterns directly on the flamegraph: color critical path nodes dif
 
 ## Priority Tiers
 
-### Tier 1: Immediate Wins (S effort, High impact)
+### Tier 1: Immediate Wins (S effort, High impact) :white_check_mark: ALL DONE
 
-Items that can be built in hours and deliver significant value:
+All 8 items implemented and merged to master.
 
-| # | Item | Why It's Tier 1 |
-|---|------|-----------------|
-| 1.5 | Wall Clock vs CPU Gap Analysis | Reveals hidden SQL/I/O time. Single most diagnostic new metric. |
-| 1.3 | Built-in vs Custom Separation | Focus on actionable code. Trivial boolean filter. |
-| 1.1 | Line-Level Hotspot Map | Pinpoints exact expensive lines. Data already parsed. |
-| 2.9 | Cost Per Hit | Simple division, changes how you interpret hotspots. |
-| 2.6 | Recursive Call Detection | Catches specific, actionable pattern. Simple ancestor check. |
-| 2.3 | Method Efficiency Score | Simple ratio, prevents wasted optimization effort. |
-| 4.2 | Hotspot-to-Source Deep Link | matchToSource already exists, just call it for hotspots. |
-| 2.2 | Call Amplification Factor | Quantifies loop counts. Simple arithmetic. |
+| # | Item | Status |
+|---|------|--------|
+| 1.5 | Wall Clock vs CPU Gap Analysis | :white_check_mark: Done |
+| 1.3 | Built-in vs Custom Separation | :white_check_mark: Done |
+| 1.1 | Line-Level Hotspot Map | :white_check_mark: Done |
+| 2.9 | Cost Per Hit | :white_check_mark: Done |
+| 2.6 | Recursive Call Detection | :white_check_mark: Done |
+| 2.3 | Method Efficiency Score | :white_check_mark: Done |
+| 4.2 | Hotspot-to-Source Deep Link | :white_check_mark: Done |
+| 2.2 | Call Amplification Factor | :white_check_mark: Done |
 
 ### Tier 2: High-Value Medium Effort (M effort, High impact)
 
@@ -664,12 +665,12 @@ F.1 Folded Stack Export
 
 | File | New Capabilities It Would Gain |
 |------|-------------------------------|
-| `src/core/processor.ts` | 1.5 gap analysis, 1.2 incomplete flags, 1.3 built-in classification, 2.6 recursion detection |
-| `src/core/aggregator.ts` | 1.4 app version, 2.3 efficiency score, 2.9 cost per hit, 4.7 object type view |
-| `src/core/patterns.ts` | 2.6 recursion detector, 2.7 event chains, 2.2 amplification factor |
+| `src/core/processor.ts` | ~~1.3 built-in classification~~ :white_check_mark:, 1.2 incomplete flags |
+| `src/core/aggregator.ts` | ~~1.1 line hotspots, 1.5 gap analysis, 2.2 amplification, 2.3 efficiency, 2.9 cost per hit~~ :white_check_mark:, 1.4 app version, 4.7 object type view |
+| `src/core/patterns.ts` | ~~2.6 recursion detector~~ :white_check_mark:, 2.7 event chains |
+| `src/core/analyzer.ts` | ~~1.3 builtinSelfTime, 4.2 source deep link~~ :white_check_mark:, 2.1 critical path, 2.10 subtree drill-down, 5.5 pattern comparison |
 | `src/source/indexer.ts` | 3.3 variable types, 3.4 signatures, 3.6 CalcField formulas, 3.7 keys, 3.9 commit detection, 3.12 events, 3.13 temporary |
 | `src/source/source-patterns.ts` | Enhanced patterns with table names, temporary exclusion, CalcField severity |
 | `src/source/source-only-patterns.ts` | 3.9 commit-in-loop, 3.14 with statement |
-| `src/output/types.ts` | New fields on AnalysisResult, ComparisonResult, MethodBreakdown |
-| `src/core/analyzer.ts` | 2.1 critical path, 2.10 subtree drill-down, 5.5 pattern comparison |
+| `src/output/types.ts` | ~~builtinSelfTime~~ :white_check_mark:, new fields for future capabilities |
 | `src/mcp/tools/` | F.2 flamegraph tool, new MCP endpoints for drill-down queries |
