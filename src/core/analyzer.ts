@@ -2,6 +2,7 @@ import { parseProfile } from "./parser.js";
 import { processProfile, isIdleNode } from "./processor.js";
 import { aggregateByApp, aggregateByMethod, aggregateByObject } from "./aggregator.js";
 import { runDetectors } from "./patterns.js";
+import { annotateEstimatedSavings } from "./what-if.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceDetectors } from "../source/source-patterns.js";
 import { matchAllHotspots } from "../source/locator.js";
@@ -147,6 +148,9 @@ export async function analyzeProfile(
     patterns.push(...sourcePatterns);
     patterns.sort((a, b) => b.impact - a.impact);
   }
+
+  // Annotate patterns with estimated savings
+  annotateEstimatedSavings(patterns);
 
   // Extract critical path
   const criticalPath = extractCriticalPath(processed);

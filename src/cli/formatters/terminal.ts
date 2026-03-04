@@ -115,6 +115,9 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
       lines.push(`  ${formatSeverity(p.severity)}  ${chalk.bold(p.title)}`);
       lines.push(`    ${p.description}`);
       lines.push(`    Impact: ${formatTime(p.impact)}`);
+      if (p.estimatedSavings && p.estimatedSavings > 0) {
+        lines.push(`    Estimated savings: ${chalk.green(formatTime(p.estimatedSavings))}`);
+      }
       lines.push("");
     }
   }

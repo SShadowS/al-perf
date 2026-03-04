@@ -9,6 +9,10 @@ export interface DetectedPattern {
   involvedMethods: string[];      // "FunctionName (ObjectType ObjectId)"
   evidence: string;
   suggestion?: string;
+  /** Estimated time savings if this pattern is fixed (microseconds) */
+  estimatedSavings?: number;
+  /** Human-readable explanation of the savings estimate */
+  savingsExplanation?: string;
 }
 
 export type PatternDetector = (

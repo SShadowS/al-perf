@@ -107,6 +107,9 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
       lines.push(p.description);
       lines.push("");
       lines.push(`**Impact:** ${formatTime(p.impact)}`);
+      if (p.estimatedSavings && p.estimatedSavings > 0) {
+        lines.push(`**Estimated savings:** ${formatTime(p.estimatedSavings)}`);
+      }
       if (p.suggestion) {
         lines.push("");
         lines.push(`**Suggestion:** ${p.suggestion}`);
