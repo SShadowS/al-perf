@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
-import { runDetectors, detectSingleMethodDominance, detectHighHitCount, detectDeepCallStack, detectRecursion } from "../../src/core/patterns.js";
+import { runDetectors, detectSingleMethodDominance, detectHighHitCount, detectDeepCallStack, detectRecursion, detectEventChains } from "../../src/core/patterns.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -61,6 +61,25 @@ describe("detectRecursion", () => {
     const patterns = detectRecursion(processed);
 
     expect(patterns).toHaveLength(0);
+  });
+});
+
+describe("detectEventChains", () => {
+  test("does not flag profiles without event chains", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const patterns = detectEventChains(processed);
+    expect(patterns).toHaveLength(0);
+  });
+
+  test("detects event chains in profile with nested event subscribers", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/event-chain.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const patterns = detectEventChains(processed);
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns[0].id).toBe("event-chain");
+    expect(patterns[0].severity).toBe("warning");
+    expect(patterns[0].involvedMethods.length).toBeGreaterThanOrEqual(2);
   });
 });
 

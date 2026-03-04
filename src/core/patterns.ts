@@ -229,6 +229,65 @@ export const detectRecursion: PatternDetector = (
 };
 
 /**
+ * Detect expensive event chains: when event subscriber methods (OnBefore*, OnAfter*, HandleOn*)
+ * form chains where a subscriber triggers another subscriber.
+ */
+export const detectEventChains: PatternDetector = (
+  profile: ProcessedProfile,
+): DetectedPattern[] => {
+  const patterns: DetectedPattern[] = [];
+  const eventPattern = /^(OnBefore|OnAfter|HandleOn)/i;
+
+  // Find all event subscriber nodes
+  const eventNodes = profile.allNodes.filter(
+    n => !isIdleNode(n) && eventPattern.test(n.callFrame.functionName)
+  );
+
+  if (eventNodes.length < 2) return patterns;
+
+  // Group by root event subscriber: find nodes where an event subscriber calls another
+  const chains = new Map<string, { root: ProcessedNode; chain: ProcessedNode[]; totalTime: number }>();
+
+  for (const node of eventNodes) {
+    // Walk up to find if any ancestor is also an event subscriber
+    let ancestor = node.parent;
+    while (ancestor) {
+      if (!isIdleNode(ancestor) && eventPattern.test(ancestor.callFrame.functionName)) {
+        const rootKey = `${ancestor.callFrame.functionName}_${ancestor.applicationDefinition.objectId}_${ancestor.id}`;
+        let chain = chains.get(rootKey);
+        if (!chain) {
+          chain = { root: ancestor, chain: [ancestor], totalTime: ancestor.totalTime };
+          chains.set(rootKey, chain);
+        }
+        if (!chain.chain.includes(node)) {
+          chain.chain.push(node);
+        }
+        break;
+      }
+      ancestor = ancestor.parent;
+    }
+  }
+
+  // Report chains with 2+ event subscribers
+  for (const [_, chain] of chains) {
+    if (chain.chain.length < 2) continue;
+    const methods = chain.chain.map(n => formatMethodRef(n));
+    patterns.push({
+      id: "event-chain",
+      severity: "warning",
+      title: `Event chain from ${chain.root.callFrame.functionName} (${chain.chain.length} subscribers)`,
+      description: `Event subscriber ${formatMethodRef(chain.root)} triggers a chain of ${chain.chain.length} nested event subscribers, compounding execution cost.`,
+      impact: chain.totalTime,
+      involvedMethods: methods,
+      evidence: `${chain.chain.length} nested event subscriber calls`,
+      suggestion: "Review whether all subscribers in this chain are necessary. Consider consolidating event handlers or reducing the chain depth.",
+    });
+  }
+
+  return patterns;
+};
+
+/**
  * All built-in pattern detectors.
  */
 const allDetectors: PatternDetector[] = [
@@ -238,6 +297,7 @@ const allDetectors: PatternDetector[] = [
   detectRepeatedSiblings,
   detectEventSubscriberHotspot,
   detectRecursion,
+  detectEventChains,
 ];
 
 /**

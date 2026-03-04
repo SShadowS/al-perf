@@ -1,0 +1,45 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": { "functionName": "OnRun", "scriptId": "CU_50000", "url": "", "lineNumber": 10, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [2],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Sales Processor", "objectId": 50000 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 1
+    },
+    {
+      "id": 2,
+      "callFrame": { "functionName": "OnBeforePostSalesDoc", "scriptId": "CU_50100", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 5,
+      "children": [3],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Sales Extensions", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2
+    },
+    {
+      "id": 3,
+      "callFrame": { "functionName": "OnAfterValidateSalesLine", "scriptId": "CU_50200", "url": "", "lineNumber": 30, "columnNumber": 0 },
+      "hitCount": 50,
+      "children": [4],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Sales Line Validator", "objectId": 50200 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 3
+    },
+    {
+      "id": 4,
+      "callFrame": { "functionName": "HandleOnBeforeModifyItem", "scriptId": "CU_50300", "url": "", "lineNumber": 40, "columnNumber": 0 },
+      "hitCount": 200,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Item Handler", "objectId": 50300 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 4
+    }
+  ],
+  "startTime": 63793000000000000,
+  "endTime":   63793000011100000,
+  "samples": [4, 4, 4, 4, 4],
+  "timeDeltas": [0, 100000, 100000, 100000, 100000],
+  "kind": 1
+}
