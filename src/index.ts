@@ -41,6 +41,7 @@ export type {
   ProcedureInfo,
   TriggerInfo,
   ProcedureFeatures,
+  FieldAccessInfo,
   LoopInfo,
   RecordOpInfo,
   RecordOpType,

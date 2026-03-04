@@ -114,7 +114,17 @@ export interface ProcedureFeatures {
   recordOpsInLoops: RecordOpInfo[];
   dangerousCallsInLoops: DangerousCallInfo[];
   variables: VariableInfo[];
+  fieldAccesses: FieldAccessInfo[];
   nestingDepth: number;
+}
+
+export interface FieldAccessInfo {
+  /** The record variable name (e.g., "SalesLine") */
+  recordVariable: string;
+  /** The field name (e.g., "Amount", "Document No.") */
+  fieldName: string;
+  line: number;
+  column: number;
 }
 
 export interface VariableInfo {
@@ -173,6 +183,8 @@ export interface RecordOpInfo {
   recordVariable?: string;
   /** First argument string for SetRange/SetFilter (the field name being filtered) */
   fieldArgument?: string;
+  /** All field arguments for SetLoadFields calls */
+  allFieldArguments?: string[];
 }
 
 export interface LineRange {

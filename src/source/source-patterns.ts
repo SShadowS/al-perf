@@ -237,6 +237,74 @@ export function detectMissingSetLoadFields(
 }
 
 /**
+ * Detect SetLoadFields that doesn't cover all fields later accessed.
+ * Severity: critical (will cause runtime errors or wrong values).
+ */
+export function detectIncompleteSetLoadFields(
+  methods: MethodBreakdown[],
+  index: SourceIndex,
+): DetectedPattern[] {
+  const patterns: DetectedPattern[] = [];
+
+  for (const method of methods) {
+    const match = matchToSource(
+      method.functionName,
+      method.objectType,
+      method.objectId,
+      index,
+    );
+    if (!match) continue;
+
+    const allOps = match.features.recordOps;
+    const fieldAccesses = match.features.fieldAccesses;
+
+    // Group SetLoadFields calls by record variable
+    const loadFieldsByVar = new Map<string, Set<string>>();
+    for (const op of allOps) {
+      if (op.type === "SetLoadFields" && op.recordVariable) {
+        const varLower = op.recordVariable.toLowerCase();
+        if (!loadFieldsByVar.has(varLower)) {
+          loadFieldsByVar.set(varLower, new Set());
+        }
+        if (op.allFieldArguments) {
+          for (const f of op.allFieldArguments) {
+            loadFieldsByVar.get(varLower)!.add(f.toLowerCase());
+          }
+        } else if (op.fieldArgument) {
+          loadFieldsByVar.get(varLower)!.add(op.fieldArgument.toLowerCase());
+        }
+      }
+    }
+
+    // For each variable that has SetLoadFields, check if all accessed fields are covered
+    for (const [varLower, loadedFields] of loadFieldsByVar) {
+      const accessedFields = fieldAccesses
+        .filter(a => a.recordVariable.toLowerCase() === varLower)
+        .map(a => a.fieldName.toLowerCase());
+
+      const uniqueAccessed = [...new Set(accessedFields)];
+      const missingFields = uniqueAccessed.filter(f => !loadedFields.has(f));
+
+      if (missingFields.length > 0) {
+        const recVar = fieldAccesses.find(a => a.recordVariable.toLowerCase() === varLower)?.recordVariable ?? varLower;
+        patterns.push({
+          id: "incomplete-setloadfields",
+          severity: "critical",
+          title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
+          description: `SetLoadFields() on ${recVar} loads [${[...loadedFields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`,
+          impact: method.selfTime,
+          involvedMethods: [methodLabel(method)],
+          evidence: `SetLoadFields loads ${loadedFields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
+          suggestion: `Add the missing fields to SetLoadFields: ${missingFields.map(f => `"${f}"`).join(", ")}`,
+        });
+      }
+    }
+  }
+
+  return patterns;
+}
+
+/**
  * Run all source-correlated pattern detectors and return results sorted by impact descending.
  */
 export function runSourceDetectors(
@@ -248,6 +316,7 @@ export function runSourceDetectors(
     ...detectModifyInLoop(methods, index),
     ...detectRecordOpInLoop(methods, index),
     ...detectMissingSetLoadFields(methods, index),
+    ...detectIncompleteSetLoadFields(methods, index),
   ];
 
   allPatterns.sort((a, b) => b.impact - a.impact);

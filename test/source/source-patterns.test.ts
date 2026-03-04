@@ -4,6 +4,7 @@ import {
   detectModifyInLoop,
   detectRecordOpInLoop,
   detectMissingSetLoadFields,
+  detectIncompleteSetLoadFields,
   runSourceDetectors,
 } from "../../src/source/source-patterns.js";
 import { buildSourceIndex } from "../../src/source/indexer.js";
@@ -137,6 +138,37 @@ describe("CalcField severity graduation", () => {
     const patterns = detectCalcFieldsInLoop([method], sourceIndex);
     expect(patterns.length).toBeGreaterThan(0);
     expect(patterns[0].severity).toBe("warning");
+  });
+});
+
+describe("detectIncompleteSetLoadFields", () => {
+  it("should flag SetLoadFields missing accessed fields", () => {
+    const method = makeMethod({ functionName: "BadSetLoadFields", objectType: "Codeunit", objectId: 50700 });
+    const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns[0].id).toBe("incomplete-setloadfields");
+    expect(patterns[0].severity).toBe("critical");
+    // The description should mention the missing field
+    expect(patterns[0].description.toLowerCase()).toContain("amount");
+  });
+
+  it("should not flag complete SetLoadFields", () => {
+    const method = makeMethod({ functionName: "GoodSetLoadFields", objectType: "Codeunit", objectId: 50700 });
+    const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+    expect(patterns).toHaveLength(0);
+  });
+
+  it("should not flag procedures without SetLoadFields", () => {
+    const method = makeMethod({ functionName: "NoSetLoadFields", objectType: "Codeunit", objectId: 50700 });
+    const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+    expect(patterns).toHaveLength(0);
+  });
+
+  it("should include suggestion with missing field names", () => {
+    const method = makeMethod({ functionName: "BadSetLoadFields", objectType: "Codeunit", objectId: 50700 });
+    const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns[0].suggestion.toLowerCase()).toContain("amount");
   });
 });
 

@@ -138,11 +138,67 @@ test("builds event catalog from source attributes", async () => {
   expect(businessPub!.eventType).toBe("BusinessEvent");
 });
 
+test("extracts field accesses from procedures", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "CodeUnit50700.al"), fixturesDir);
+  expect(result).toBeDefined();
+
+  const goodProc = result!.procedures.find(p => p.name === "GoodSetLoadFields")!;
+  expect(goodProc).toBeDefined();
+  expect(goodProc.features.fieldAccesses.length).toBeGreaterThan(0);
+  const fieldNames = goodProc.features.fieldAccesses.map(a => a.fieldName);
+  expect(fieldNames).toContain("Document No.");
+  expect(fieldNames).toContain("Amount");
+
+  const badProc = result!.procedures.find(p => p.name === "BadSetLoadFields")!;
+  expect(badProc).toBeDefined();
+  const badFieldNames = badProc.features.fieldAccesses.map(a => a.fieldName);
+  expect(badFieldNames).toContain("Document No.");
+  expect(badFieldNames).toContain("Amount");
+
+  const noProc = result!.procedures.find(p => p.name === "NoSetLoadFields")!;
+  expect(noProc).toBeDefined();
+  const noFieldNames = noProc.features.fieldAccesses.map(a => a.fieldName);
+  expect(noFieldNames).toContain("Amount");
+});
+
+test("extracts allFieldArguments for SetLoadFields calls", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "CodeUnit50700.al"), fixturesDir);
+  expect(result).toBeDefined();
+
+  const goodProc = result!.procedures.find(p => p.name === "GoodSetLoadFields")!;
+  const setLoadFieldsOp = goodProc.features.recordOps.find(op => op.type === "SetLoadFields");
+  expect(setLoadFieldsOp).toBeDefined();
+  expect(setLoadFieldsOp!.allFieldArguments).toBeDefined();
+  expect(setLoadFieldsOp!.allFieldArguments!.length).toBe(2);
+  expect(setLoadFieldsOp!.allFieldArguments).toContain("Document No.");
+  expect(setLoadFieldsOp!.allFieldArguments).toContain("Amount");
+
+  const badProc = result!.procedures.find(p => p.name === "BadSetLoadFields")!;
+  const badSetLoadFieldsOp = badProc.features.recordOps.find(op => op.type === "SetLoadFields");
+  expect(badSetLoadFieldsOp).toBeDefined();
+  expect(badSetLoadFieldsOp!.allFieldArguments).toBeDefined();
+  expect(badSetLoadFieldsOp!.allFieldArguments!.length).toBe(1);
+  expect(badSetLoadFieldsOp!.allFieldArguments).toContain("Document No.");
+});
+
+test("does not count method calls as field accesses", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "CodeUnit50700.al"), fixturesDir);
+  expect(result).toBeDefined();
+
+  const goodProc = result!.procedures.find(p => p.name === "GoodSetLoadFields")!;
+  // Method calls like SetLoadFields, SetRange, FindSet, Next, Message should NOT appear as field accesses
+  const fieldNames = goodProc.features.fieldAccesses.map(a => a.fieldName.toLowerCase());
+  expect(fieldNames).not.toContain("setloadfields");
+  expect(fieldNames).not.toContain("setrange");
+  expect(fieldNames).not.toContain("findset");
+  expect(fieldNames).not.toContain("next");
+});
+
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);
-    expect(index.files.length).toBe(10);
-    expect(index.objects.size).toBe(10);
+    expect(index.files.length).toBe(11);
+    expect(index.objects.size).toBe(11);
 
     const procList = index.procedures.get("processrecords");
     expect(procList).toBeDefined();

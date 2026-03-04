@@ -14,6 +14,7 @@ import type {
   RecordOpType,
   DangerousCallInfo,
   VariableInfo,
+  FieldAccessInfo,
   TableFieldInfo,
   TableKeyInfo,
   EventPublisherInfo,
@@ -330,12 +331,13 @@ function collectLoopNodes(node: SyntaxNode): SyntaxNode[] {
  */
 function collectRecordOps(
   node: SyntaxNode,
-): Array<{ node: SyntaxNode; methodName: string; recordVariable: string; fieldArgument?: string }> {
+): Array<{ node: SyntaxNode; methodName: string; recordVariable: string; fieldArgument?: string; allFieldArguments?: string[] }> {
   const ops: Array<{
     node: SyntaxNode;
     methodName: string;
     recordVariable: string;
     fieldArgument?: string;
+    allFieldArguments?: string[];
   }> = [];
 
   function extractFieldArgument(callNode: SyntaxNode, methodName: string): string | undefined {
@@ -345,6 +347,19 @@ function collectRecordOps(
     if (argList && argList.namedChildren.length > 0) {
       const firstArg = argList.namedChildren[0];
       return stripQuotes(firstArg.text);
+    }
+    return undefined;
+  }
+
+  function extractAllFieldArguments(callNode: SyntaxNode, methodName: string): string[] | undefined {
+    if (methodName.toLowerCase() !== "setloadfields") return undefined;
+    const argList = callNode.namedChildren.find(c => c.type === "argument_list");
+    if (argList) {
+      const args: string[] = [];
+      for (const arg of argList.namedChildren) {
+        args.push(stripQuotes(arg.text));
+      }
+      return args;
     }
     return undefined;
   }
@@ -364,6 +379,7 @@ function collectRecordOps(
                 methodName,
                 recordVariable: objNode ? objNode.text : "",
                 fieldArgument: extractFieldArgument(n, methodName),
+                allFieldArguments: extractAllFieldArguments(n, methodName),
               });
             }
           }
@@ -379,6 +395,7 @@ function collectRecordOps(
                 methodName,
                 recordVariable: recordNode ? recordNode.text : "",
                 fieldArgument: extractFieldArgument(n, methodName),
+                allFieldArguments: extractAllFieldArguments(n, methodName),
               });
             }
           }
@@ -428,6 +445,48 @@ function collectDangerousCalls(
 
   walk(node);
   return calls;
+}
+
+/**
+ * Collect field access nodes: Rec."Field Name" (field_access) or Rec.Field (member_expression not in call).
+ */
+function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
+  const accesses: FieldAccessInfo[] = [];
+
+  function walk(n: SyntaxNode) {
+    if (n.type === "field_access") {
+      // Rec."Field Name" style
+      const recordNode = n.namedChildren[0];
+      const fieldNode = n.namedChildren[1];
+      if (recordNode && fieldNode) {
+        accesses.push({
+          recordVariable: recordNode.text,
+          fieldName: stripQuotes(fieldNode.text),
+          line: n.startPosition.row + 1,
+          column: n.startPosition.column,
+        });
+      }
+    } else if (n.type === "member_expression" && n.parent?.type !== "call_expression") {
+      // Rec.Field style, but NOT when it's the function part of a call
+      const objNode = n.namedChildren[0];
+      const propNode = n.namedChildren[1];
+      if (objNode && propNode) {
+        accesses.push({
+          recordVariable: objNode.text,
+          fieldName: stripQuotes(propNode.text),
+          line: n.startPosition.row + 1,
+          column: n.startPosition.column,
+        });
+      }
+    }
+
+    for (const child of n.namedChildren) {
+      walk(child);
+    }
+  }
+
+  walk(node);
+  return accesses;
 }
 
 /**
@@ -492,6 +551,7 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
       recordOpsInLoops: [],
       dangerousCallsInLoops: [],
       variables: [],
+      fieldAccesses: [],
       nestingDepth: 0,
     };
   }
@@ -518,6 +578,7 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
       insideLoop,
       recordVariable: op.recordVariable || undefined,
       fieldArgument: op.fieldArgument,
+      allFieldArguments: op.allFieldArguments,
     };
     recordOps.push(opInfo);
     if (insideLoop) {
@@ -540,10 +601,13 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
     }
   }
 
+  // Collect field accesses
+  const fieldAccesses = collectFieldAccesses(codeBlock);
+
   // Compute nesting depth
   const nestingDepth = computeNestingDepth(codeBlock);
 
-  return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, variables: [], nestingDepth };
+  return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, variables: [], fieldAccesses, nestingDepth };
 }
 
 const CALC_FORMULA_TYPE_MAP: Record<string, TableFieldInfo["calcFormulaType"]> = {
