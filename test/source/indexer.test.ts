@@ -41,6 +41,18 @@ describe("indexALFile", () => {
   });
 });
 
+test("extracts variable declarations with Record types", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "CodeUnit50100.al"), fixturesDir);
+  const processRecords = result!.procedures.find(p => p.name === "ProcessRecords")!;
+  expect(processRecords.features.variables).toBeDefined();
+  expect(processRecords.features.variables.length).toBeGreaterThan(0);
+  const salesLine = processRecords.features.variables.find(v => v.name === "SalesLine");
+  expect(salesLine).toBeDefined();
+  expect(salesLine!.isRecord).toBe(true);
+  expect(salesLine!.tableName).toBe("Sales Line");
+  expect(salesLine!.isTemporary).toBe(false);
+});
+
 test("detects EventSubscriber attribute on procedures", async () => {
   const index = await buildSourceIndex(fixturesDir);
   const obj = index.objects.get("Codeunit_50200");

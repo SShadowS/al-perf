@@ -62,7 +62,21 @@ export interface ProcedureFeatures {
   recordOps: RecordOpInfo[];
   recordOpsInLoops: RecordOpInfo[];
   dangerousCallsInLoops: DangerousCallInfo[];
+  variables: VariableInfo[];
   nestingDepth: number;
+}
+
+export interface VariableInfo {
+  name: string;
+  /** Full type string, e.g. "Record \"Sales Line\"", "Integer", "Text[100]" */
+  typeStr: string;
+  /** True if this is a Record type */
+  isRecord: boolean;
+  /** Table name if Record type, e.g. "Sales Line" */
+  tableName?: string;
+  /** True if declared with 'temporary' keyword */
+  isTemporary: boolean;
+  line: number;
 }
 
 export interface DangerousCallInfo {

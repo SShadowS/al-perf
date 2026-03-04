@@ -13,6 +13,7 @@ import type {
   RecordOpInfo,
   RecordOpType,
   DangerousCallInfo,
+  VariableInfo,
 } from "../types/source-index.js";
 
 const RECORD_OPS: Set<string> = new Set([
@@ -372,6 +373,57 @@ function collectDangerousCalls(
 }
 
 /**
+ * Extract variable declarations from a procedure/trigger node's var_section.
+ */
+function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
+  const variables: VariableInfo[] = [];
+
+  for (const child of procedureNode.namedChildren) {
+    if (child.type !== "var_section") continue;
+
+    for (const varDecl of child.namedChildren) {
+      if (varDecl.type !== "variable_declaration") continue;
+
+      const nameNode = varDecl.namedChildren.find(c => c.type === "identifier");
+      const typeSpecNode = varDecl.namedChildren.find(c => c.type === "type_specification");
+      const tempNode = varDecl.namedChildren.find(c => c.type === "temporary");
+
+      if (!nameNode || !typeSpecNode) continue;
+
+      const name = nameNode.text;
+      const typeStr = typeSpecNode.text;
+      const isTemporary = tempNode !== undefined;
+
+      // Check if Record type
+      const recordTypeNode = typeSpecNode.namedChildren.find(c => c.type === "record_type");
+      const isRecord = recordTypeNode !== undefined;
+
+      let tableName: string | undefined;
+      if (isRecord && recordTypeNode) {
+        const quotedId = recordTypeNode.namedChildren.find(c => c.type === "quoted_identifier");
+        if (quotedId) {
+          tableName = stripQuotes(quotedId.text);
+        } else {
+          const id = recordTypeNode.namedChildren.find(c => c.type === "identifier");
+          if (id) tableName = id.text;
+        }
+      }
+
+      variables.push({
+        name,
+        typeStr,
+        isRecord,
+        tableName,
+        isTemporary,
+        line: varDecl.startPosition.row + 1,
+      });
+    }
+  }
+
+  return variables;
+}
+
+/**
  * Extract structural features (loops, record ops, nesting) from a code_block node.
  */
 function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
@@ -381,6 +433,7 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
       recordOps: [],
       recordOpsInLoops: [],
       dangerousCallsInLoops: [],
+      variables: [],
       nestingDepth: 0,
     };
   }
@@ -431,7 +484,7 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
   // Compute nesting depth
   const nestingDepth = computeNestingDepth(codeBlock);
 
-  return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, nestingDepth };
+  return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, variables: [], nestingDepth };
 }
 
 /**
@@ -480,6 +533,7 @@ export async function indexALFile(
         const name = extractProcedureName(child);
         const codeBlock = findCodeBlock(child);
         const features = extractFeatures(codeBlock);
+        features.variables = extractVariables(child);
 
         procedures.push({
           name,
@@ -499,6 +553,7 @@ export async function indexALFile(
         const name = extractTriggerName(child);
         const codeBlock = findCodeBlock(child);
         const features = extractFeatures(codeBlock);
+        features.variables = extractVariables(child);
 
         triggers.push({
           name,
@@ -513,6 +568,7 @@ export async function indexALFile(
       } else if (child.type === "onrun_trigger") {
         const codeBlock = findCodeBlock(child);
         const features = extractFeatures(codeBlock);
+        features.variables = extractVariables(child);
 
         triggers.push({
           name: "OnRun",
