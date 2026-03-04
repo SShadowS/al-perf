@@ -47,6 +47,9 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
   if (result.meta.samplingInterval !== undefined) {
     lines.push(`  Sampling Interval: ${formatTime(result.meta.samplingInterval)}`);
   }
+  if (result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0) {
+    lines.push(`  Built-in overhead: ${formatTime(result.meta.builtinSelfTime)}`);
+  }
   lines.push("");
 
   // 3. Top Hotspots
@@ -68,12 +71,17 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
     });
 
     result.hotspots.forEach((h: MethodBreakdown, i: number) => {
+      const selfTimeStr = `${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)`;
+      const gapStr = h.gapTime && h.gapTime > 0 ? chalk.yellow(` +${formatTime(h.gapTime)} wait`) : "";
+      const objectStr = h.sourceLocation
+        ? `${h.objectType} ${h.objectId}\n${chalk.gray(h.sourceLocation.filePath + ":" + h.sourceLocation.lineStart)}`
+        : `${h.objectType} ${h.objectId} (${h.objectName})`;
       hotspotsTable.push([
         String(i + 1),
         chalk.white.bold(h.functionName),
-        `${h.objectType} ${h.objectId} (${h.objectName})`,
+        objectStr,
         h.appName,
-        `${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)`,
+        selfTimeStr + gapStr,
         `${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%)`,
         String(h.hitCount),
         h.calledBy.length > 0 ? h.calledBy.slice(0, 3).join(", ") : "-",
