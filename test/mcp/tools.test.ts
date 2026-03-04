@@ -225,3 +225,19 @@ describe("MCP Resources", () => {
     expect(parsed.meta.profileType).toBe("sampling");
   });
 });
+
+describe("MCP Tool: visualize_flamegraph", () => {
+  test("returns error when flamegraph service is unavailable", async () => {
+    const { client } = await createTestClient();
+    const result = await client.callTool({
+      name: "visualize_flamegraph",
+      arguments: {
+        profilePath: "test/fixtures/sampling-minimal.alcpuprofile",
+        serviceUrl: "http://localhost:99999",
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent)[0].text;
+    expect(text).toContain("Failed to connect");
+  });
+});

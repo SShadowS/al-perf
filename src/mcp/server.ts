@@ -385,6 +385,53 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     },
   );
 
+  // --- visualize_flamegraph ---
+  server.registerTool(
+    "visualize_flamegraph",
+    {
+      title: "Visualize Flamegraph",
+      description: "Generate an interactive flamegraph SVG by sending the profile to the AL-Flamegraph service. Returns the path to the saved SVG file.",
+      inputSchema: {
+        profilePath: z.string().describe("Path to the .alcpuprofile file"),
+        serviceUrl: z.string().default("http://localhost:5000").describe("AL-Flamegraph service URL"),
+      },
+    },
+    async ({ profilePath, serviceUrl }) => {
+      try {
+        const { basename } = await import("path");
+        const fileContent = await Bun.file(profilePath).arrayBuffer();
+        const formData = new FormData();
+        formData.append("file", new Blob([fileContent]), basename(profilePath));
+
+        const response = await fetch(`${serviceUrl}/upload`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          return {
+            content: [{ type: "text" as const, text: `Flamegraph service error: ${response.status} ${response.statusText}` }],
+            isError: true,
+          };
+        }
+
+        const svg = await response.text();
+        const svgPath = profilePath.replace(/\.alcpuprofile$/, ".flamegraph.svg");
+        await Bun.write(svgPath, svg);
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ svgPath, size: svg.length }) }],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to connect to flamegraph service: ${message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // --- Resources ---
 
   server.registerResource(
