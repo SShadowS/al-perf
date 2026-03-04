@@ -103,6 +103,34 @@ describe("aggregateByMethod", () => {
     expect(processLine.lineHotspots![1].executionTime).toBe(150000);
   });
 
+  test("computes costPerHit for each method", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const processLine = methods.find(m => m.functionName === "ProcessLine")!;
+    // selfTime=2000000, hitCount=20 => costPerHit=100000
+    expect(processLine.costPerHit).toBe(100000);
+
+    const onRun = methods.find(m => m.functionName === "OnRun")!;
+    // selfTime=500000, hitCount=5 => costPerHit=100000
+    expect(onRun.costPerHit).toBe(100000);
+  });
+
+  test("computes efficiencyScore for each method", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const processLine = methods.find(m => m.functionName === "ProcessLine")!;
+    // selfTime=2000000, totalTime=2000000 (leaf node) => efficiencyScore=1.0
+    expect(processLine.efficiencyScore).toBeCloseTo(1.0, 2);
+
+    const onRun = methods.find(m => m.functionName === "OnRun")!;
+    // selfTime=500000, totalTime=2500000 => efficiencyScore=0.2
+    expect(onRun.efficiencyScore).toBeCloseTo(0.2, 2);
+  });
+
   test("wallClockTime is undefined for sampling profiles", async () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);

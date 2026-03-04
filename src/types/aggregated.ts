@@ -41,6 +41,8 @@ export interface MethodBreakdown {
   isBuiltin?: boolean;
   // Per-line timing data aggregated from positionTicks (instrumentation only)
   lineHotspots?: LineHotspot[];
+  costPerHit: number;             // selfTime / hitCount (microseconds per invocation)
+  efficiencyScore: number;        // selfTime / totalTime (0.0 = pure orchestrator, 1.0 = all own work)
 }
 
 export interface LineHotspot {

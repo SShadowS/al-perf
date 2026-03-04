@@ -73,6 +73,8 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
         calledBy: [],
         calls: [],
         isBuiltin: false,
+        costPerHit: 0,
+        efficiencyScore: 0,
       };
       map.set(key, entry);
     }
@@ -118,6 +120,8 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
       profile.activeSelfTime > 0
         ? (entry.totalTime / profile.activeSelfTime) * 100
         : 0;
+    entry.costPerHit = entry.hitCount > 0 ? entry.selfTime / entry.hitCount : 0;
+    entry.efficiencyScore = entry.totalTime > 0 ? entry.selfTime / entry.totalTime : 0;
   }
 
   // Compute gapTime for methods with wallClockTime
