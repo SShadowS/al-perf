@@ -12,6 +12,7 @@ import type {
   LoopInfo,
   RecordOpInfo,
   RecordOpType,
+  DangerousCallInfo,
 } from "../types/source-index.js";
 
 const RECORD_OPS: Set<string> = new Set([
@@ -335,6 +336,41 @@ function collectRecordOps(
   return ops;
 }
 
+const DANGEROUS_CALLS = new Set(["commit", "error", "testfield"]);
+
+const DANGEROUS_CALL_CASE_MAP: Record<string, DangerousCallInfo["type"]> = {
+  commit: "Commit",
+  error: "Error",
+  testfield: "TestField",
+};
+
+/**
+ * Collect dangerous call_expression nodes (Commit, Error, TestField) within a subtree.
+ */
+function collectDangerousCalls(
+  node: SyntaxNode,
+): Array<{ node: SyntaxNode; callType: DangerousCallInfo["type"] }> {
+  const calls: Array<{ node: SyntaxNode; callType: DangerousCallInfo["type"] }> = [];
+
+  function walk(n: SyntaxNode) {
+    if (n.type === "call_expression") {
+      const funcNode = n.childForFieldName("function") ?? n.namedChildren[0];
+      if (funcNode) {
+        const name = funcNode.text.toLowerCase();
+        if (DANGEROUS_CALLS.has(name)) {
+          calls.push({ node: n, callType: DANGEROUS_CALL_CASE_MAP[name] });
+        }
+      }
+    }
+    for (const child of n.namedChildren) {
+      walk(child);
+    }
+  }
+
+  walk(node);
+  return calls;
+}
+
 /**
  * Extract structural features (loops, record ops, nesting) from a code_block node.
  */
@@ -344,6 +380,7 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
       loops: [],
       recordOps: [],
       recordOpsInLoops: [],
+      dangerousCallsInLoops: [],
       nestingDepth: 0,
     };
   }
@@ -376,10 +413,25 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
     }
   }
 
+  // Collect dangerous calls (Commit, Error, TestField)
+  const rawDangerousCalls = collectDangerousCalls(codeBlock);
+  const dangerousCallsInLoops: DangerousCallInfo[] = [];
+  for (const dc of rawDangerousCalls) {
+    const insideLoop = loopNodes.some((ln) => isDescendantOf(dc.node, ln));
+    if (insideLoop) {
+      dangerousCallsInLoops.push({
+        type: dc.callType,
+        line: dc.node.startPosition.row + 1,
+        column: dc.node.startPosition.column,
+        insideLoop: true,
+      });
+    }
+  }
+
   // Compute nesting depth
   const nestingDepth = computeNestingDepth(codeBlock);
 
-  return { loops, recordOps, recordOpsInLoops, nestingDepth };
+  return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, nestingDepth };
 }
 
 /**

@@ -58,8 +58,8 @@ test("detects EventSubscriber attribute on procedures", async () => {
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);
-    expect(index.files.length).toBe(3);
-    expect(index.objects.size).toBe(3);
+    expect(index.files.length).toBe(4);
+    expect(index.objects.size).toBe(4);
 
     const procList = index.procedures.get("processrecords");
     expect(procList).toBeDefined();

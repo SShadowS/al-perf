@@ -61,7 +61,15 @@ export interface ProcedureFeatures {
   loops: LoopInfo[];
   recordOps: RecordOpInfo[];
   recordOpsInLoops: RecordOpInfo[];
+  dangerousCallsInLoops: DangerousCallInfo[];
   nestingDepth: number;
+}
+
+export interface DangerousCallInfo {
+  type: "Commit" | "Error" | "TestField";
+  line: number;
+  column: number;
+  insideLoop: boolean;
 }
 
 export interface LoopInfo {

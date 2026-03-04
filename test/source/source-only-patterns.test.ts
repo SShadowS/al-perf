@@ -4,6 +4,7 @@ import {
   detectNestedLoops,
   detectUnfilteredFindSet,
   detectEventSubscriberIssues,
+  detectDangerousCallsInLoop,
   runSourceOnlyDetectors,
 } from "../../src/source/source-only-patterns.js";
 
@@ -99,6 +100,36 @@ describe("detectEventSubscriberIssues", () => {
       p.involvedMethods.some((m) => m.includes("ProcessRecords")),
     );
     expect(falsePositive).toBeUndefined();
+  });
+});
+
+describe("detectDangerousCallsInLoop", () => {
+  test("detects Commit inside loop", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectDangerousCallsInLoop(index);
+    const commitInLoop = patterns.find(p =>
+      p.id === "dangerous-call-in-loop" && p.title.includes("Commit") && p.title.includes("CommitInLoop")
+    );
+    expect(commitInLoop).toBeDefined();
+    expect(commitInLoop!.severity).toBe("critical");
+  });
+
+  test("detects Error inside loop", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectDangerousCallsInLoop(index);
+    const errorInLoop = patterns.find(p =>
+      p.id === "dangerous-call-in-loop" && p.title.includes("Error") && p.title.includes("ErrorInLoop")
+    );
+    expect(errorInLoop).toBeDefined();
+  });
+
+  test("does not flag Commit outside loop", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectDangerousCallsInLoop(index);
+    const safeCommit = patterns.find(p =>
+      p.title.includes("SafeCommit")
+    );
+    expect(safeCommit).toBeUndefined();
   });
 });
 

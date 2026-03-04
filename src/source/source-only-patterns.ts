@@ -138,6 +138,39 @@ export function detectEventSubscriberIssues(index: SourceIndex): DetectedPattern
 }
 
 /**
+ * Detect Commit(), Error(), TestField() calls inside loops.
+ * These are severe anti-patterns: Commit flushes the transaction per iteration,
+ * Error can abort mid-loop, TestField is expensive per-row.
+ * Severity: critical.
+ */
+export function detectDangerousCallsInLoop(index: SourceIndex): DetectedPattern[] {
+  const patterns: DetectedPattern[] = [];
+
+  for (const obj of index.objects.values()) {
+    const members = [...obj.procedures, ...obj.triggers];
+    for (const member of members) {
+      for (const call of member.features.dangerousCallsInLoops) {
+        if (!call.insideLoop) continue;
+        patterns.push({
+          id: "dangerous-call-in-loop",
+          severity: "critical",
+          title: `${call.type}() inside loop in ${member.name}`,
+          description: `${call.type}() on line ${call.line} is called inside a loop in ${obj.objectType} ${obj.objectName} (${obj.objectId}). Each iteration triggers a separate ${call.type === "Commit" ? "transaction flush" : "error evaluation"}.`,
+          impact: 0,
+          involvedMethods: [`${member.name} (${obj.objectType} ${obj.objectId})`],
+          evidence: `${call.type} at line ${call.line}, column ${call.column}`,
+          suggestion: call.type === "Commit"
+            ? "Move Commit() outside the loop. Process all records first, then commit once."
+            : `Consider collecting validation results and reporting ${call.type}() once after the loop.`,
+        });
+      }
+    }
+  }
+
+  return patterns;
+}
+
+/**
  * Run all source-only pattern detectors and return results sorted by impact descending.
  */
 export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
@@ -145,6 +178,7 @@ export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
     ...detectNestedLoops(index),
     ...detectUnfilteredFindSet(index),
     ...detectEventSubscriberIssues(index),
+    ...detectDangerousCallsInLoop(index),
   ];
 
   allPatterns.sort((a, b) => b.impact - a.impact);
