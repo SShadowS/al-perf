@@ -510,6 +510,78 @@ function renderAppBreakdown(data) {
 }
 
 /**
+ * Render the table breakdown section.
+ */
+function renderTableBreakdown(data) {
+  const section = document.getElementById("table-breakdown-section");
+  if (!section) return;
+  section.innerHTML = "";
+
+  if (!data.tableBreakdown || data.tableBreakdown.length === 0) return;
+
+  const title = document.createElement("div");
+  title.className = "section-title";
+  title.textContent = "Table Breakdown";
+  section.appendChild(title);
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "table-wrapper";
+
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+
+  for (const col of ["Table", "Self Time", "Top Operation", "Call Sites", "SetLoadFields", "Filtered"]) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const t of data.tableBreakdown) {
+    const tr = document.createElement("tr");
+
+    const tdName = document.createElement("td");
+    tdName.textContent = t.tableName;
+    tr.appendChild(tdName);
+
+    const tdTime = document.createElement("td");
+    tdTime.textContent = formatTime(t.totalSelfTime) + " (" + t.totalSelfTimePercent.toFixed(1) + "%)";
+    tr.appendChild(tdTime);
+
+    const tdOp = document.createElement("td");
+    if (t.operationBreakdown && t.operationBreakdown.length > 0) {
+      tdOp.textContent = t.operationBreakdown[0].operation + " (" + formatTime(t.operationBreakdown[0].selfTime) + ")";
+    } else {
+      tdOp.textContent = "\u2014";
+    }
+    tr.appendChild(tdOp);
+
+    const tdSites = document.createElement("td");
+    tdSites.textContent = String(t.callSiteCount);
+    tr.appendChild(tdSites);
+
+    const tdSlf = document.createElement("td");
+    tdSlf.textContent = t.hasSetLoadFields ? "Yes" : "No";
+    tdSlf.style.color = t.hasSetLoadFields ? "var(--success-color, #4CAF50)" : "var(--text-secondary)";
+    tr.appendChild(tdSlf);
+
+    const tdFilt = document.createElement("td");
+    tdFilt.textContent = t.hasFilters ? "Yes" : "No";
+    tdFilt.style.color = t.hasFilters ? "var(--success-color, #4CAF50)" : "var(--text-secondary)";
+    tr.appendChild(tdFilt);
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+  section.appendChild(wrapper);
+}
+
+/**
  * Render the object breakdown section with collapsible groups.
  */
 function renderObjectBreakdown(data) {
@@ -680,6 +752,7 @@ function buildSidebar() {
     { id: "summary-section", label: "Summary" },
     { id: "explanation-section", label: "AI Analysis" },
     { id: "app-breakdown-section", label: "App Breakdown" },
+    { id: "table-breakdown-section", label: "Table Breakdown" },
     { id: "hotspots-section", label: "Hotspots" },
     { id: "critical-path-section", label: "Critical Path" },
     { id: "patterns-section", label: "Patterns" },
@@ -733,6 +806,7 @@ function renderResults(data) {
   renderSummary(data);
   renderExplanation(data);
   renderAppBreakdown(data);
+  renderTableBreakdown(data);
   renderHotspots(data);
   renderCriticalPath(data);
   renderPatterns(data);

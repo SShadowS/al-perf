@@ -3,23 +3,27 @@
 > Brainstorming inventory for al-perf — cataloging every new metric, pattern, and analysis capability we could build, prioritized by effort vs impact.
 
 **Date:** 2026-03-04
-**Updated:** 2026-03-04
-**Status:** Tier 1 complete. Roadmap for remaining items.
+**Updated:** 2026-03-05
+**Status:** Tier 1 + Tier 2 + Tier 3 complete. Roadmap for remaining items.
 
 ---
 
 ## Current State Summary
 
-**Core metrics:** Profile-level timing (totalDuration, activeSelfTime, idleSelfTime, maxDepth, nodeCount), per-node timing (selfTime, totalTime, hitCount, depth, percentages), aggregations by method/object/app, two-profile comparison, wall clock vs CPU gap analysis, cost per hit, method efficiency score, call amplification factor, built-in vs custom code classification, line-level hotspot map, and hotspot-to-source deep linking.
+**Core metrics:** Profile-level timing (totalDuration, activeSelfTime, idleSelfTime, maxDepth, nodeCount), per-node timing (selfTime, totalTime, hitCount, depth, percentages), aggregations by method/object/app, two-profile comparison, wall clock vs CPU gap analysis, cost per hit, method efficiency score, call amplification factor, built-in vs custom code classification, line-level hotspot map, hotspot-to-source deep linking, critical path extraction, subtree drill-down, per-instance statistics (min/max/mean/median/p95/p99), pattern-level comparison, profile confidence score (0-100), profile health score (0-100), "what if" optimization estimates.
 
-**14 pattern detectors:**
-- Profile-only (6): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, **recursive-call**
-- Source-correlated (4): calcfields-in-loop, modify-in-loop, record-op-in-loop, missing-setloadfields
-- Source-only (4): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops
+**18 pattern detectors:**
+- Profile-only (7): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, recursive-call, **event-chain**
+- Source-correlated (5): calcfields-in-loop (with CalcFormula severity graduation), modify-in-loop, record-op-in-loop, missing-setloadfields, **incomplete-setloadfields**
+- Source-only (6): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, **commit-error-in-loop**, **unindexed-filter**
 
-**Source analysis (tree-sitter-al):** Extracts procedures, triggers, loops (4 types), record operations (19 types), nesting depth, event subscriber attributes.
+**Source analysis (tree-sitter-al):** Extracts procedures, triggers, loops (4 types), record operations (19 types), nesting depth, event subscriber attributes, **variable types (Record type resolution)**, **table fields with CalcFormula parsing**, **event publisher/subscriber catalog**, **temporary table detection**, **table keys (clustered/non-clustered)**, **table relationships (TableRelation, CalcFormula references)**, **field access tracking per procedure**.
 
-**What's NOT analyzed yet:** timeDeltas variance, isIncompleteMeasurement, appVersion, frameIdentifier, variable types, table keys, CalcField formulas, event publisher attributes, commit/error patterns, table relations.
+**What's NOT analyzed yet:** timeDeltas variance, isIncompleteMeasurement, appVersion, frameIdentifier, method signatures, with statement detection.
+
+**Performance history:** JSON-based local store for tracking analysis results over time with CLI (`history list/trend/clear`) and MCP tools (`history_list`, `history_trend`).
+
+**Table-centric view:** DBA-oriented analysis pivoting around database tables — per-table operation breakdown, call site counts, SetLoadFields/filter usage tracking.
 
 ---
 
@@ -98,7 +102,7 @@ For sampling profiles, `samples[]` + `timeDeltas[]` form a timeline of execution
 
 New analytical capabilities built on the processed call tree and timing data.
 
-### 2.1 Critical Path Extraction
+### 2.1 Critical Path Extraction :white_check_mark: DONE
 
 Walk the call tree to find the single longest root-to-leaf path by totalTime. Answers "what is the single most important call chain to optimize?" Currently the tool reports individual hotspots but not the chain leading to them.
 
@@ -152,7 +156,7 @@ Walk the call tree to detect direct or indirect recursion (method appearing as i
 - **Impact:** High (humans) / Medium (agents)
 - **Dependencies:** None.
 
-### 2.7 Event Subscriber Chain Tracer
+### 2.7 Event Subscriber Chain Tracer :white_check_mark: DONE
 
 Trace full chains when an event publisher fires: publisher → all subscribers → transitive subscriber chains. Shows which events cause the most expensive cascades. Builds on detectEventSubscriberHotspot but provides structural detail.
 
@@ -179,7 +183,7 @@ Compute `selfTime / hitCount`. Normalizes away call frequency to reveal intrinsi
 - **Impact:** Medium (humans) / High (agents)
 - **Dependencies:** None.
 
-### 2.10 Subtree Drill-Down Report
+### 2.10 Subtree Drill-Down Report :white_check_mark: DONE
 
 Given a method of interest, show its subtree time attribution: "this method takes 40% of total time; of that, 60% is in SQL, 25% in events, 15% in own code." Enables focused investigation beyond flat hotspot lists.
 
@@ -221,7 +225,7 @@ Like cyclomatic but penalizes nested control flow more heavily. An `if` inside a
 - **Impact:** Medium (humans) / Medium (agents)
 - **Dependencies:** None.
 
-### 3.3 Record Variable Type Resolution
+### 3.3 Record Variable Type Resolution :white_check_mark: DONE
 
 Extract `variable_declaration` from `var_section` to determine which variables are `Record` types and what table they reference. Transforms pattern messages from "FindSet on SalesLine" to "FindSet on Record 'Sales Line' (Table 37)." Dramatically improves actionability.
 
@@ -239,7 +243,7 @@ Extract procedure parameters and return types from the AST. Enables: identifying
 - **Impact:** Medium (humans) / Medium (agents)
 - **Dependencies:** None.
 
-### 3.5 Table Field Reference Mapping
+### 3.5 Table Field Reference Mapping :white_check_mark: DONE
 
 Track which table fields are accessed via `field_access` and `field_ref` nodes. Build "which procedures touch which fields" map. Validates whether SetLoadFields actually covers all fields later accessed. Can suggest exact SetLoadFields field list.
 
@@ -248,7 +252,7 @@ Track which table fields are accessed via `field_access` and `field_ref` nodes. 
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** 3.3 (Variable Type Resolution).
 
-### 3.6 CalcField Complexity Scoring
+### 3.6 CalcField Complexity Scoring :white_check_mark: DONE
 
 Parse `CalcFormula` from table declarations to understand FlowField complexity. SUM FlowFields over large tables are much more expensive than LOOKUP. Enables graduated severity: "CalcFields in loop on a SUM FlowField is critical; CalcFields on a LOOKUP is a warning."
 
@@ -257,7 +261,7 @@ Parse `CalcFormula` from table declarations to understand FlowField complexity. 
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** None. Enhances existing calcfields-in-loop detector.
 
-### 3.7 Table Key Analysis
+### 3.7 Table Key Analysis :white_check_mark: DONE
 
 Parse `key_declaration` from table declarations. Cross-reference with SetRange/SetFilter calls to detect filter operations that can't use any defined key (= full table scan). High-value for catching SQL performance issues at the AL level.
 
@@ -275,7 +279,7 @@ Compute line count per procedure from existing `lineStart`/`lineEnd`. Already im
 - **Impact:** Low (humans) / Low (agents)
 - **Dependencies:** None.
 
-### 3.9 Commit/Error in Loop Detection
+### 3.9 Commit/Error in Loop Detection :white_check_mark: DONE
 
 Detect `Commit()` inside loops — a severe anti-pattern that forces transaction flushes. Also detect `Error()` and `TestField()` calls inside loops (validation logic that could be batched). Follows existing record-op-in-loop detection architecture.
 
@@ -284,7 +288,7 @@ Detect `Commit()` inside loops — a severe anti-pattern that forces transaction
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** None.
 
-### 3.10 Table Relationship Graph
+### 3.10 Table Relationship Graph :white_check_mark: DONE
 
 Parse `table_relation_property`, `calc_field_ref`, and `lookup_where_conditions` from table declarations to build a graph of table relationships (foreign keys, FlowFields, lookups). Enables understanding which tables are central vs. peripheral.
 
@@ -302,7 +306,7 @@ Hash normalized AST subtrees to find structurally identical or similar code bloc
 - **Impact:** Medium (humans) / Low (agents)
 - **Dependencies:** None.
 
-### 3.12 Event Publisher/Subscriber Catalog
+### 3.12 Event Publisher/Subscriber Catalog :white_check_mark: DONE
 
 Parse `[IntegrationEvent]`, `[BusinessEvent]` publisher declarations and `[EventSubscriber]` attributes. Build a publisher→subscriber mapping catalog. Currently only `[EventSubscriber]` is detected. Enables "how many subscribers fire when event X is raised?" analysis.
 
@@ -311,7 +315,7 @@ Parse `[IntegrationEvent]`, `[BusinessEvent]` publisher declarations and `[Event
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** None. Enhances 2.7 (Event Chain Tracer).
 
-### 3.13 Temporary Table Detection
+### 3.13 Temporary Table Detection :white_check_mark: DONE
 
 Detect `temporary` keyword on record variable declarations and `SourceTableTemporary` on pages. Record operations on temporary tables are in-memory (no SQL) — should be excluded from N+1 query warnings. **Eliminates false positives in pattern detection.**
 
@@ -335,7 +339,7 @@ Detect deprecated `with` statement usage. Warns about potential pattern detectio
 
 Entirely new ways to view, query, and present the data.
 
-### 4.1 "What If" Optimization Estimator
+### 4.1 "What If" Optimization Estimator :white_check_mark: DONE
 
 Given a detected pattern, estimate time savings if fixed. "CalcFields in loop, 500 iterations, 2ms per call → fixing saves ~998ms." Transforms patterns from "you have a problem" to "here's the ROI of fixing it." The `impact` field on DetectedPattern already exists but stores raw selfTime, not estimated savings.
 
@@ -353,7 +357,7 @@ For each hotspot method, resolve its source file location via `matchToSource` an
 - **Impact:** High (humans) / High (agents)
 - **Dependencies:** Requires source path.
 
-### 4.3 Profile Health Score
+### 4.3 Profile Health Score :white_check_mark: DONE
 
 Single 0-100 score summarizing overall profile health. Factors: Gini coefficient, pattern counts, idle %, jitter, sample count, duration. Enables CI/CD gates on a holistic metric rather than individual pattern counts.
 
@@ -371,7 +375,7 @@ Complete analysis (hotspots, patterns, call tree) scoped to a single app/extensi
 - **Impact:** High (humans) / Medium (agents)
 - **Dependencies:** None.
 
-### 4.5 Table-Centric View
+### 4.5 Table-Centric View :white_check_mark: DONE
 
 Pivot analysis around database tables. For each table: total time in operations (FindSet, Modify, Insert, Delete, CalcFields), number of distinct call sites, filter usage, SetLoadFields usage. Answers "which tables are the bottleneck?"
 
@@ -380,7 +384,7 @@ Pivot analysis around database tables. For each table: total time in operations 
 - **Impact:** High (humans) / Medium (agents)
 - **Dependencies:** 3.3 for full source-side correlation.
 
-### 4.6 Per-Instance Method Statistics
+### 4.6 Per-Instance Method Statistics :white_check_mark: DONE
 
 For instrumentation profiles: compute min/max/mean/median/p95/p99 of selfTime across multiple calls of the same method. Reveals variance — a method averaging 1ms but sometimes taking 100ms needs different optimization than one consistently at 5ms.
 
@@ -404,9 +408,9 @@ Aggregate by AL object type (Page, Codeunit, Table, Report, Query, XMLport). Sho
 
 Capabilities that operate across multiple profiles over time.
 
-### 5.1 Performance History Store
+### 5.1 Performance History Store :white_check_mark: DONE
 
-Store key metrics from each analysis run in a local JSON/SQLite database, keyed by timestamp and optionally git commit hash. Enables N-profile trend queries. Currently comparison only handles two profiles at a time.
+Store key metrics from each analysis run in a local JSON database, keyed by timestamp and optionally git commit hash. Enables N-profile trend queries via CLI (`history list/trend/clear`) and MCP tools (`history_list`, `history_trend`). Foundation for 5.2 and 5.3.
 
 - **Data source:** `AnalysisResult` outputs over time
 - **Effort:** L (weeks)
@@ -440,7 +444,7 @@ Analyze a collection of profiles (different users/scenarios). Find methods consi
 - **Impact:** Medium (humans) / Medium (agents)
 - **Dependencies:** None (works on ad-hoc collections).
 
-### 5.5 Pattern-Level Comparison
+### 5.5 Pattern-Level Comparison :white_check_mark: DONE
 
 Extend ComparisonResult to include pattern differences: new patterns introduced, patterns resolved, severity changes. "Your change resolved the repeated-siblings pattern" or "introduced a new CalcFields-in-loop."
 
@@ -455,7 +459,7 @@ Extend ComparisonResult to include pattern differences: new patterns introduced,
 
 Confidence scoring, measurement health, and metadata.
 
-### 6.1 Profile Confidence Score
+### 6.1 Profile Confidence Score :white_check_mark: DONE
 
 0-100% score based on: sampling jitter, incomplete measurements, idle ratio, sample count, profile duration. Attached to every AnalysisResult. "We are 95% confident" vs "high jitter, wide error bars."
 
@@ -522,7 +526,7 @@ Add `--format folded` output to produce folded stack format (semicolon-separated
 - **Effort:** S (hours)
 - **Impact:** Medium (humans) / Low (agents)
 
-### F.2 MCP Tool: visualize_flamegraph
+### F.2 MCP Tool: visualize_flamegraph :white_check_mark: DONE
 
 MCP tool that POSTs profile data to AL-Flamegraph API, returns SVG. Enables AI agents to generate visual flamegraphs alongside textual analysis.
 
@@ -556,38 +560,38 @@ All 8 items implemented and merged to master.
 | 4.2 | Hotspot-to-Source Deep Link | :white_check_mark: Done |
 | 2.2 | Call Amplification Factor | :white_check_mark: Done |
 
-### Tier 2: High-Value Medium Effort (M effort, High impact)
+### Tier 2: High-Value Medium Effort (M effort, High impact) :white_check_mark: ALL DONE
 
-Worth investing days for significant capability uplift:
+All 14 items implemented and merged to master.
 
-| # | Item | Why It's Tier 2 |
-|---|------|-----------------|
-| 2.1 | Critical Path Extraction | The single most impactful new analysis capability. |
-| 3.3 | Variable Type Resolution | Unlocks table-aware patterns — transforms all existing source patterns. |
-| 3.13 | Temporary Table Detection | Eliminates false positives. High signal improvement. |
-| 4.1 | "What If" Estimator | Quantifies fix ROI. Transforms pattern output from diagnostic to prescriptive. |
-| 2.7 | Event Chain Tracer | Events are the #1 "hidden" performance cost in BC. |
-| 5.5 | Pattern-Level Comparison | Validates optimization outcomes. Natural extension of compare. |
-| 6.1 | Profile Confidence Score | Trust calibration for all recommendations. |
-| 3.9 | Commit/Error in Loop | Catches severe anti-pattern. Follows existing architecture. |
-| 3.6 | CalcField Complexity Scoring | Graduates severity of existing pattern. High-value refinement. |
-| 3.12 | Event Publisher/Subscriber Catalog | Event architecture visibility. Enhances 2.7. |
-| F.2 | MCP Flamegraph Tool | Visual output for agents. |
-| 2.10 | Subtree Drill-Down | Enables focused investigation. |
-| 4.6 | Per-Instance Method Statistics | Reveals variance invisible in averages. |
-| 4.3 | Profile Health Score | Single tracking metric for CI/CD. |
+| # | Item | Status |
+|---|------|--------|
+| 2.1 | Critical Path Extraction | :white_check_mark: Done |
+| 3.3 | Variable Type Resolution | :white_check_mark: Done |
+| 3.13 | Temporary Table Detection | :white_check_mark: Done |
+| 4.1 | "What If" Estimator | :white_check_mark: Done |
+| 2.7 | Event Chain Tracer | :white_check_mark: Done |
+| 5.5 | Pattern-Level Comparison | :white_check_mark: Done |
+| 6.1 | Profile Confidence Score | :white_check_mark: Done |
+| 3.9 | Commit/Error in Loop | :white_check_mark: Done |
+| 3.6 | CalcField Complexity Scoring | :white_check_mark: Done |
+| 3.12 | Event Publisher/Subscriber Catalog | :white_check_mark: Done |
+| F.2 | MCP Flamegraph Tool | :white_check_mark: Done |
+| 2.10 | Subtree Drill-Down | :white_check_mark: Done |
+| 4.6 | Per-Instance Method Statistics | :white_check_mark: Done |
+| 4.3 | Profile Health Score | :white_check_mark: Done |
 
-### Tier 3: Strategic Investments (L effort, High impact)
+### Tier 3: Strategic Investments (L effort, High impact) :white_check_mark: ALL DONE
 
-Worth weeks of effort for transformative capabilities:
+All 5 items implemented and merged to master.
 
-| # | Item | Why It's Tier 3 |
-|---|------|-----------------|
-| 3.5 | Field Reference Mapping | Validates SetLoadFields correctness. Can suggest exact field lists. |
-| 3.7 | Table Key Analysis | Catches missing index issues. Very high SQL optimization value. |
-| 5.1 | Performance History Store | Enables trend tracking. Foundation for 5.2, 5.3. |
-| 4.5 | Table-Centric View | DBA-oriented analysis, unique perspective. |
-| 3.10 | Table Relationship Graph | Data model understanding. |
+| # | Item | Status |
+|---|------|--------|
+| 3.5 | Field Reference Mapping | :white_check_mark: Done |
+| 3.7 | Table Key Analysis | :white_check_mark: Done |
+| 5.1 | Performance History Store | :white_check_mark: Done |
+| 4.5 | Table-Centric View | :white_check_mark: Done |
+| 3.10 | Table Relationship Graph | :white_check_mark: Done |
 
 ### Tier 4: Nice-to-Haves
 
@@ -617,8 +621,8 @@ Lower priority but still valuable:
 | 6.4 | Profile Anomaly Detection | M | Data quality |
 | 6.6 | Per-Method Confidence | M | Statistical rigor |
 | 2.11 | Sibling Branch Comparison | S | Navigational aid |
-| 5.2 | Automated Regression | L | Requires 5.1 |
-| 5.3 | Method Timeline | M | Requires 5.1 |
+| 5.2 | Automated Regression | L | ~~Requires 5.1~~ UNBLOCKED |
+| 5.3 | Method Timeline | M | ~~Requires 5.1~~ UNBLOCKED |
 | 3.11 | Code Duplication | L | Not directly perf-related |
 
 ---
@@ -626,37 +630,35 @@ Lower priority but still valuable:
 ## Dependency Graph
 
 ```
-3.3 Variable Type Resolution
- ├── 3.5 Field Reference Mapping
+3.3 Variable Type Resolution ✅
+ ├── 3.5 Field Reference Mapping ✅
  │    └── (validates SetLoadFields correctness)
- ├── 3.7 Table Key Analysis
+ ├── 3.7 Table Key Analysis ✅
  │    └── (detects unindexed filters)
- ├── 3.13 Temporary Table Detection
- │    └── (eliminates false positives)
- └── 4.5 Table-Centric View
-      └── (source-side table correlation)
+ ├── 3.13 Temporary Table Detection ✅
+ └── 4.5 Table-Centric View ✅
 
-3.6 CalcField Complexity
- └── 3.10 Table Relationship Graph (benefits from)
+3.6 CalcField Complexity ✅
+ └── 3.10 Table Relationship Graph ✅
 
-3.12 Event Publisher/Subscriber Catalog
- └── 2.7 Event Chain Tracer (enhanced by)
+3.12 Event Publisher/Subscriber Catalog ✅
+ └── 2.7 Event Chain Tracer ✅
 
-5.1 Performance History Store
- ├── 5.2 Automated Regression Alerting
- └── 5.3 Method Performance Timeline
+5.1 Performance History Store ✅
+ ├── 5.2 Automated Regression Alerting  ← UNBLOCKED
+ └── 5.3 Method Performance Timeline    ← UNBLOCKED
 
-1.5 Wall Clock Gap Analysis
+1.5 Wall Clock Gap Analysis ✅
  └── 2.5 Tail Latency Detection (shares infrastructure)
 
 1.2 Incomplete Measurement + 1.6 Jitter
- └── 6.1 Profile Confidence Score (enhanced by)
+ └── 6.1 Profile Confidence Score ✅
 
 F.1 Folded Stack Export
  └── F.3 Annotated Flamegraph
 
 2.8 Gini Coefficient
- └── 4.3 Profile Health Score (factor in)
+ └── 4.3 Profile Health Score ✅
 ```
 
 ---
@@ -667,10 +669,15 @@ F.1 Folded Stack Export
 |------|-------------------------------|
 | `src/core/processor.ts` | ~~1.3 built-in classification~~ :white_check_mark:, 1.2 incomplete flags |
 | `src/core/aggregator.ts` | ~~1.1 line hotspots, 1.5 gap analysis, 2.2 amplification, 2.3 efficiency, 2.9 cost per hit~~ :white_check_mark:, 1.4 app version, 4.7 object type view |
-| `src/core/patterns.ts` | ~~2.6 recursion detector~~ :white_check_mark:, 2.7 event chains |
-| `src/core/analyzer.ts` | ~~1.3 builtinSelfTime, 4.2 source deep link~~ :white_check_mark:, 2.1 critical path, 2.10 subtree drill-down, 5.5 pattern comparison |
-| `src/source/indexer.ts` | 3.3 variable types, 3.4 signatures, 3.6 CalcField formulas, 3.7 keys, 3.9 commit detection, 3.12 events, 3.13 temporary |
-| `src/source/source-patterns.ts` | Enhanced patterns with table names, temporary exclusion, CalcField severity |
-| `src/source/source-only-patterns.ts` | 3.9 commit-in-loop, 3.14 with statement |
-| `src/output/types.ts` | ~~builtinSelfTime~~ :white_check_mark:, new fields for future capabilities |
-| `src/mcp/tools/` | F.2 flamegraph tool, new MCP endpoints for drill-down queries |
+| `src/core/patterns.ts` | ~~2.6 recursion detector, 2.7 event chains~~ :white_check_mark: |
+| `src/core/analyzer.ts` | ~~1.3 builtinSelfTime, 4.2 source deep link, 2.1 critical path, 2.10 subtree drill-down, 5.5 pattern comparison, 6.1 confidence score, 4.3 health score~~ :white_check_mark: |
+| `src/core/drilldown.ts` | ~~2.10 subtree drill-down~~ :white_check_mark: (new file) |
+| `src/core/what-if.ts` | ~~4.1 "What If" estimator~~ :white_check_mark: (new file) |
+| `src/source/indexer.ts` | ~~3.3 variable types, 3.6 CalcField formulas, 3.9 commit detection, 3.12 events, 3.13 temporary, 3.5 field references, 3.7 keys~~ :white_check_mark:, 3.4 signatures |
+| `src/source/source-patterns.ts` | ~~Enhanced patterns with table names, temporary exclusion, CalcField severity, incomplete-setloadfields~~ :white_check_mark: |
+| `src/source/source-only-patterns.ts` | ~~3.9 commit-in-loop, unindexed-filter~~ :white_check_mark:, 3.14 with statement |
+| `src/source/table-graph.ts` | ~~3.10 Table Relationship Graph~~ :white_check_mark: (new file) |
+| `src/core/table-view.ts` | ~~4.5 Table-Centric View~~ :white_check_mark: (new file) |
+| `src/history/store.ts` | ~~5.1 Performance History Store~~ :white_check_mark: (new file) |
+| `src/output/types.ts` | ~~builtinSelfTime, confidence score, health score, critical path, per-instance stats, pattern comparison, table breakdown~~ :white_check_mark: |
+| `src/mcp/server.ts` | ~~F.2 flamegraph tool, history_list, history_trend tools~~ :white_check_mark: |

@@ -266,6 +266,30 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
       </tbody>
     </table>
   </div>` : ""}
+
+  ${result.tableBreakdown && result.tableBreakdown.length > 0 ? `<div class="section">
+    <h2>Table Breakdown</h2>
+    <table>
+      <thead>
+        <tr><th>Table</th><th>Self Time</th><th>Top Operation</th><th>Call Sites</th><th>SetLoadFields</th><th>Filtered</th></tr>
+      </thead>
+      <tbody>
+        ${result.tableBreakdown.map(t => {
+          const topOp = t.operationBreakdown.length > 0
+            ? `${escapeHtml(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
+            : "\u2014";
+          return `<tr>
+            <td>${escapeHtml(t.tableName)}</td>
+            <td>${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)</td>
+            <td>${topOp}</td>
+            <td>${t.callSiteCount}</td>
+            <td>${t.hasSetLoadFields ? "Yes" : "No"}</td>
+            <td>${t.hasFilters ? "Yes" : "No"}</td>
+          </tr>`;
+        }).join("\n")}
+      </tbody>
+    </table>
+  </div>` : ""}
 </body>
 </html>`;
 }

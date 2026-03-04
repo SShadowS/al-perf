@@ -114,11 +114,20 @@ export class HistoryStore {
   }
 
   /**
+   * Resolve an entry file path, guarding against path traversal.
+   */
+  private resolveEntryPath(id: string): string | null {
+    const filePath = resolve(this.storeDir, `${id}.json`);
+    if (!filePath.startsWith(this.storeDir)) return null;
+    return filePath;
+  }
+
+  /**
    * Get a specific entry by ID.
    */
   get(id: string): HistoryEntry | null {
-    const filePath = join(this.storeDir, `${id}.json`);
-    if (!existsSync(filePath)) return null;
+    const filePath = this.resolveEntryPath(id);
+    if (!filePath || !existsSync(filePath)) return null;
     try {
       return JSON.parse(readFileSync(filePath, "utf-8"));
     } catch {
@@ -130,8 +139,8 @@ export class HistoryStore {
    * Delete a specific entry.
    */
   delete(id: string): boolean {
-    const filePath = join(this.storeDir, `${id}.json`);
-    if (!existsSync(filePath)) return false;
+    const filePath = this.resolveEntryPath(id);
+    if (!filePath || !existsSync(filePath)) return false;
     rmSync(filePath);
     return true;
   }

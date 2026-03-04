@@ -26,7 +26,7 @@ export function buildTableBreakdown(
     if (isIdleNode(node)) continue;
     const { objectType, objectName } = node.applicationDefinition;
     // Profile nodes that represent table operations have objectType like "TableData"
-    if (!objectType.toLowerCase().includes("table")) continue;
+    if (!objectType || !objectType.toLowerCase().includes("table")) continue;
 
     const tableName = objectName || "(Unknown Table)";
     let entry = tableMap.get(tableName);

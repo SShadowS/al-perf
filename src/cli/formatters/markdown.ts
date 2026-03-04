@@ -133,7 +133,26 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
     lines.push("");
   }
 
-  // 6. AI Analysis (optional)
+  // 6. Table Breakdown
+  if (result.tableBreakdown && result.tableBreakdown.length > 0) {
+    lines.push("## Table Breakdown");
+    lines.push("");
+    lines.push("| Table | Self Time | Top Operation | Call Sites | SetLoadFields | Filtered |");
+    lines.push("| --- | --- | --- | --- | --- | --- |");
+
+    for (const t of result.tableBreakdown) {
+      const topOp = t.operationBreakdown.length > 0
+        ? `${t.operationBreakdown[0].operation} (${formatTime(t.operationBreakdown[0].selfTime)})`
+        : "-";
+      lines.push(
+        `| ${t.tableName} | ${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%) | ${topOp} | ${t.callSiteCount} | ${t.hasSetLoadFields ? "Yes" : "No"} | ${t.hasFilters ? "Yes" : "No"} |`,
+      );
+    }
+
+    lines.push("");
+  }
+
+  // 7. AI Analysis (optional)
   if (result.explanation) {
     lines.push("## AI Analysis");
     lines.push("");
