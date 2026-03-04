@@ -45,6 +45,20 @@ export interface MethodBreakdown {
   efficiencyScore: number;        // selfTime / totalTime (0.0 = pure orchestrator, 1.0 = all own work)
   callAmplification?: number;     // max(child.hitCount / parent.hitCount) — how much this method fans out vs caller
   sourceLocation?: SourceLocation; // Source file path and line range (when source correlation available)
+  /** Per-call statistics across individual instances (instrumentation only) */
+  instanceStats?: MethodInstanceStats;
+}
+
+export interface MethodInstanceStats {
+  /** Number of individual call instances */
+  instanceCount: number;
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  p95: number;
+  p99: number;
+  stdDev: number;
 }
 
 export interface SourceLocation {

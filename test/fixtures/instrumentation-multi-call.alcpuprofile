@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": { "functionName": "OnRun", "scriptId": "CU_50100", "url": "", "lineNumber": 10, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [2, 3, 4, 5, 6],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "My Processor", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 1,
+      "startTime": 63791355211000000,
+      "endTime": 63791355212000000,
+      "positionTicks": [{ "line": 10, "column": 0, "ticks": 1, "executionTime": 100000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 2,
+      "callFrame": { "functionName": "ProcessLine", "scriptId": "CU_50100", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "My Processor", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2,
+      "startTime": 63791355211100000,
+      "endTime": 63791355211200000,
+      "positionTicks": [{ "line": 25, "column": 0, "ticks": 1, "executionTime": 50000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 3,
+      "callFrame": { "functionName": "ProcessLine", "scriptId": "CU_50100", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "My Processor", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2,
+      "startTime": 63791355211200000,
+      "endTime": 63791355211350000,
+      "positionTicks": [{ "line": 25, "column": 0, "ticks": 1, "executionTime": 100000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 4,
+      "callFrame": { "functionName": "ProcessLine", "scriptId": "CU_50100", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "My Processor", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2,
+      "startTime": 63791355211350000,
+      "endTime": 63791355211550000,
+      "positionTicks": [{ "line": 25, "column": 0, "ticks": 1, "executionTime": 200000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 5,
+      "callFrame": { "functionName": "ProcessLine", "scriptId": "CU_50100", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "My Processor", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2,
+      "startTime": 63791355211550000,
+      "endTime": 63791355211600000,
+      "positionTicks": [{ "line": 25, "column": 0, "ticks": 1, "executionTime": 30000 }],
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 6,
+      "callFrame": { "functionName": "ProcessLine", "scriptId": "CU_50100", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "My Processor", "objectId": 50100 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2,
+      "startTime": 63791355211600000,
+      "endTime": 63791355211900000,
+      "positionTicks": [{ "line": 25, "column": 0, "ticks": 1, "executionTime": 300000 }],
+      "isBuiltinCodeUnitCall": false
+    }
+  ],
+  "startTime": 63791355211000000,
+  "endTime": 63791355212000000,
+  "sampleExecutionTimes": [100000, 50000, 100000, 200000, 30000, 300000]
+}

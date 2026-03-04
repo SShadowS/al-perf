@@ -145,6 +145,30 @@ describe("aggregateByMethod", () => {
     expect(onRun.callAmplification).toBeUndefined();
   });
 
+  test("computes instanceStats for instrumentation profiles with multiple calls", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/instrumentation-multi-call.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const processLine = methods.find(m => m.functionName === "ProcessLine")!;
+    expect(processLine.instanceStats).toBeDefined();
+    expect(processLine.instanceStats!.instanceCount).toBe(5);
+    expect(processLine.instanceStats!.min).toBe(30000);
+    expect(processLine.instanceStats!.max).toBe(300000);
+    expect(processLine.instanceStats!.median).toBe(100000);
+    expect(processLine.instanceStats!.mean).toBeCloseTo(136000, -2);
+  });
+
+  test("omits instanceStats for sampling profiles", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    for (const m of methods) {
+      expect(m.instanceStats).toBeUndefined();
+    }
+  });
+
   test("wallClockTime is undefined for sampling profiles", async () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);

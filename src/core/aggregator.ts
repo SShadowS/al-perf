@@ -177,6 +177,49 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
     entry.lineHotspots = sorted;
   }
 
+  // Compute per-instance statistics (instrumentation only)
+  // Group individual node selfTimes by method key
+  const instanceMap = new Map<string, number[]>();
+  for (const node of profile.allNodes) {
+    if (isIdleNode(node) || !node.positionTicks) continue;
+    const { functionName } = node.callFrame;
+    const { objectType, objectId } = node.applicationDefinition;
+    const key = `${functionName}_${objectType}_${objectId}`;
+    let arr = instanceMap.get(key);
+    if (!arr) {
+      arr = [];
+      instanceMap.set(key, arr);
+    }
+    arr.push(node.selfTime);
+  }
+
+  for (const [key, selfTimes] of instanceMap) {
+    const entry = map.get(key);
+    if (!entry || selfTimes.length < 2) continue;
+
+    const sorted = [...selfTimes].sort((a, b) => a - b);
+    const n = sorted.length;
+    const sum = sorted.reduce((s, v) => s + v, 0);
+    const mean = sum / n;
+    const median = n % 2 === 0
+      ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2
+      : sorted[Math.floor(n / 2)];
+    const p95idx = Math.min(Math.ceil(n * 0.95) - 1, n - 1);
+    const p99idx = Math.min(Math.ceil(n * 0.99) - 1, n - 1);
+    const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+
+    entry.instanceStats = {
+      instanceCount: n,
+      min: sorted[0],
+      max: sorted[n - 1],
+      mean,
+      median,
+      p95: sorted[p95idx],
+      p99: sorted[p99idx],
+      stdDev: Math.sqrt(variance),
+    };
+  }
+
   // Sort by selfTime descending
   return Array.from(map.values()).sort((a, b) => b.selfTime - a.selfTime);
 }
