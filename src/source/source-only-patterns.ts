@@ -72,9 +72,16 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
         }
       }
 
+      // Collect temporary variable names
+      const tempVars = new Set<string>(
+        member.features.variables
+          .filter(v => v.isTemporary)
+          .map(v => v.name.toLowerCase()),
+      );
+
       for (const op of findOps) {
         const varLower = op.recordVariable?.toLowerCase() ?? "";
-        if (varLower && !filteredVars.has(varLower)) {
+        if (varLower && !filteredVars.has(varLower) && !tempVars.has(varLower)) {
           patterns.push({
             id: "unfiltered-findset",
             severity: "warning",

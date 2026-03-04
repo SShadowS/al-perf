@@ -8,8 +8,8 @@ describe("source-map functionality", () => {
   it("should build source index with correct counts", async () => {
     const index = await buildSourceIndex(fixturesSourceDir);
 
-    expect(index.files.length).toBe(4);
-    expect(index.objects.size).toBe(4);
+    expect(index.files.length).toBe(5);
+    expect(index.objects.size).toBe(5);
 
     let procedureCount = 0;
     let triggerCount = 0;

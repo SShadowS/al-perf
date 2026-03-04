@@ -1,7 +1,18 @@
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
-import type { SourceIndex, RecordOpInfo } from "../types/source-index.js";
+import type { SourceIndex, RecordOpInfo, VariableInfo } from "../types/source-index.js";
 import { matchToSource } from "./locator.js";
+
+/**
+ * Check if a record operation targets a temporary variable.
+ */
+function isTemporaryOp(op: RecordOpInfo, variables: VariableInfo[]): boolean {
+  if (!op.recordVariable) return false;
+  const variable = variables.find(
+    v => v.name.toLowerCase() === op.recordVariable!.toLowerCase()
+  );
+  return variable?.isTemporary === true;
+}
 
 /**
  * Format a method label for use in involvedMethods arrays.
@@ -30,7 +41,7 @@ export function detectCalcFieldsInLoop(
     if (!match) continue;
 
     const opsInLoop = match.features.recordOpsInLoops.filter(
-      (op) => op.type === "CalcFields" || op.type === "CalcSums",
+      (op) => (op.type === "CalcFields" || op.type === "CalcSums") && !isTemporaryOp(op, match.features.variables),
     );
 
     for (const op of opsInLoop) {
@@ -71,7 +82,7 @@ export function detectModifyInLoop(
     if (!match) continue;
 
     const opsInLoop = match.features.recordOpsInLoops.filter(
-      (op) => op.type === "Modify" || op.type === "ModifyAll",
+      (op) => (op.type === "Modify" || op.type === "ModifyAll") && !isTemporaryOp(op, match.features.variables),
     );
 
     for (const op of opsInLoop) {
@@ -113,7 +124,7 @@ export function detectRecordOpInLoop(
     if (!match) continue;
 
     const opsInLoop = match.features.recordOpsInLoops.filter((op) =>
-      LOOKUP_OPS.has(op.type),
+      LOOKUP_OPS.has(op.type) && !isTemporaryOp(op, match.features.variables),
     );
 
     for (const op of opsInLoop) {

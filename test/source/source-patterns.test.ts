@@ -81,6 +81,41 @@ describe("detectMissingSetLoadFields", () => {
   });
 });
 
+describe("temporary table exclusion", () => {
+  it("skips CalcFields-in-loop for temporary record variables", () => {
+    const method = makeMethod({
+      functionName: "ProcessWithTempTable",
+      objectId: 50400,
+      objectName: "Temp Table Patterns",
+    });
+    const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+    // Should NOT flag the temporary table operation
+    const tempPattern = patterns.find(p => p.title.includes("ProcessWithTempTable"));
+    expect(tempPattern).toBeUndefined();
+  });
+
+  it("still flags CalcFields-in-loop for real record variables", () => {
+    const method = makeMethod({
+      functionName: "ProcessWithRealTable",
+      objectId: 50400,
+      objectName: "Temp Table Patterns",
+    });
+    const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+    expect(patterns.length).toBeGreaterThan(0);
+  });
+
+  it("skips Modify-in-loop for temporary record variables", () => {
+    const method = makeMethod({
+      functionName: "ProcessWithTempTable",
+      objectId: 50400,
+      objectName: "Temp Table Patterns",
+    });
+    const patterns = detectModifyInLoop([method], sourceIndex);
+    const tempPattern = patterns.find(p => p.title.includes("ProcessWithTempTable"));
+    expect(tempPattern).toBeUndefined();
+  });
+});
+
 describe("runSourceDetectors", () => {
   it("should run all source detectors and return sorted results", () => {
     const methods = [
