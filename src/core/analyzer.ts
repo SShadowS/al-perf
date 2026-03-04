@@ -4,6 +4,7 @@ import { aggregateByApp, aggregateByMethod, aggregateByObject } from "./aggregat
 import { runDetectors } from "./patterns.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceDetectors } from "../source/source-patterns.js";
+import { matchAllHotspots } from "../source/locator.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { SourceIndex } from "../types/source-index.js";
 import type { AnalysisResult, ComparisonResult, MethodDelta } from "../output/types.js";
@@ -93,6 +94,22 @@ export async function analyzeProfile(
   // Apply top limit
   if (options?.top !== undefined && options.top > 0) {
     hotspots = hotspots.slice(0, options.top);
+  }
+
+  // Attach source locations to hotspot methods
+  if (sourceIndex) {
+    const matches = matchAllHotspots(hotspots, sourceIndex);
+    for (const h of hotspots) {
+      const key = `${h.functionName}_${h.objectType}_${h.objectId}`;
+      const match = matches.get(key);
+      if (match) {
+        h.sourceLocation = {
+          filePath: match.file,
+          lineStart: match.lineStart,
+          lineEnd: match.lineEnd,
+        };
+      }
+    }
   }
 
   // Build summary
