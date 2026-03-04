@@ -88,6 +88,21 @@ describe("aggregateByMethod", () => {
     }
   });
 
+  test("aggregates line-level hotspots from positionTicks", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/instrumentation-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const processLine = methods.find(m => m.functionName === "ProcessLine")!;
+    // ProcessLine has positionTicks: [{line:25, executionTime:200000}, {line:30, executionTime:150000}]
+    expect(processLine.lineHotspots).toBeDefined();
+    expect(processLine.lineHotspots).toHaveLength(2);
+    expect(processLine.lineHotspots![0].line).toBe(25);
+    expect(processLine.lineHotspots![0].executionTime).toBe(200000);
+    expect(processLine.lineHotspots![1].line).toBe(30);
+    expect(processLine.lineHotspots![1].executionTime).toBe(150000);
+  });
+
   test("wallClockTime is undefined for sampling profiles", async () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);

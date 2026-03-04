@@ -127,6 +127,37 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
     }
   }
 
+  // Aggregate line-level hotspots from positionTicks
+  const lineMap = new Map<string, Map<number, number>>(); // methodKey -> (line -> executionTime)
+  for (const node of profile.allNodes) {
+    if (isIdleNode(node) || !node.positionTicks?.length) continue;
+    const { functionName } = node.callFrame;
+    const { objectType, objectId } = node.applicationDefinition;
+    const key = `${functionName}_${objectType}_${objectId}`;
+
+    let lines = lineMap.get(key);
+    if (!lines) {
+      lines = new Map();
+      lineMap.set(key, lines);
+    }
+    for (const pt of node.positionTicks) {
+      lines.set(pt.line, (lines.get(pt.line) ?? 0) + pt.executionTime);
+    }
+  }
+
+  for (const [key, lines] of lineMap) {
+    const entry = map.get(key);
+    if (!entry) continue;
+    const sorted = Array.from(lines.entries())
+      .map(([line, executionTime]) => ({
+        line,
+        executionTime,
+        executionTimePercent: entry.selfTime > 0 ? (executionTime / entry.selfTime) * 100 : 0,
+      }))
+      .sort((a, b) => b.executionTime - a.executionTime);
+    entry.lineHotspots = sorted;
+  }
+
   // Sort by selfTime descending
   return Array.from(map.values()).sort((a, b) => b.selfTime - a.selfTime);
 }

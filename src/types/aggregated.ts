@@ -39,4 +39,12 @@ export interface MethodBreakdown {
   gapTime?: number;
   // Whether this is a built-in BC code unit (vs custom/extension code)
   isBuiltin?: boolean;
+  // Per-line timing data aggregated from positionTicks (instrumentation only)
+  lineHotspots?: LineHotspot[];
+}
+
+export interface LineHotspot {
+  line: number;
+  executionTime: number;        // microseconds
+  executionTimePercent: number;  // % of this method's selfTime
 }
