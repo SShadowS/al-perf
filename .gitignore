@@ -5,7 +5,9 @@ dist/
 *.wasm
 blog.md
 docs/blog/
+docs/plans/
 hint-report/
 web/stats.json
 exampledata/
+CLAUDE.md
 .al-profile-cache/
