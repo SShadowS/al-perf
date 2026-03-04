@@ -73,6 +73,35 @@ export interface PatternDelta {
   impact: number;
 }
 
+export interface SubtreeDrillDown {
+  method: {
+    functionName: string;
+    objectType: string;
+    objectId: number;
+    appName: string;
+    selfTime: number;
+    totalTime: number;
+    totalTimePercent: number;
+    hitCount: number;
+  };
+  breakdown: {
+    selfTimeInMethod: number;
+    selfTimePercent: number;
+    childContributions: ChildContribution[];
+  };
+}
+
+export interface ChildContribution {
+  functionName: string;
+  objectType: string;
+  objectId: number;
+  appName: string;
+  totalTime: number;
+  /** Percentage of parent method's totalTime */
+  contributionPercent: number;
+  hitCount: number;
+}
+
 export interface MethodDelta {
   functionName: string;
   objectType: string;

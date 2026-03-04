@@ -4,6 +4,7 @@ export { processProfile } from "./core/processor.js";
 export { aggregateByApp, aggregateByMethod, aggregateByObject } from "./core/aggregator.js";
 export { runDetectors } from "./core/patterns.js";
 export { analyzeProfile, compareProfiles } from "./core/analyzer.js";
+export { drilldownMethod } from "./core/drilldown.js";
 
 // Source correlation
 export { buildSourceIndex, indexALFile } from "./source/indexer.js";
@@ -30,7 +31,7 @@ export type { McpServerOptions } from "./mcp/server.js";
 // Types
 export type { RawProfile, RawProfileNode, ParsedProfile, ProfileType } from "./types/profile.js";
 export type { ProcessedProfile, ProcessedNode } from "./types/processed.js";
-export type { AnalysisResult, ComparisonResult, MethodDelta } from "./output/types.js";
+export type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta, CriticalPathStep, SubtreeDrillDown, ChildContribution } from "./output/types.js";
 export type { AppBreakdown, ObjectBreakdown, MethodBreakdown } from "./types/aggregated.js";
 export type { DetectedPattern, PatternSeverity } from "./types/patterns.js";
 export type {

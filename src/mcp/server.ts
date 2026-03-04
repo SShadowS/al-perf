@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { analyzeProfile, compareProfiles, formatTime } from "../core/analyzer.js";
+import { drilldownMethod } from "../core/drilldown.js";
 import { parseProfile } from "../core/parser.js";
 import { processProfile } from "../core/processor.js";
 import { aggregateByMethod } from "../core/aggregator.js";
@@ -339,6 +340,39 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           })),
         };
 
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- drilldown_method ---
+  server.registerTool(
+    "drilldown_method",
+    {
+      title: "Drill Down Method",
+      description: "Deep dive into a specific method from an AL CPU profile. Shows how its totalTime is distributed across its own selfTime and child method contributions. Use objectId to disambiguate if multiple objects have the same method name.",
+      inputSchema: {
+        profilePath: z.string().describe("Path to the .alcpuprofile file"),
+        method: z.string().describe("Method/function name to drill down into"),
+        objectId: z.number().int().optional().describe("Object ID to disambiguate when multiple objects have the same method"),
+      },
+    },
+    async ({ profilePath, method, objectId }) => {
+      try {
+        const result = await drilldownMethod(profilePath, method, objectId);
+        if (!result) {
+          return {
+            content: [{ type: "text" as const, text: `Error: Method "${method}" not found in profile.` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         };
