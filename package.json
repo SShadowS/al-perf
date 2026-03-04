@@ -29,7 +29,13 @@
     "web": "bun run web/server.ts"
   },
   "keywords": ["business-central", "al", "performance", "profiler", "mcp", "alcpuprofile"],
-  "license": "MIT",
+  "license": "GPL-3.0-only",
+  "author": "SShadowS",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SShadowS/al-perf.git"
+  },
+  "homepage": "https://github.com/SShadowS/al-perf",
   "engines": {
     "bun": ">=1.0.0"
   },

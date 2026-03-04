@@ -60,14 +60,14 @@ describe("formatAnalysisHtml", () => {
     const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     result.explanation = "This profile shows significant time in ProcessLine.";
     const output = formatAnalysisHtml(result);
-    expect(output).toContain("AI Analysis");
+    expect(output).toContain("section explanation");
     expect(output).toContain("This profile shows significant time in ProcessLine.");
   });
 
   test("omits explanation when not present", async () => {
     const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const output = formatAnalysisHtml(result);
-    expect(output).not.toContain("AI Analysis");
+    expect(output).not.toContain("section explanation");
   });
 
   test("escapes HTML in dynamic content", async () => {

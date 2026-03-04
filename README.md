@@ -1,7 +1,7 @@
 # al-perf
 
 [![npm version](https://img.shields.io/npm/v/al-perf)](https://www.npmjs.com/package/al-perf)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Built with Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1?logo=bun)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
@@ -32,7 +32,7 @@ Works as a **CLI**, **web app**, **MCP server**, or **library**.
 bun add al-perf
 
 # From source
-git clone https://github.com/anthropics/al-perf.git
+git clone https://github.com/SShadowS/al-perf.git
 cd al-perf
 bun install
 ```
@@ -145,7 +145,7 @@ docker run -p 3010:3010 -e ANTHROPIC_API_KEY=sk-ant-... al-perf
 | Pattern | Severity | Description |
 |---------|----------|-------------|
 | High Hit Count | warning | Methods called excessively |
-| Repeated Siblings | warning | Same method called repeatedly at same call site |
+| Repeated Siblings | critical | Same method called repeatedly at same call site |
 | Single Method Dominance | critical | One method consumes >50% of total time |
 | Deep Call Stack | warning | Call chains deeper than 30 levels |
 | Event Subscriber Hotspot | warning | Event subscribers consuming significant time |
@@ -180,4 +180,4 @@ bun run web          # Start the web server
 
 ## License
 
-[MIT](LICENSE)
+[GNU GPLv3](LICENSE)

@@ -84,7 +84,7 @@ export function registerAnalyzeCommand(program: Command) {
         }
       }
 
-      console.log(formatAnalysis(result, opts.format as OutputFormat));
+      process.stdout.write(formatAnalysis(result, opts.format as OutputFormat) + "\n");
 
       // Clean up temp dir if we extracted from companion zip
       if (cleanup) await cleanup();

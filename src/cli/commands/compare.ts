@@ -17,6 +17,6 @@ export function registerCompareCommand(program: Command) {
           threshold: parseFloat(opts.threshold) * 1000,
         }),
       );
-      console.log(formatComparison(result, opts.format as OutputFormat));
+      process.stdout.write(formatComparison(result, opts.format as OutputFormat) + "\n");
     });
 }

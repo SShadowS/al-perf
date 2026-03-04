@@ -75,9 +75,9 @@ export async function analyzeProfile(
   // Filter out IdleTime from hotspots
   let hotspots = methods.filter((m) => !isIdle(m));
 
-  // Apply threshold filter
+  // Apply threshold filter (threshold is in microseconds)
   if (options?.threshold !== undefined && options.threshold > 0) {
-    hotspots = hotspots.filter((m) => m.selfTimePercent >= options.threshold!);
+    hotspots = hotspots.filter((m) => m.selfTime >= options.threshold!);
   }
 
   // Apply app filter
@@ -235,6 +235,14 @@ export async function compareProfiles(
   // Sort new/removed by selfTime descending
   newMethods.sort((a, b) => b.selfTime - a.selfTime);
   removedMethods.sort((a, b) => b.selfTime - a.selfTime);
+
+  // Filter by threshold if specified
+  const threshold = options?.threshold;
+  if (threshold !== undefined && threshold > 0) {
+    const filterByThreshold = (d: MethodDelta) => Math.abs(d.deltaSelfTime) >= threshold;
+    regressions.splice(0, regressions.length, ...regressions.filter(filterByThreshold));
+    improvements.splice(0, improvements.length, ...improvements.filter(filterByThreshold));
+  }
 
   // Apply top limit if specified
   const top = options?.top;

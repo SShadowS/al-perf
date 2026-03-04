@@ -8,13 +8,14 @@ import { sourceMapCommand } from "./commands/source-map.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerGateCommand } from "./commands/gate.js";
 import { registerAnalyzeSourceCommand } from "./commands/analyze-source.js";
+import pkg from "../../package.json";
 
 const program = new Command();
 
 program
   .name("al-profile")
   .description("Analyze Business Central .alcpuprofile files")
-  .version("0.1.0");
+  .version(pkg.version);
 
 registerAnalyzeCommand(program);
 registerHotspotsCommand(program);

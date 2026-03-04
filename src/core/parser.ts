@@ -15,6 +15,13 @@ export async function parseProfile(filePath: string): Promise<ParsedProfile> {
 }
 
 export function parseProfileFromRaw(raw: RawProfile): ParsedProfile {
+  if (!raw || !Array.isArray(raw.nodes) || raw.nodes.length === 0) {
+    throw new Error("Invalid profile: missing or empty 'nodes' array");
+  }
+  if (typeof raw.startTime !== "number" || typeof raw.endTime !== "number") {
+    throw new Error("Invalid profile: missing 'startTime' or 'endTime'");
+  }
+
   const type = detectProfileType(raw);
   const nodeMap = new Map<number, RawProfileNode>();
   for (const node of raw.nodes) {

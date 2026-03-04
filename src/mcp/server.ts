@@ -8,6 +8,7 @@ import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
 import { findCompanionZip, extractCompanionZip } from "../source/zip-extractor.js";
 import type { AnalysisResult } from "../output/types.js";
+import pkg from "../../package.json";
 
 export interface McpServerOptions {
   defaultSourcePath?: string;
@@ -16,7 +17,7 @@ export interface McpServerOptions {
 export function createMcpServer(options?: McpServerOptions): McpServer {
   const server = new McpServer({
     name: "al-profiler",
-    version: "0.1.0",
+    version: pkg.version,
   });
 
   let lastAnalysis: AnalysisResult | null = null;

@@ -14,6 +14,6 @@ export function registerHotspotsCommand(program: Command) {
         top: parseInt(opts.top, 10),
         includePatterns: false,
       });
-      console.log(formatAnalysis(result, opts.format as OutputFormat));
+      process.stdout.write(formatAnalysis(result, opts.format as OutputFormat) + "\n");
     });
 }

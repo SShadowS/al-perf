@@ -5,3 +5,6 @@ dist/
 *.wasm
 blog.md
 docs/blog/
+hint-report/
+web/stats.json
+.al-profile-cache/

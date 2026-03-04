@@ -82,7 +82,7 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     .join("\n");
 
   const explanationHtml = result.explanation
-    ? marked.parse(result.explanation)
+    ? marked.parse(result.explanation.replace(/<[^>]*>/g, ""))
     : "";
 
   const explanationSection = explanationHtml
