@@ -1,6 +1,6 @@
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
-import type { SourceIndex, RecordOpInfo, VariableInfo } from "../types/source-index.js";
+import type { SourceIndex, RecordOpInfo, VariableInfo, TableFieldInfo } from "../types/source-index.js";
 import { matchToSource } from "./locator.js";
 
 /**
@@ -21,9 +21,45 @@ function methodLabel(m: MethodBreakdown): string {
   return `${m.functionName} (${m.objectType} ${m.objectId})`;
 }
 
+/** Aggregation CalcFormula types that cause full table scans */
+const AGGREGATION_CALC_TYPES = new Set<TableFieldInfo["calcFormulaType"]>([
+  "Sum", "Count", "Average", "Min", "Max", "Exist",
+]);
+
+/**
+ * Determine CalcFields severity based on table's CalcFormula types.
+ * Tables with Sum/Count/Average/Min/Max/Exist FlowFields → critical (aggregation = expensive).
+ * Tables with only Lookup FlowFields → warning (single-row, less severe).
+ * Unknown tables (not in source index) → critical (conservative default).
+ */
+function calcFieldSeverity(
+  recordVariable: string | undefined,
+  variables: VariableInfo[],
+  index: SourceIndex,
+): "critical" | "warning" {
+  if (!recordVariable) return "critical";
+
+  const variable = variables.find(
+    v => v.name.toLowerCase() === recordVariable.toLowerCase()
+  );
+  if (!variable?.isRecord || !variable.tableName) return "critical";
+
+  // Find the table in the source index by name
+  for (const obj of index.objects.values()) {
+    if (obj.objectType === "Table" && obj.objectName === variable.tableName) {
+      const calcFields = obj.fields.filter(f => f.calcFormulaType);
+      if (calcFields.length === 0) return "critical"; // No CalcFormula info, conservative
+      const hasAggregation = calcFields.some(f => AGGREGATION_CALC_TYPES.has(f.calcFormulaType));
+      return hasAggregation ? "critical" : "warning";
+    }
+  }
+
+  return "critical"; // Table not found in index, conservative default
+}
+
 /**
  * Detect CalcFields/CalcSums inside loops.
- * Severity: critical.
+ * Severity: critical for aggregation CalcFormulas (Sum/Count/Average), warning for Lookup-only.
  */
 export function detectCalcFieldsInLoop(
   methods: MethodBreakdown[],
@@ -45,16 +81,19 @@ export function detectCalcFieldsInLoop(
     );
 
     for (const op of opsInLoop) {
+      const severity = calcFieldSeverity(op.recordVariable, match.features.variables, index);
       const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
       patterns.push({
         id: "calcfields-in-loop",
-        severity: "critical",
+        severity,
         title: `${op.type} inside loop in ${method.functionName}`,
         description: `${op.type}()${recVar} is called inside a loop at line ${op.line} in ${match.file}. Each iteration triggers a separate SQL query, causing N+1 query performance issues.`,
         impact: method.selfTime,
         involvedMethods: [methodLabel(method)],
         evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
-        suggestion: "Move CalcFields() before the loop, or use SetLoadFields() to pre-load only the fields you need.",
+        suggestion: severity === "critical"
+          ? "Move CalcFields() before the loop, or use SetLoadFields() to pre-load only the fields you need. This table has aggregation FlowFields (Sum/Count) which are especially expensive."
+          : "Move CalcFields() before the loop, or use SetLoadFields(). This table has Lookup FlowFields which are less expensive but still cause N+1 queries.",
       });
     }
   }

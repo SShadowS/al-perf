@@ -67,11 +67,33 @@ test("detects EventSubscriber attribute on procedures", async () => {
   expect(normal!.isEventSubscriber).toBe(false);
 });
 
+test("extracts CalcFormula fields from table declarations", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "Table50200.al"), fixturesDir);
+  expect(result).toBeDefined();
+  expect(result!.fields).toBeDefined();
+  expect(result!.fields.length).toBe(5);
+
+  const totalAmount = result!.fields.find(f => f.name === "Total Amount");
+  expect(totalAmount).toBeDefined();
+  expect(totalAmount!.calcFormulaType).toBe("Sum");
+
+  const customerName = result!.fields.find(f => f.name === "Customer Name");
+  expect(customerName).toBeDefined();
+  expect(customerName!.calcFormulaType).toBe("Lookup");
+
+  const lineCount = result!.fields.find(f => f.name === "Line Count");
+  expect(lineCount).toBeDefined();
+  expect(lineCount!.calcFormulaType).toBe("Count");
+
+  const noField = result!.fields.find(f => f.name === "No.");
+  expect(noField!.calcFormulaType).toBeUndefined();
+});
+
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);
-    expect(index.files.length).toBe(5);
-    expect(index.objects.size).toBe(5);
+    expect(index.files.length).toBe(8);
+    expect(index.objects.size).toBe(8);
 
     const procList = index.procedures.get("processrecords");
     expect(procList).toBeDefined();

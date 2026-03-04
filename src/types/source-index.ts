@@ -32,6 +32,16 @@ export interface ObjectInfo {
   file: ALFileInfo;
   procedures: ProcedureInfo[];
   triggers: TriggerInfo[];
+  fields: TableFieldInfo[];
+}
+
+export interface TableFieldInfo {
+  id: number;
+  name: string;
+  dataType: string;
+  calcFormulaType?: "Sum" | "Lookup" | "Count" | "Average" | "Min" | "Max" | "Exist";
+  calcFormulaTable?: string;
+  line: number;
 }
 
 export interface ProcedureInfo {

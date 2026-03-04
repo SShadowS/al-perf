@@ -116,6 +116,30 @@ describe("temporary table exclusion", () => {
   });
 });
 
+describe("CalcField severity graduation", () => {
+  it("keeps critical severity when table has Sum CalcFormula fields", () => {
+    const method = makeMethod({
+      functionName: "ProcessWithSumCalcField",
+      objectId: 50500,
+      objectName: "CalcField Loop Test",
+    });
+    const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns[0].severity).toBe("critical");
+  });
+
+  it("downgrades to warning when table only has Lookup CalcFormula fields", () => {
+    const method = makeMethod({
+      functionName: "ProcessWithLookupCalcFieldOnly",
+      objectId: 50500,
+      objectName: "CalcField Loop Test",
+    });
+    const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns[0].severity).toBe("warning");
+  });
+});
+
 describe("runSourceDetectors", () => {
   it("should run all source detectors and return sorted results", () => {
     const methods = [

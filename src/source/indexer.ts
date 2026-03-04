@@ -14,6 +14,7 @@ import type {
   RecordOpType,
   DangerousCallInfo,
   VariableInfo,
+  TableFieldInfo,
 } from "../types/source-index.js";
 
 const RECORD_OPS: Set<string> = new Set([
@@ -487,6 +488,88 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
   return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, variables: [], nestingDepth };
 }
 
+const CALC_FORMULA_TYPE_MAP: Record<string, TableFieldInfo["calcFormulaType"]> = {
+  sum_formula: "Sum",
+  lookup_formula: "Lookup",
+  count_formula: "Count",
+  average_formula: "Average",
+  min_formula: "Min",
+  max_formula: "Max",
+  exist_formula: "Exist",
+};
+
+/**
+ * Extract table field declarations from a table declaration node.
+ */
+function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
+  const fields: TableFieldInfo[] = [];
+
+  function walk(node: SyntaxNode) {
+    if (node.type === "field_declaration") {
+      let id = 0;
+      let name = "";
+      let dataType = "";
+      let calcFormulaType: TableFieldInfo["calcFormulaType"] | undefined;
+      let calcFormulaTable: string | undefined;
+
+      for (const child of node.namedChildren) {
+        if (child.type === "integer" && id === 0) {
+          id = parseInt(child.text, 10);
+        } else if (child.type === "quoted_identifier" && !name) {
+          name = stripQuotes(child.text);
+        } else if (child.type === "type_specification") {
+          dataType = child.text;
+        } else if (child.type === "calc_formula_property") {
+          // Find the formula type child
+          for (const formulaChild of child.namedChildren) {
+            if (formulaChild.type in CALC_FORMULA_TYPE_MAP) {
+              calcFormulaType = CALC_FORMULA_TYPE_MAP[formulaChild.type];
+              // Extract referenced table from calc_field_ref or table_reference
+              for (const refChild of formulaChild.namedChildren) {
+                if (refChild.type === "calc_field_ref") {
+                  // "Sales Line".Amount -> extract "Sales Line"
+                  const parts = refChild.text.split(".");
+                  if (parts.length > 0) {
+                    calcFormulaTable = stripQuotes(parts[0]);
+                  }
+                } else if (refChild.type === "table_reference") {
+                  calcFormulaTable = stripQuotes(refChild.text);
+                } else if (refChild.type === "member_expression") {
+                  // Lookup: Customer.Name -> extract "Customer"
+                  const obj = refChild.childForFieldName("object") ?? refChild.namedChildren[0];
+                  if (obj) {
+                    calcFormulaTable = stripQuotes(obj.text);
+                  }
+                }
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      if (name) {
+        fields.push({
+          id,
+          name,
+          dataType,
+          calcFormulaType,
+          calcFormulaTable,
+          line: node.startPosition.row + 1,
+        });
+      }
+      return; // Don't recurse into field_declaration children
+    }
+
+    for (const child of node.namedChildren) {
+      walk(child);
+    }
+  }
+
+  walk(declNode);
+  return fields;
+}
+
 /**
  * Parse a single AL file and return its ObjectInfo.
  */
@@ -589,6 +672,11 @@ export async function indexALFile(
 
   walkForMembers(declNode);
 
+  // Extract table fields (only for table/tableextension declarations)
+  const fields = (objectType === "Table" || objectType === "TableExtension")
+    ? extractTableFields(declNode)
+    : [];
+
   return {
     objectType,
     objectName,
@@ -596,6 +684,7 @@ export async function indexALFile(
     file: fileInfo,
     procedures,
     triggers,
+    fields,
   };
 }
 
