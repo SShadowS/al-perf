@@ -114,4 +114,12 @@ describe("processProfile", () => {
     expect(idleNode.selfTimePercent).toBe(0);
     expect(idleNode.totalTimePercent).toBe(0);
   });
+
+  test("preserves isBuiltinCodeUnitCall from raw node", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/instrumentation-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const node1 = processed.nodeMap.get(1)!;
+    // instrumentation-minimal has isBuiltinCodeUnitCall: false on node 1
+    expect(node1.isBuiltinCodeUnitCall).toBe(false);
+  });
 });

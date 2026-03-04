@@ -72,6 +72,7 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
         hitCount: 0,
         calledBy: [],
         calls: [],
+        isBuiltin: false,
       };
       map.set(key, entry);
     }
@@ -79,6 +80,10 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
     entry.selfTime += node.selfTime;
     entry.totalTime += node.totalTime;
     entry.hitCount += node.hitCount;
+
+    if (node.isBuiltinCodeUnitCall) {
+      entry.isBuiltin = true;
+    }
 
     // Track wall-clock time for instrumentation profiles (nodes with startTime/endTime)
     if (node.nodeStartTime !== undefined && node.nodeEndTime !== undefined) {

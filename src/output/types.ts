@@ -12,6 +12,7 @@ export interface AnalysisResult {
     maxDepth: number;
     samplingInterval?: number;
     sourceAvailable: boolean;
+    builtinSelfTime?: number;
     analyzedAt: string;
   };
   summary: {

@@ -98,6 +98,7 @@ function createProcessedNode(raw: RawProfileNode): ProcessedNode {
     totalTime: 0,
     selfTimePercent: 0,
     totalTimePercent: 0,
+    isBuiltinCodeUnitCall: raw.isBuiltinCodeUnitCall,
     positionTicks: raw.positionTicks,
     nodeStartTime: raw.startTime,
     nodeEndTime: raw.endTime,

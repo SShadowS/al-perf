@@ -78,6 +78,16 @@ describe("aggregateByMethod", () => {
     expect(processLine.gapTime).toBe(0);
   });
 
+  test("sets isBuiltin flag on method breakdown", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/instrumentation-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+    // All methods in instrumentation-minimal have isBuiltinCodeUnitCall: false
+    for (const m of methods) {
+      expect(m.isBuiltin).toBe(false);
+    }
+  });
+
   test("wallClockTime is undefined for sampling profiles", async () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);

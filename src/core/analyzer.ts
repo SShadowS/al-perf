@@ -57,6 +57,10 @@ export async function analyzeProfile(
   const apps = aggregateByApp(processed);
   const objects = aggregateByObject(processed);
 
+  const builtinSelfTime = processed.allNodes
+    .filter(n => n.isBuiltinCodeUnitCall === true)
+    .reduce((sum, n) => sum + n.selfTime, 0);
+
   const includePatterns = options?.includePatterns !== false;
   const patterns = includePatterns ? runDetectors(processed) : [];
 
@@ -127,6 +131,7 @@ export async function analyzeProfile(
       maxDepth: processed.maxDepth,
       samplingInterval: processed.samplingInterval,
       sourceAvailable,
+      builtinSelfTime: builtinSelfTime > 0 ? builtinSelfTime : undefined,
       analyzedAt: new Date().toISOString(),
     },
     summary: {

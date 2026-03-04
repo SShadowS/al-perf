@@ -18,6 +18,9 @@ export interface ProcessedNode {
   selfTimePercent: number;
   totalTimePercent: number;
 
+  // Built-in code classification
+  isBuiltinCodeUnitCall?: boolean;
+
   // Instrumentation extras
   positionTicks?: RawPositionTick[];
   nodeStartTime?: number;

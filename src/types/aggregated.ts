@@ -37,4 +37,6 @@ export interface MethodBreakdown {
   wallClockTime?: number;
   // Gap = wallClockTime - totalTime (estimated I/O / SQL wait time). Clamped to >= 0.
   gapTime?: number;
+  // Whether this is a built-in BC code unit (vs custom/extension code)
+  isBuiltin?: boolean;
 }
