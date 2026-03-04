@@ -43,6 +43,7 @@ export interface MethodBreakdown {
   lineHotspots?: LineHotspot[];
   costPerHit: number;             // selfTime / hitCount (microseconds per invocation)
   efficiencyScore: number;        // selfTime / totalTime (0.0 = pure orchestrator, 1.0 = all own work)
+  callAmplification?: number;     // max(child.hitCount / parent.hitCount) — how much this method fans out vs caller
 }
 
 export interface LineHotspot {

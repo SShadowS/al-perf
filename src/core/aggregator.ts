@@ -124,6 +124,21 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
     entry.efficiencyScore = entry.totalTime > 0 ? entry.selfTime / entry.totalTime : 0;
   }
 
+  // Compute call amplification: max hitCount ratio vs parent
+  for (const node of profile.allNodes) {
+    if (isIdleNode(node) || !node.parent) continue;
+    const { functionName } = node.callFrame;
+    const { objectType, objectId } = node.applicationDefinition;
+    const key = `${functionName}_${objectType}_${objectId}`;
+    const entry = map.get(key);
+    if (!entry || node.parent.hitCount === 0) continue;
+
+    const ratio = node.hitCount / node.parent.hitCount;
+    if (entry.callAmplification === undefined || ratio > entry.callAmplification) {
+      entry.callAmplification = ratio;
+    }
+  }
+
   // Compute gapTime for methods with wallClockTime
   for (const entry of map.values()) {
     if (entry.wallClockTime !== undefined) {

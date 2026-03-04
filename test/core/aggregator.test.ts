@@ -131,6 +131,20 @@ describe("aggregateByMethod", () => {
     expect(onRun.efficiencyScore).toBeCloseTo(0.2, 2);
   });
 
+  test("computes callAmplification from hitCount ratio", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const methods = aggregateByMethod(processed);
+
+    const processLine = methods.find(m => m.functionName === "ProcessLine")!;
+    // ProcessLine hitCount=20, parent OnRun hitCount=5, ratio=4.0
+    expect(processLine.callAmplification).toBeCloseTo(4.0, 1);
+
+    const onRun = methods.find(m => m.functionName === "OnRun")!;
+    // OnRun is a root, no parent => callAmplification should be undefined
+    expect(onRun.callAmplification).toBeUndefined();
+  });
+
   test("wallClockTime is undefined for sampling profiles", async () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);
