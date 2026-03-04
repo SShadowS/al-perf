@@ -8,11 +8,13 @@ import { aggregateByMethod } from "../core/aggregator.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
 import { findCompanionZip, extractCompanionZip } from "../source/zip-extractor.js";
+import { HistoryStore } from "../history/store.js";
 import type { AnalysisResult } from "../output/types.js";
 import pkg from "../../package.json";
 
 export interface McpServerOptions {
   defaultSourcePath?: string;
+  historyDir?: string;
 }
 
 export function createMcpServer(options?: McpServerOptions): McpServer {
@@ -426,6 +428,95 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text" as const, text: `Failed to connect to flamegraph service: ${message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- history_list ---
+  server.registerTool(
+    "history_list",
+    {
+      title: "List Analysis History",
+      description: "List past analysis history entries. Filter by profile path or label. Returns entries sorted newest-first.",
+      inputSchema: {
+        profilePath: z.string().optional().describe("Filter by profile path (substring match)"),
+        label: z.string().optional().describe("Filter by label (exact match)"),
+        limit: z.number().int().min(1).max(100).default(10).describe("Maximum number of entries to return"),
+      },
+    },
+    async ({ profilePath, label, limit }) => {
+      try {
+        const store = new HistoryStore(options?.historyDir ?? ".al-perf-history");
+        const entries = store.query({ profilePath, label, limit });
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(entries, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- history_trend ---
+  server.registerTool(
+    "history_trend",
+    {
+      title: "Analysis Trend",
+      description: "Compute trend deltas between the oldest and newest history entries. Shows how selfTime, healthScore, and patternCount changed over time.",
+      inputSchema: {
+        profilePath: z.string().optional().describe("Filter by profile path (substring match)"),
+        limit: z.number().int().min(2).max(100).default(10).describe("Number of recent entries to consider"),
+      },
+    },
+    async ({ profilePath, limit }) => {
+      try {
+        const store = new HistoryStore(options?.historyDir ?? ".al-perf-history");
+        const entries = store.query({ profilePath, limit });
+
+        if (entries.length < 2) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ message: "Need at least 2 history entries to compute a trend.", entries: entries.length }) }],
+          };
+        }
+
+        // entries are newest-first from query; reverse to oldest-first for trend
+        const sorted = [...entries].reverse();
+        const first = sorted[0];
+        const last = sorted[sorted.length - 1];
+
+        const trend = {
+          entries: sorted.length,
+          oldest: { id: first.id, timestamp: first.timestamp },
+          newest: { id: last.id, timestamp: last.timestamp },
+          deltas: {
+            totalSelfTime: last.metrics.totalSelfTime - first.metrics.totalSelfTime,
+            healthScore: last.metrics.healthScore - first.metrics.healthScore,
+            patternCount: {
+              critical: last.metrics.patternCount.critical - first.metrics.patternCount.critical,
+              warning: last.metrics.patternCount.warning - first.metrics.patternCount.warning,
+              info: last.metrics.patternCount.info - first.metrics.patternCount.info,
+            },
+          },
+          series: sorted.map(e => ({
+            id: e.id,
+            timestamp: e.timestamp,
+            totalSelfTime: e.metrics.totalSelfTime,
+            healthScore: e.metrics.healthScore,
+            patternCount: e.metrics.patternCount,
+          })),
+        };
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(trend, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
           isError: true,
         };
       }

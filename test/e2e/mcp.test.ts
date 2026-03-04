@@ -6,7 +6,7 @@ import { createMcpServer } from "../../src/mcp/server.js";
 type TextContent = Array<{ type: string; text: string }>;
 
 describe("MCP E2E", () => {
-  test("server lists all 8 tools", async () => {
+  test("server lists all 10 tools", async () => {
     const server = createMcpServer();
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -24,7 +24,9 @@ describe("MCP E2E", () => {
     expect(toolNames).toContain("gate_check");
     expect(toolNames).toContain("drilldown_method");
     expect(toolNames).toContain("visualize_flamegraph");
-    expect(toolNames).toHaveLength(8);
+    expect(toolNames).toContain("history_list");
+    expect(toolNames).toContain("history_trend");
+    expect(toolNames).toHaveLength(10);
   });
 
   test("server lists 2 resources", async () => {

@@ -1,9 +1,14 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../../src/mcp/server.js";
+import { HistoryStore } from "../../src/history/store.js";
+import { analyzeProfile } from "../../src/core/analyzer.js";
+import { mkdtempSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
-async function createTestClient(options?: { defaultSourcePath?: string }) {
+async function createTestClient(options?: { defaultSourcePath?: string; historyDir?: string }) {
   const server = createMcpServer(options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -239,5 +244,127 @@ describe("MCP Tool: visualize_flamegraph", () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent)[0].text;
     expect(text).toContain("Failed to connect");
+  });
+});
+
+describe("MCP Tool: history_list", () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      try { rmSync(tempDir, { recursive: true }); } catch {}
+    }
+  });
+
+  test("returns empty list when no history exists", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
+    const historyDir = join(tempDir, "history");
+    const { client } = await createTestClient({ historyDir });
+    const result = await client.callTool({
+      name: "history_list",
+      arguments: {},
+    });
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(0);
+  });
+
+  test("returns entries when history exists", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
+    const historyDir = join(tempDir, "history");
+
+    // Pre-populate history
+    const store = new HistoryStore(historyDir);
+    const analysis = await analyzeProfile("test/fixtures/sampling-minimal.alcpuprofile", {
+      includePatterns: true,
+    });
+    store.save(analysis, { label: "test-run" });
+
+    const { client } = await createTestClient({ historyDir });
+    const result = await client.callTool({
+      name: "history_list",
+      arguments: {},
+    });
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThanOrEqual(1);
+    expect(parsed[0].label).toBe("test-run");
+  });
+
+  test("filters by label", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
+    const historyDir = join(tempDir, "history");
+
+    const store = new HistoryStore(historyDir);
+    const analysis = await analyzeProfile("test/fixtures/sampling-minimal.alcpuprofile", {
+      includePatterns: true,
+    });
+    store.save(analysis, { label: "baseline" });
+    store.save(analysis, { label: "optimized" });
+
+    const { client } = await createTestClient({ historyDir });
+    const result = await client.callTool({
+      name: "history_list",
+      arguments: { label: "baseline" },
+    });
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].label).toBe("baseline");
+  });
+});
+
+describe("MCP Tool: history_trend", () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      try { rmSync(tempDir, { recursive: true }); } catch {}
+    }
+  });
+
+  test("returns message when less than 2 entries", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
+    const historyDir = join(tempDir, "history");
+    const { client } = await createTestClient({ historyDir });
+    const result = await client.callTool({
+      name: "history_trend",
+      arguments: {},
+    });
+    expect(result.isError).toBeUndefined();
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(parsed.message).toContain("at least 2");
+  });
+
+  test("computes trend deltas with 2+ entries", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
+    const historyDir = join(tempDir, "history");
+
+    const store = new HistoryStore(historyDir);
+    const analysis = await analyzeProfile("test/fixtures/sampling-minimal.alcpuprofile", {
+      includePatterns: true,
+    });
+    store.save(analysis, { label: "run-1" });
+    store.save(analysis, { label: "run-2" });
+
+    const { client } = await createTestClient({ historyDir });
+    const result = await client.callTool({
+      name: "history_trend",
+      arguments: {},
+    });
+    const text = (result.content as TextContent)[0].text;
+    const parsed = JSON.parse(text);
+    expect(parsed.entries).toBe(2);
+    expect(parsed.oldest).toBeDefined();
+    expect(parsed.newest).toBeDefined();
+    expect(parsed.deltas).toBeDefined();
+    expect(parsed.deltas.totalSelfTime).toBeDefined();
+    expect(parsed.deltas.healthScore).toBeDefined();
+    expect(parsed.deltas.patternCount).toBeDefined();
+    expect(parsed.series).toBeDefined();
+    expect(parsed.series).toHaveLength(2);
   });
 });
