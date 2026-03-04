@@ -7,16 +7,19 @@ import type {
   ObjectInfo,
   ProcedureInfo,
   TriggerInfo,
+  TableFieldInfo,
+  EventCatalog,
 } from "../types/source-index.js";
 import { buildSourceIndex } from "./indexer.js";
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 interface SerializedIndex {
   files: ALFileInfo[];
   objects: Array<[string, SerializedObjectInfo]>;
   procedures: Array<[string, ProcedureInfo[]]>;
   triggers: Array<[string, TriggerInfo[]]>;
+  eventCatalog: EventCatalog;
 }
 
 /**
@@ -31,6 +34,7 @@ interface SerializedObjectInfo {
   file: ALFileInfo;
   procedures: ProcedureInfo[];
   triggers: TriggerInfo[];
+  fields: TableFieldInfo[];
 }
 
 interface CacheEntry {
@@ -107,6 +111,7 @@ function serializeIndex(index: SourceIndex): SerializedIndex {
     objects: Array.from(index.objects.entries()),
     procedures: Array.from(index.procedures.entries()),
     triggers: Array.from(index.triggers.entries()),
+    eventCatalog: index.eventCatalog,
   };
 }
 
@@ -119,6 +124,7 @@ function deserializeIndex(serialized: SerializedIndex): SourceIndex {
     objects: new Map(serialized.objects),
     procedures: new Map(serialized.procedures),
     triggers: new Map(serialized.triggers),
+    eventCatalog: serialized.eventCatalog ?? { publishers: [], subscribers: [] },
   };
 }
 
