@@ -13,6 +13,13 @@ export interface AnalysisResult {
     samplingInterval?: number;
     sourceAvailable: boolean;
     builtinSelfTime?: number;
+    /** Profile confidence score 0-100 */
+    confidenceScore: number;
+    confidenceFactors: {
+      sampleCount: { value: number; score: number };
+      duration: { value: number; score: number };
+      incompleteMeasurements: { value: number; score: number };
+    };
     analyzedAt: string;
   };
   summary: {

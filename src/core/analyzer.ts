@@ -10,6 +10,7 @@ import type { SourceIndex } from "../types/source-index.js";
 import type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta, CriticalPathStep } from "../output/types.js";
 import type { DetectedPattern } from "../types/patterns.js";
 import type { ProcessedProfile, ProcessedNode } from "../types/processed.js";
+import type { ParsedProfile } from "../types/profile.js";
 
 export interface AnalyzeOptions {
   top?: number;
@@ -69,6 +70,44 @@ function extractCriticalPath(profile: ProcessedProfile): CriticalPathStep[] {
   }
 
   return path;
+}
+
+function computeConfidenceScore(processed: ProcessedProfile, parsed: ParsedProfile): {
+  score: number;
+  factors: {
+    sampleCount: { value: number; score: number };
+    duration: { value: number; score: number };
+    incompleteMeasurements: { value: number; score: number };
+  };
+} {
+  // Factor 1: Sample count (more samples = higher confidence)
+  const sampleCount = parsed.samples?.length ?? processed.nodeCount;
+  const sampleScore = Math.min(100, (sampleCount / 100) * 100); // 100+ samples = full score
+
+  // Factor 2: Duration (longer profiles capture more behavior)
+  const durationMs = processed.totalDuration / 1000;
+  const durationScore = Math.min(100, (durationMs / 5000) * 100); // 5s+ = full score
+
+  // Factor 3: Incomplete measurements (fewer = better)
+  const incompleteCount = parsed.nodes.filter(
+    n => n.isIncompleteMeasurement === true
+  ).length;
+  const incompleteScore = incompleteCount === 0 ? 100
+    : Math.max(0, 100 - (incompleteCount / processed.nodeCount) * 200);
+
+  // Weighted average
+  const score = Math.round(
+    sampleScore * 0.4 + durationScore * 0.3 + incompleteScore * 0.3
+  );
+
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    factors: {
+      sampleCount: { value: sampleCount, score: Math.round(sampleScore) },
+      duration: { value: Math.round(durationMs), score: Math.round(durationScore) },
+      incompleteMeasurements: { value: incompleteCount, score: Math.round(incompleteScore) },
+    },
+  };
 }
 
 function isIdle(method: MethodBreakdown): boolean {
@@ -168,6 +207,9 @@ export async function analyzeProfile(
     patternCount[p.severity]++;
   }
 
+  // Compute confidence score
+  const confidence = computeConfidenceScore(processed, parsed);
+
   const durationStr = formatTime(processed.activeSelfTime);
   const topMethodStr = topMethod ? `${topMethod.percent}% in ${topMethod.name}` : "no dominant method";
   const oneLiner = `${durationStr} profile, ${topMethodStr}`;
@@ -184,6 +226,8 @@ export async function analyzeProfile(
       samplingInterval: processed.samplingInterval,
       sourceAvailable,
       builtinSelfTime: builtinSelfTime > 0 ? builtinSelfTime : undefined,
+      confidenceScore: confidence.score,
+      confidenceFactors: confidence.factors,
       analyzedAt: new Date().toISOString(),
     },
     summary: {

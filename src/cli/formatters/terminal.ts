@@ -50,6 +50,7 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
   if (result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0) {
     lines.push(`  Built-in overhead: ${formatTime(result.meta.builtinSelfTime)}`);
   }
+  lines.push(`  Confidence: ${result.meta.confidenceScore}/100`);
   lines.push("");
 
   // 3. Top Hotspots

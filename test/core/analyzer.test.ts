@@ -56,6 +56,14 @@ describe("analyzeProfile", () => {
     }
   });
 
+  test("computes profile confidence score", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    expect(result.meta.confidenceScore).toBeGreaterThanOrEqual(0);
+    expect(result.meta.confidenceScore).toBeLessThanOrEqual(100);
+    expect(result.meta.confidenceFactors).toBeDefined();
+    expect(result.meta.confidenceFactors.sampleCount.value).toBe(5); // 5 samples in fixture
+  });
+
   test("attaches source locations to hotspots when source available", async () => {
     const result = await analyzeProfile(
       `${FIXTURES}/instrumentation-minimal.alcpuprofile`,
