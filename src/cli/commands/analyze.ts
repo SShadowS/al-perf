@@ -22,7 +22,7 @@ export function registerAnalyzeCommand(program: Command) {
     .option("--cache", "Cache source index for faster re-analysis")
     .option("--explain", "Append AI-generated analysis summary (requires ANTHROPIC_API_KEY)")
     .option("--model <model>", "Model for --explain: sonnet (default) or opus", "sonnet")
-    .option("--api-key <key>", "Anthropic API key (default: ANTHROPIC_API_KEY env var)")
+    .option("--api-key <key>", "Anthropic API key (visible in process listings; prefer ANTHROPIC_API_KEY env var)")
     .action(async (profilePath: string, opts: any) => {
       // Resolve source path: explicit --source, or auto-detect companion zip
       let sourcePath: string | undefined = opts.source;

@@ -155,7 +155,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[analyze error] ${message}`);
     if (err instanceof Error && err.stack) console.error(err.stack);
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json({ error: "Analysis failed. Please check the uploaded file." }, { status: 500 });
   } finally {
     // Clean up source extraction temp dir
     if (sourceCleanup) {
@@ -178,7 +178,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
 
 const CSP_HEADERS = {
   "Content-Security-Policy":
-    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
 };
 
 function withSecurityHeaders(response: Response): Response {

@@ -17,8 +17,7 @@
   },
   "files": [
     "src/**/*.ts",
-    "dist/**/*.d.ts",
-    ".mcp.json"
+    "dist/**/*.d.ts"
   ],
   "scripts": {
     "dev": "bun run src/cli/index.ts",
