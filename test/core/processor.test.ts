@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { parseProfile } from "../../src/core/parser.js";
-import { processProfile } from "../../src/core/processor.js";
+import { processProfile, isIdleNode } from "../../src/core/processor.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -61,13 +61,13 @@ describe("processProfile", () => {
     expect(node1.totalTime).toBe(2500000);
   });
 
-  test("calculates time percentages based on total self-time", async () => {
+  test("calculates time percentages based on active self-time (excluding idle)", async () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);
 
     const node2 = processed.nodeMap.get(2)!;
-    // totalSelfTime = 500000+2000000+1000000 = 3500000
-    expect(node2.selfTimePercent).toBeCloseTo(2000000 / 3500000 * 100, 1);
+    // activeSelfTime = 500000+2000000 = 2500000 (IdleTime excluded)
+    expect(node2.selfTimePercent).toBeCloseTo(2000000 / 2500000 * 100, 1);
   });
 
   test("calculates instrumentation self-time from positionTicks executionTime", async () => {
@@ -89,6 +89,29 @@ describe("processProfile", () => {
     expect(processed.roots.length).toBeGreaterThan(0);
     const idle = processed.nodeMap.get(8)!;
     expect(idle.hitCount).toBe(19);
-    expect(idle.selfTimePercent).toBeGreaterThan(50);
+    // Idle node percentages are zeroed out
+    expect(idle.selfTimePercent).toBe(0);
+  });
+
+  test("separates activeSelfTime and idleSelfTime", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+
+    // totalSelfTime = 500000+2000000+1000000 = 3500000
+    expect(processed.totalSelfTime).toBe(3500000);
+    // idleSelfTime = 1000000 (IdleTime node)
+    expect(processed.idleSelfTime).toBe(1000000);
+    // activeSelfTime = 2500000
+    expect(processed.activeSelfTime).toBe(2500000);
+  });
+
+  test("idle node percentages are zero", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+
+    const idleNode = processed.nodeMap.get(3)!;
+    expect(isIdleNode(idleNode)).toBe(true);
+    expect(idleNode.selfTimePercent).toBe(0);
+    expect(idleNode.totalTimePercent).toBe(0);
   });
 });

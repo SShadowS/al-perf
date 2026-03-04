@@ -1,11 +1,13 @@
 import type { ProcessedProfile } from "../types/processed.js";
 import type { AppBreakdown, ObjectBreakdown, MethodBreakdown } from "../types/aggregated.js";
 import { formatMethodRef } from "./patterns.js";
+import { isIdleNode } from "./processor.js";
 
 export function aggregateByApp(profile: ProcessedProfile): AppBreakdown[] {
   const map = new Map<string, AppBreakdown>();
 
   for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
     const appName = node.declaringApplication?.appName ?? "(System)";
     const appPublisher = node.declaringApplication?.appPublisher ?? "";
 
@@ -36,8 +38,8 @@ export function aggregateByApp(profile: ProcessedProfile): AppBreakdown[] {
   // Calculate percentages
   for (const entry of map.values()) {
     entry.selfTimePercent =
-      profile.totalSelfTime > 0
-        ? (entry.selfTime / profile.totalSelfTime) * 100
+      profile.activeSelfTime > 0
+        ? (entry.selfTime / profile.activeSelfTime) * 100
         : 0;
   }
 
@@ -49,6 +51,7 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
   const map = new Map<string, MethodBreakdown>();
 
   for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
     const { functionName } = node.callFrame;
     const { objectType, objectName, objectId } = node.applicationDefinition;
     const key = `${functionName}_${objectType}_${objectId}`;
@@ -97,12 +100,12 @@ export function aggregateByMethod(profile: ProcessedProfile): MethodBreakdown[] 
   // Calculate percentages
   for (const entry of map.values()) {
     entry.selfTimePercent =
-      profile.totalSelfTime > 0
-        ? (entry.selfTime / profile.totalSelfTime) * 100
+      profile.activeSelfTime > 0
+        ? (entry.selfTime / profile.activeSelfTime) * 100
         : 0;
     entry.totalTimePercent =
-      profile.totalSelfTime > 0
-        ? (entry.totalTime / profile.totalSelfTime) * 100
+      profile.activeSelfTime > 0
+        ? (entry.totalTime / profile.activeSelfTime) * 100
         : 0;
   }
 
@@ -144,8 +147,8 @@ export function aggregateByObject(profile: ProcessedProfile): ObjectBreakdown[] 
   // Calculate percentages
   for (const entry of map.values()) {
     entry.selfTimePercent =
-      profile.totalSelfTime > 0
-        ? (entry.selfTime / profile.totalSelfTime) * 100
+      profile.activeSelfTime > 0
+        ? (entry.selfTime / profile.activeSelfTime) * 100
         : 0;
   }
 

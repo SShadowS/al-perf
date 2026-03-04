@@ -31,6 +31,8 @@ export interface ProcessedProfile {
   nodeMap: Map<number, ProcessedNode>;
   totalDuration: number;
   totalSelfTime: number;
+  activeSelfTime: number;  // totalSelfTime minus IdleTime nodes
+  idleSelfTime: number;    // selfTime sum of IdleTime nodes only
   maxDepth: number;
   samplingInterval?: number;
 

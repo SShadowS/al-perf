@@ -33,7 +33,8 @@ describe("aggregateByMethod", () => {
     const processed = processProfile(parsed);
     const methods = aggregateByMethod(processed);
 
-    expect(methods).toHaveLength(3);
+    // IdleTime excluded, only OnRun and ProcessLine remain
+    expect(methods).toHaveLength(2);
   });
 
   test("includes calledBy and calls relationships", async () => {

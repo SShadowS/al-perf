@@ -1,5 +1,6 @@
 import type { ProcessedProfile, ProcessedNode } from "../types/processed.js";
 import type { DetectedPattern, PatternDetector } from "../types/patterns.js";
+import { isIdleNode } from "./processor.js";
 
 /**
  * Format a node reference as "FunctionName (ObjectType ObjectId)".
@@ -20,6 +21,7 @@ export const detectSingleMethodDominance: PatternDetector = (
   const patterns: DetectedPattern[] = [];
 
   for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
     if (node.selfTimePercent > 50) {
       patterns.push({
         id: "single-method-dominance",
@@ -47,6 +49,7 @@ export const detectHighHitCount: PatternDetector = (
   const patterns: DetectedPattern[] = [];
 
   for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
     if (node.parent && node.parent.hitCount > 0 && node.hitCount > node.parent.hitCount * 10) {
       patterns.push({
         id: "high-hit-count",
@@ -101,6 +104,7 @@ export const detectRepeatedSiblings: PatternDetector = (
   const patterns: DetectedPattern[] = [];
 
   for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
     if (node.children.length < 50) continue;
 
     // Group children by functionName+objectId

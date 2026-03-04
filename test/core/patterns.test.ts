@@ -54,13 +54,14 @@ describe("runDetectors", () => {
     }
   });
 
-  test("works on real Session6 profile", async () => {
+  test("works on real Session6 profile (no false positives from IdleTime)", async () => {
     const parsed = await parseProfile("exampledata/PerformanceProfile_Session6.alcpuprofile");
     const processed = processProfile(parsed);
     const patterns = runDetectors(processed);
 
-    // Should detect at least idle-time dominance
-    expect(patterns.length).toBeGreaterThanOrEqual(1);
+    // IdleTime dominance is gone — only legitimate patterns remain
+    const idlePatterns = patterns.filter(p => p.involvedMethods.some(m => m.includes("IdleTime")));
+    expect(idlePatterns.length).toBe(0);
 
     // All returned patterns should have a suggestion
     for (const pattern of patterns) {

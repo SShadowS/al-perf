@@ -1,6 +1,10 @@
 import type { ParsedProfile, RawProfileNode } from "../types/profile.js";
 import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 
+export function isIdleNode(node: ProcessedNode): boolean {
+  return node.callFrame.functionName === "IdleTime" && node.applicationDefinition.objectId === 0;
+}
+
 export function processProfile(parsed: ParsedProfile): ProcessedProfile {
   const nodeMap = new Map<number, ProcessedNode>();
   for (const raw of parsed.nodes) {
@@ -50,11 +54,18 @@ export function processProfile(parsed: ParsedProfile): ProcessedProfile {
     }
   }
 
-  // Calculate percentages based on totalSelfTime
+  // Calculate percentages based on activeSelfTime (excluding idle nodes)
   const totalSelfTime = allNodes.reduce((sum, n) => sum + n.selfTime, 0);
+  const idleSelfTime = allNodes.filter(isIdleNode).reduce((sum, n) => sum + n.selfTime, 0);
+  const activeSelfTime = totalSelfTime - idleSelfTime;
   for (const node of allNodes) {
-    node.selfTimePercent = totalSelfTime > 0 ? (node.selfTime / totalSelfTime) * 100 : 0;
-    node.totalTimePercent = totalSelfTime > 0 ? (node.totalTime / totalSelfTime) * 100 : 0;
+    if (isIdleNode(node)) {
+      node.selfTimePercent = 0;
+      node.totalTimePercent = 0;
+    } else {
+      node.selfTimePercent = activeSelfTime > 0 ? (node.selfTime / activeSelfTime) * 100 : 0;
+      node.totalTimePercent = activeSelfTime > 0 ? (node.totalTime / activeSelfTime) * 100 : 0;
+    }
   }
 
   return {
@@ -64,6 +75,8 @@ export function processProfile(parsed: ParsedProfile): ProcessedProfile {
     nodeMap,
     totalDuration: parsed.totalDuration,
     totalSelfTime,
+    activeSelfTime,
+    idleSelfTime,
     maxDepth,
     samplingInterval: parsed.samplingInterval,
     nodeCount: allNodes.length,

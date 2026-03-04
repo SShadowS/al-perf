@@ -7,6 +7,7 @@ export interface AnalysisResult {
     profileType: "sampling" | "instrumentation";
     totalDuration: number;
     totalSelfTime: number;
+    idleSelfTime: number;
     totalNodes: number;
     maxDepth: number;
     samplingInterval?: number;

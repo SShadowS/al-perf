@@ -112,7 +112,7 @@ export async function analyzeProfile(
     patternCount[p.severity]++;
   }
 
-  const durationStr = formatTime(processed.totalSelfTime);
+  const durationStr = formatTime(processed.activeSelfTime);
   const topMethodStr = topMethod ? `${topMethod.percent}% in ${topMethod.name}` : "no dominant method";
   const oneLiner = `${durationStr} profile, ${topMethodStr}`;
 
@@ -121,7 +121,8 @@ export async function analyzeProfile(
       profilePath: filePath,
       profileType: processed.type,
       totalDuration: processed.totalDuration,
-      totalSelfTime: processed.totalSelfTime,
+      totalSelfTime: processed.activeSelfTime,
+      idleSelfTime: processed.idleSelfTime,
       totalNodes: processed.nodeCount,
       maxDepth: processed.maxDepth,
       samplingInterval: processed.samplingInterval,
@@ -241,8 +242,8 @@ export async function compareProfiles(
   const limitedImprovements = top !== undefined && top > 0 ? improvements.slice(0, top) : improvements;
 
   // Build summary
-  const beforeTotalTime = beforeProcessed.totalSelfTime;
-  const afterTotalTime = afterProcessed.totalSelfTime;
+  const beforeTotalTime = beforeProcessed.activeSelfTime;
+  const afterTotalTime = afterProcessed.activeSelfTime;
   const deltaTime = afterTotalTime - beforeTotalTime;
   const deltaPercent = beforeTotalTime !== 0 ? (deltaTime / beforeTotalTime) * 100 : 0;
 
