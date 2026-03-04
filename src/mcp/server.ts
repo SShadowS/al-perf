@@ -531,6 +531,21 @@ call. Without SetLoadFields, Business Central loads all fields from the database
 which can be wasteful for tables with many or large fields.
 **Fix:** Add SetLoadFields before record retrieval to load only the fields you need.
 
+### Incomplete SetLoadFields
+**Severity:** critical
+SetLoadFields() is called before record retrieval, but the code later accesses fields
+that were not included in the SetLoadFields call. In Business Central, accessing a field
+not covered by SetLoadFields returns the field's default value, which is a silent data bug.
+**Fix:** Add all accessed fields to the SetLoadFields call, or remove SetLoadFields if the
+field list is difficult to maintain statically.
+
+### Unindexed Filter
+**Severity:** warning
+SetRange/SetFilter is called on a field that is not the leading field of any key on the
+target table. This forces SQL Server to perform a table scan instead of an index seek.
+**Fix:** Add a key starting with the filtered field, or restructure the query to filter
+on an existing key's leading field.
+
 ## Source-Only Patterns (no profile needed)
 
 ### Nested Loops
