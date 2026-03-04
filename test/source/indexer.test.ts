@@ -67,6 +67,20 @@ test("detects EventSubscriber attribute on procedures", async () => {
   expect(normal!.isEventSubscriber).toBe(false);
 });
 
+test("extracts tableRelationTarget from field declarations", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "Table50400.al"), fixturesDir);
+  expect(result).toBeDefined();
+  const custField = result!.fields.find(f => f.name === "Customer No.")!;
+  expect(custField.tableRelationTarget).toBe("Customer");
+});
+
+test("fields without TableRelation have no tableRelationTarget", async () => {
+  const result = await indexALFile(resolve(fixturesDir, "Table50400.al"), fixturesDir);
+  expect(result).toBeDefined();
+  const noField = result!.fields.find(f => f.name === "No.")!;
+  expect(noField.tableRelationTarget).toBeUndefined();
+});
+
 test("extracts CalcFormula fields from table declarations", async () => {
   const result = await indexALFile(resolve(fixturesDir, "Table50200.al"), fixturesDir);
   expect(result).toBeDefined();

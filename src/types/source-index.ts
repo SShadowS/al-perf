@@ -75,6 +75,21 @@ export interface TableFieldInfo {
   dataType: string;
   calcFormulaType?: "Sum" | "Lookup" | "Count" | "Average" | "Min" | "Max" | "Exist";
   calcFormulaTable?: string;
+  /** Table referenced in TableRelation property */
+  tableRelationTarget?: string;
+  line: number;
+}
+
+export interface TableRelationInfo {
+  /** Source table that has the relation */
+  fromTable: string;
+  fromTableId: number;
+  /** Field in the source table */
+  fromField: string;
+  /** Target table referenced */
+  toTable: string;
+  /** Type of relationship */
+  relationType: "TableRelation" | "CalcFormula";
   line: number;
 }
 

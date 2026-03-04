@@ -633,6 +633,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
       let dataType = "";
       let calcFormulaType: TableFieldInfo["calcFormulaType"] | undefined;
       let calcFormulaTable: string | undefined;
+      let tableRelationTarget: string | undefined;
 
       for (const child of node.namedChildren) {
         if (child.type === "integer" && id === 0) {
@@ -667,6 +668,22 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
               break;
             }
           }
+        } else if (child.type === "table_relation_property") {
+          // Extract target table from table_relation_expression -> simple_table_relation
+          for (const relChild of child.namedChildren) {
+            if (relChild.type === "table_relation_expression") {
+              for (const expr of relChild.namedChildren) {
+                if (expr.type === "simple_table_relation") {
+                  const tableRef = expr.namedChildren.find(c =>
+                    c.type === "identifier" || c.type === "quoted_identifier"
+                  );
+                  if (tableRef) {
+                    tableRelationTarget = stripQuotes(tableRef.text);
+                  }
+                }
+              }
+            }
+          }
         }
       }
 
@@ -677,6 +694,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
           dataType,
           calcFormulaType,
           calcFormulaTable,
+          tableRelationTarget,
           line: node.startPosition.row + 1,
         });
       }

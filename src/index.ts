@@ -15,6 +15,7 @@ export { runSourceOnlyDetectors } from "./source/source-only-patterns.js";
 export { findCompanionZip, extractCompanionZip } from "./source/zip-extractor.js";
 export { createALParser, parseALSource } from "./source/parser-init.js";
 export { SourceIndexCache } from "./source/cache.js";
+export { buildTableRelationGraph, tableConnectivityStats } from "./source/table-graph.js";
 
 // Explainer
 export { explainAnalysis, trimResultForPrompt, SYSTEM_PROMPT } from "./explain/explainer.js";
@@ -46,4 +47,5 @@ export type {
   RecordOpInfo,
   RecordOpType,
   LineRange,
+  TableRelationInfo,
 } from "./types/source-index.js";
