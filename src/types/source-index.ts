@@ -10,6 +10,39 @@ export interface SourceIndex {
 
   /** Object info, keyed by "ObjectType_ObjectId" */
   objects: Map<string, ObjectInfo>;
+
+  /** Event publisher/subscriber catalog built from source attributes */
+  eventCatalog: EventCatalog;
+}
+
+export interface EventPublisherInfo {
+  procedureName: string;
+  eventType: "IntegrationEvent" | "BusinessEvent";
+  objectType: string;
+  objectId: number;
+  objectName: string;
+  file: string;
+  line: number;
+}
+
+export interface EventSubscriberInfo {
+  procedureName: string;
+  /** Target object type the subscriber listens to */
+  targetObjectType: string;
+  /** Target object ID or name */
+  targetObjectId: string;
+  /** Target event name */
+  targetEventName: string;
+  objectType: string;
+  objectId: number;
+  objectName: string;
+  file: string;
+  line: number;
+}
+
+export interface EventCatalog {
+  publishers: EventPublisherInfo[];
+  subscribers: EventSubscriberInfo[];
 }
 
 export interface ALFileInfo {

@@ -22,6 +22,16 @@ codeunit 50500 "CalcField Loop Test"
             until LookupRec.Next() = 0;
     end;
 
+    [IntegrationEvent(false, false)]
+    local procedure OnBeforeProcessCalcFields(var TestRec: Record "CalcField Test Table")
+    begin
+    end;
+
+    [BusinessEvent(false)]
+    local procedure OnAfterProcessCalcFields()
+    begin
+    end;
+
     trigger OnRun()
     begin
         ProcessWithSumCalcField();

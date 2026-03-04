@@ -89,6 +89,35 @@ test("extracts CalcFormula fields from table declarations", async () => {
   expect(noField!.calcFormulaType).toBeUndefined();
 });
 
+test("builds event catalog from source attributes", async () => {
+  const index = await buildSourceIndex(fixturesDir);
+  expect(index.eventCatalog).toBeDefined();
+
+  // CodeUnit50200 has two [EventSubscriber] procedures
+  expect(index.eventCatalog.subscribers.length).toBeGreaterThanOrEqual(2);
+  const salesPostSub = index.eventCatalog.subscribers.find(
+    s => s.procedureName === "OnBeforePostSalesDoc"
+  );
+  expect(salesPostSub).toBeDefined();
+  expect(salesPostSub!.targetObjectType).toBe("Codeunit");
+  expect(salesPostSub!.targetObjectId).toBe("Sales-Post");
+  expect(salesPostSub!.targetEventName).toBe("OnBeforePostSalesDoc");
+
+  // CodeUnit50500 has two publishers: IntegrationEvent + BusinessEvent
+  expect(index.eventCatalog.publishers.length).toBeGreaterThanOrEqual(2);
+  const integrationPub = index.eventCatalog.publishers.find(
+    p => p.procedureName === "OnBeforeProcessCalcFields"
+  );
+  expect(integrationPub).toBeDefined();
+  expect(integrationPub!.eventType).toBe("IntegrationEvent");
+
+  const businessPub = index.eventCatalog.publishers.find(
+    p => p.procedureName === "OnAfterProcessCalcFields"
+  );
+  expect(businessPub).toBeDefined();
+  expect(businessPub!.eventType).toBe("BusinessEvent");
+});
+
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);

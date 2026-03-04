@@ -15,6 +15,9 @@ import type {
   DangerousCallInfo,
   VariableInfo,
   TableFieldInfo,
+  EventPublisherInfo,
+  EventSubscriberInfo,
+  EventCatalog,
 } from "../types/source-index.js";
 
 const RECORD_OPS: Set<string> = new Set([
@@ -116,6 +119,45 @@ function checkEventSubscriber(lines: string[], nodeStartRow: number): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Parse [EventSubscriber] attribute to extract target details.
+ * Format: [EventSubscriber(ObjectType::Codeunit, Codeunit::"Sales-Post", 'OnBeforePostSalesDoc', '', true, true)]
+ */
+function parseEventSubscriberAttribute(
+  lines: string[],
+  nodeStartRow: number,
+): { targetObjectType: string; targetObjectId: string; targetEventName: string } | null {
+  const start = Math.max(0, nodeStartRow - 5);
+  for (let i = start; i < nodeStartRow; i++) {
+    const match = lines[i].match(
+      /\[EventSubscriber\(\s*ObjectType::(\w+)\s*,\s*(?:\w+)::"?([^"',)]+)"?\s*,\s*'([^']*)'/i
+    );
+    if (match) {
+      return {
+        targetObjectType: match[1],
+        targetObjectId: match[2],
+        targetEventName: match[3],
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if the lines preceding a node contain an [IntegrationEvent] or [BusinessEvent] attribute.
+ */
+function checkEventPublisher(
+  lines: string[],
+  nodeStartRow: number,
+): "IntegrationEvent" | "BusinessEvent" | null {
+  const start = Math.max(0, nodeStartRow - 5);
+  for (let i = start; i < nodeStartRow; i++) {
+    if (/\[IntegrationEvent\b/i.test(lines[i])) return "IntegrationEvent";
+    if (/\[BusinessEvent\b/i.test(lines[i])) return "BusinessEvent";
+  }
+  return null;
 }
 
 /**
@@ -712,6 +754,7 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
     procedures: new Map(),
     triggers: new Map(),
     objects: new Map(),
+    eventCatalog: { publishers: [], subscribers: [] },
   };
 
   for (const filePath of alFiles) {
@@ -735,6 +778,57 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
       const existing = index.triggers.get(key) ?? [];
       existing.push(trigger);
       index.triggers.set(key, existing);
+    }
+  }
+
+  // Build event catalog from indexed procedures
+  for (const obj of index.objects.values()) {
+    const filePath = obj.file.absolutePath;
+    let fileLines: string[] | null = null;
+    const getLines = () => {
+      if (!fileLines) {
+        try {
+          fileLines = readFileSync(filePath, "utf-8").split("\n");
+        } catch {
+          fileLines = [];
+        }
+      }
+      return fileLines;
+    };
+
+    for (const proc of obj.procedures) {
+      const lines = getLines();
+      // Check for event subscriber
+      if (proc.isEventSubscriber) {
+        const subInfo = parseEventSubscriberAttribute(lines, proc.lineStart - 1);
+        if (subInfo) {
+          index.eventCatalog.subscribers.push({
+            procedureName: proc.name,
+            targetObjectType: subInfo.targetObjectType,
+            targetObjectId: subInfo.targetObjectId,
+            targetEventName: subInfo.targetEventName,
+            objectType: obj.objectType,
+            objectId: obj.objectId,
+            objectName: obj.objectName,
+            file: proc.file,
+            line: proc.lineStart,
+          });
+        }
+      }
+
+      // Check for event publisher
+      const pubType = checkEventPublisher(lines, proc.lineStart - 1);
+      if (pubType) {
+        index.eventCatalog.publishers.push({
+          procedureName: proc.name,
+          eventType: pubType,
+          objectType: obj.objectType,
+          objectId: obj.objectId,
+          objectName: obj.objectName,
+          file: proc.file,
+          line: proc.lineStart,
+        });
+      }
     }
   }
 
