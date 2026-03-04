@@ -5,6 +5,7 @@ import {
   detectUnfilteredFindSet,
   detectEventSubscriberIssues,
   detectDangerousCallsInLoop,
+  detectUnindexedFilters,
   runSourceOnlyDetectors,
 } from "../../src/source/source-only-patterns.js";
 
@@ -130,6 +131,38 @@ describe("detectDangerousCallsInLoop", () => {
       p.title.includes("SafeCommit")
     );
     expect(safeCommit).toBeUndefined();
+  });
+});
+
+describe("detectUnindexedFilters", () => {
+  test("flags SetRange on field with no supporting key", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectUnindexedFilters(index);
+    // FilterWithoutIndex does SetRange(Description, ...) on Key Test Table
+    // Key Test Table has keys: PK(No.), CustomerDate(Customer No., Posting Date), AmountIdx(Amount)
+    // Description is not the first field of any key => should be flagged
+    const descriptionFilter = patterns.find(p =>
+      p.involvedMethods.some(m => m.includes("FilterWithoutIndex"))
+    );
+    expect(descriptionFilter).toBeDefined();
+    expect(descriptionFilter!.id).toBe("unindexed-filter");
+    expect(descriptionFilter!.severity).toBe("warning");
+  });
+
+  test("does not flag SetRange on field covered by a key", async () => {
+    const index = await buildSourceIndex("test/fixtures/source");
+    const patterns = detectUnindexedFilters(index);
+    // FilterWithIndex does SetRange("No.", ...) — covered by PK
+    // FilterOnSecondaryKey does SetRange("Customer No.", ...) — covered by CustomerDate key
+    const indexedFilter = patterns.find(p =>
+      p.involvedMethods.some(m => m.includes("FilterWithIndex"))
+    );
+    expect(indexedFilter).toBeUndefined();
+
+    const secondaryFilter = patterns.find(p =>
+      p.involvedMethods.some(m => m.includes("FilterOnSecondaryKey"))
+    );
+    expect(secondaryFilter).toBeUndefined();
   });
 });
 

@@ -326,16 +326,28 @@ function collectLoopNodes(node: SyntaxNode): SyntaxNode[] {
 
 /**
  * Collect all record operation call_expression nodes within a subtree.
- * Returns [node, methodName, recordVariable] tuples.
+ * Returns [node, methodName, recordVariable, fieldArgument] tuples.
  */
 function collectRecordOps(
   node: SyntaxNode,
-): Array<{ node: SyntaxNode; methodName: string; recordVariable: string }> {
+): Array<{ node: SyntaxNode; methodName: string; recordVariable: string; fieldArgument?: string }> {
   const ops: Array<{
     node: SyntaxNode;
     methodName: string;
     recordVariable: string;
+    fieldArgument?: string;
   }> = [];
+
+  function extractFieldArgument(callNode: SyntaxNode, methodName: string): string | undefined {
+    const lowerMethod = methodName.toLowerCase();
+    if (lowerMethod !== "setrange" && lowerMethod !== "setfilter") return undefined;
+    const argList = callNode.namedChildren.find(c => c.type === "argument_list");
+    if (argList && argList.namedChildren.length > 0) {
+      const firstArg = argList.namedChildren[0];
+      return stripQuotes(firstArg.text);
+    }
+    return undefined;
+  }
 
   function walk(n: SyntaxNode) {
     if (n.type === "call_expression") {
@@ -351,6 +363,7 @@ function collectRecordOps(
                 node: n,
                 methodName,
                 recordVariable: objNode ? objNode.text : "",
+                fieldArgument: extractFieldArgument(n, methodName),
               });
             }
           }
@@ -365,6 +378,7 @@ function collectRecordOps(
                 node: n,
                 methodName,
                 recordVariable: recordNode ? recordNode.text : "",
+                fieldArgument: extractFieldArgument(n, methodName),
               });
             }
           }
@@ -503,6 +517,7 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
       column: op.node.startPosition.column,
       insideLoop,
       recordVariable: op.recordVariable || undefined,
+      fieldArgument: op.fieldArgument,
     };
     recordOps.push(opInfo);
     if (insideLoop) {

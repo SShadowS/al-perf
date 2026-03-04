@@ -42,7 +42,7 @@ describe("E2E: source correlation", () => {
     expect(proc.exitCode).toBe(0);
 
     const result = JSON.parse(output);
-    expect(result.files.length).toBe(9);
+    expect(result.files.length).toBe(10);
     expect(result.procedureCount).toBeGreaterThan(0);
     expect(result.triggerCount).toBeGreaterThan(0);
   });

@@ -141,8 +141,8 @@ test("builds event catalog from source attributes", async () => {
 describe("buildSourceIndex", () => {
   it("should build an index from a directory of AL files", async () => {
     const index = await buildSourceIndex(fixturesDir);
-    expect(index.files.length).toBe(9);
-    expect(index.objects.size).toBe(9);
+    expect(index.files.length).toBe(10);
+    expect(index.objects.size).toBe(10);
 
     const procList = index.procedures.get("processrecords");
     expect(procList).toBeDefined();

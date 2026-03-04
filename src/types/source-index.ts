@@ -171,6 +171,8 @@ export interface RecordOpInfo {
   column: number;
   insideLoop: boolean;
   recordVariable?: string;
+  /** First argument string for SetRange/SetFilter (the field name being filtered) */
+  fieldArgument?: string;
 }
 
 export interface LineRange {

@@ -1,5 +1,5 @@
 import type { DetectedPattern } from "../types/patterns.js";
-import type { SourceIndex, ProcedureInfo, TriggerInfo } from "../types/source-index.js";
+import type { SourceIndex, ObjectInfo, ProcedureInfo, TriggerInfo } from "../types/source-index.js";
 
 /**
  * Format a member label for use in involvedMethods arrays.
@@ -178,6 +178,62 @@ export function detectDangerousCallsInLoop(index: SourceIndex): DetectedPattern[
 }
 
 /**
+ * Detect SetRange/SetFilter on fields not covered by any key in the target table.
+ * Requires: table keys (3.7), variable type resolution (3.3).
+ * Severity: warning.
+ */
+export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
+  const FILTER_OPS = new Set(["SetRange", "SetFilter"]);
+  const patterns: DetectedPattern[] = [];
+
+  for (const obj of index.objects.values()) {
+    const members = [...obj.procedures, ...obj.triggers];
+    for (const member of members) {
+      for (const op of member.features.recordOps) {
+        if (!FILTER_OPS.has(op.type) || !op.fieldArgument || !op.recordVariable) continue;
+
+        // Resolve record variable to table name
+        const variable = member.features.variables.find(
+          v => v.name.toLowerCase() === op.recordVariable!.toLowerCase()
+        );
+        if (!variable?.isRecord || !variable.tableName || variable.isTemporary) continue;
+
+        // Find the table in the source index
+        let tableObj: ObjectInfo | undefined;
+        for (const o of index.objects.values()) {
+          if (o.objectType === "Table" && o.objectName === variable.tableName) {
+            tableObj = o;
+            break;
+          }
+        }
+        if (!tableObj || !tableObj.keys || tableObj.keys.length === 0) continue;
+
+        // Check if any key has the filtered field as a leading (first) field
+        const filteredField = op.fieldArgument.toLowerCase();
+        const isCovered = tableObj.keys.some(key =>
+          key.fields.length > 0 && key.fields[0].toLowerCase() === filteredField
+        );
+
+        if (!isCovered) {
+          patterns.push({
+            id: "unindexed-filter",
+            severity: "warning",
+            title: `${op.type} on "${op.fieldArgument}" has no supporting key in ${variable.tableName}`,
+            description: `${op.type}("${op.fieldArgument}", ...) on ${op.recordVariable} at line ${op.line} in ${member.file} filters on a field that is not the leading field of any key on table "${variable.tableName}". This may cause a full table scan.`,
+            impact: 0,
+            involvedMethods: [memberLabel(member)],
+            evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys.map(k => k.name + "(" + k.fields.join(", ") + ")").join(", ")}`,
+            suggestion: `Add a key starting with "${op.fieldArgument}" to table "${variable.tableName}", or restructure the query to filter on an existing key's leading field.`,
+          });
+        }
+      }
+    }
+  }
+
+  return patterns;
+}
+
+/**
  * Run all source-only pattern detectors and return results sorted by impact descending.
  */
 export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
@@ -186,6 +242,7 @@ export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
     ...detectUnfilteredFindSet(index),
     ...detectEventSubscriberIssues(index),
     ...detectDangerousCallsInLoop(index),
+    ...detectUnindexedFilters(index),
   ];
 
   allPatterns.sort((a, b) => b.impact - a.impact);
