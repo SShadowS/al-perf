@@ -64,7 +64,7 @@ function extractCriticalPath(profile: ProcessedProfile): CriticalPathStep[] {
     });
 
     // Follow the child with highest totalTime (excluding idle)
-    const nonIdleChildren = current.children.filter(c => !isIdleNode(c));
+    const nonIdleChildren: ProcessedNode[] = current.children.filter(c => !isIdleNode(c));
     if (nonIdleChildren.length === 0) break;
     current = nonIdleChildren.sort((a, b) => b.totalTime - a.totalTime)[0];
   }
@@ -210,6 +210,12 @@ export async function analyzeProfile(
   // Compute confidence score
   const confidence = computeConfidenceScore(processed, parsed);
 
+  // Health score: 100 minus penalties for patterns and idle ratio
+  const patternPenalty = patternCount.critical * 20 + patternCount.warning * 5 + patternCount.info * 1;
+  const idleRatio = processed.idleSelfTime / (processed.totalSelfTime || 1);
+  const idlePenalty = idleRatio > 0.9 ? 20 : idleRatio > 0.7 ? 10 : 0;
+  const healthScore = Math.max(0, Math.min(100, 100 - patternPenalty - idlePenalty));
+
   const durationStr = formatTime(processed.activeSelfTime);
   const topMethodStr = topMethod ? `${topMethod.percent}% in ${topMethod.name}` : "no dominant method";
   const oneLiner = `${durationStr} profile, ${topMethodStr}`;
@@ -235,6 +241,7 @@ export async function analyzeProfile(
       topApp,
       topMethod,
       patternCount,
+      healthScore,
     },
     criticalPath,
     hotspots,

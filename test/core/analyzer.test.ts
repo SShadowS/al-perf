@@ -56,6 +56,14 @@ describe("analyzeProfile", () => {
     }
   });
 
+  test("computes profile health score", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    expect(result.summary.healthScore).toBeGreaterThanOrEqual(0);
+    expect(result.summary.healthScore).toBeLessThanOrEqual(100);
+    // sampling-minimal has a single-method-dominance critical pattern → health should be < 100
+    expect(result.summary.healthScore).toBeLessThan(100);
+  });
+
   test("computes profile confidence score", async () => {
     const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     expect(result.meta.confidenceScore).toBeGreaterThanOrEqual(0);

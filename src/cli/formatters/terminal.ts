@@ -51,6 +51,7 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
     lines.push(`  Built-in overhead: ${formatTime(result.meta.builtinSelfTime)}`);
   }
   lines.push(`  Confidence: ${result.meta.confidenceScore}/100`);
+  lines.push(`  Health: ${result.summary.healthScore}/100`);
   lines.push("");
 
   // 3. Top Hotspots

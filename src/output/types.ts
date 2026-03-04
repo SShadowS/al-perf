@@ -27,6 +27,8 @@ export interface AnalysisResult {
     topApp: { name: string; percent: number } | null;
     topMethod: { name: string; object: string; percent: number } | null;
     patternCount: { critical: number; warning: number; info: number };
+    /** Profile health score 0-100 (higher = healthier) */
+    healthScore: number;
   };
   criticalPath: CriticalPathStep[];
   hotspots: MethodBreakdown[];
