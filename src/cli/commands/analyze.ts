@@ -23,6 +23,10 @@ export function registerAnalyzeCommand(program: Command) {
     .option("--explain", "Append AI-generated analysis summary (requires ANTHROPIC_API_KEY)")
     .option("--model <model>", "Model for --explain: sonnet (default) or opus", "sonnet")
     .option("--api-key <key>", "Anthropic API key (visible in process listings; prefer ANTHROPIC_API_KEY env var)")
+    .option("--save-history", "Save analysis result to history store")
+    .option("--history-dir <dir>", "History store directory", ".al-perf-history")
+    .option("--git-commit <hash>", "Git commit hash to associate with this analysis")
+    .option("--label <label>", "Label for this analysis run (e.g., 'baseline', 'after-fix')")
     .action(async (profilePath: string, opts: any) => {
       // Resolve source path: explicit --source, or auto-detect companion zip
       let sourcePath: string | undefined = opts.source;
@@ -82,6 +86,12 @@ export function registerAnalyzeCommand(program: Command) {
             console.error(`Warning: --explain failed: ${message}`);
           }
         }
+      }
+
+      if (opts.saveHistory) {
+        const { HistoryStore } = await import("../../history/store.js");
+        const store = new HistoryStore(opts.historyDir);
+        store.save(result, { gitCommit: opts.gitCommit, label: opts.label });
       }
 
       process.stdout.write(formatAnalysis(result, opts.format as OutputFormat) + "\n");

@@ -30,6 +30,10 @@ export type { SourceAnalysisResult } from "./cli/commands/analyze-source.js";
 export { createMcpServer } from "./mcp/server.js";
 export type { McpServerOptions } from "./mcp/server.js";
 
+// History
+export { HistoryStore } from "./history/store.js";
+export type { HistoryEntry, HistoryQuery } from "./types/history.js";
+
 // Types
 export type { RawProfile, RawProfileNode, ParsedProfile, ProfileType } from "./types/profile.js";
 export type { ProcessedProfile, ProcessedNode } from "./types/processed.js";

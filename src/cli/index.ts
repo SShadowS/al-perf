@@ -8,6 +8,7 @@ import { sourceMapCommand } from "./commands/source-map.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerGateCommand } from "./commands/gate.js";
 import { registerAnalyzeSourceCommand } from "./commands/analyze-source.js";
+import { createHistoryCommand } from "./commands/history.js";
 import pkg from "../../package.json";
 
 const program = new Command();
@@ -25,5 +26,6 @@ program.addCommand(sourceMapCommand);
 registerMcpCommand(program);
 registerGateCommand(program);
 registerAnalyzeSourceCommand(program);
+program.addCommand(createHistoryCommand());
 
 program.parse();
