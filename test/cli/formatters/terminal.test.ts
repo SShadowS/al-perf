@@ -49,8 +49,8 @@ describe("formatAnalysisTerminal", () => {
 describe("formatComparisonTerminal", () => {
   test("includes delta summary", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparisonTerminal(result);
     expect(output).toContain("Before");

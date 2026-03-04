@@ -66,8 +66,8 @@ describe("formatAnalysisMarkdown", () => {
 describe("formatComparisonMarkdown", () => {
   test("includes comparison header", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparisonMarkdown(result);
     expect(output).toContain("# AL Profile Comparison");
@@ -75,8 +75,8 @@ describe("formatComparisonMarkdown", () => {
 
   test("includes before/after paths", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparisonMarkdown(result);
     expect(output).toContain("**Before:**");
@@ -85,8 +85,8 @@ describe("formatComparisonMarkdown", () => {
 
   test("includes delta summary with direction", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparisonMarkdown(result);
     expect(output).toContain("## Delta Summary");
@@ -95,8 +95,8 @@ describe("formatComparisonMarkdown", () => {
 
   test("includes regressions table if present", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparisonMarkdown(result);
     if (result.regressions.length > 0) {

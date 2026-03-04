@@ -81,14 +81,14 @@ describe("processProfile", () => {
     expect(node1.selfTime).toBe(500000);
   });
 
-  test("works on real Session6 profile", async () => {
-    const parsed = await parseProfile("exampledata/PerformanceProfile_Session6.alcpuprofile");
+  test("works on sampling profile with idle nodes", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);
 
-    expect(processed.nodeCount).toBe(14);
+    expect(processed.nodeCount).toBe(3);
     expect(processed.roots.length).toBeGreaterThan(0);
-    const idle = processed.nodeMap.get(8)!;
-    expect(idle.hitCount).toBe(19);
+    const idle = processed.nodeMap.get(3)!;
+    expect(idle.hitCount).toBe(10);
     // Idle node percentages are zeroed out
     expect(idle.selfTimePercent).toBe(0);
   });

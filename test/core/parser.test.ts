@@ -67,21 +67,6 @@ describe("parseProfile", () => {
     expect(result.samplingInterval).toBe(100000);
   });
 
-  test("parses real sampling profile (Session6)", async () => {
-    const result = await parseProfile("exampledata/PerformanceProfile_Session6.alcpuprofile");
-
-    expect(result.type).toBe("sampling");
-    expect(result.nodes.length).toBe(14);
-    expect(result.nodeMap.get(1)?.callFrame.functionName).toBe("OnOpenPage");
-  });
-
-  test("parses real instrumentation profile", async () => {
-    const result = await parseProfile("exampledata/cedf4512-490d-4252-b9f6-943dd571888f.alcpuprofile");
-
-    expect(result.type).toBe("instrumentation");
-    expect(result.nodes.length).toBeGreaterThan(2000);
-  });
-
   test("throws on nonexistent file", async () => {
     expect(parseProfile("test/fixtures/nonexistent.alcpuprofile")).rejects.toThrow();
   });

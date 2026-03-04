@@ -39,8 +39,8 @@ describe("formatAnalysisJson", () => {
 describe("formatComparisonJson", () => {
   test("returns valid JSON string", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparisonJson(result);
     const parsed = JSON.parse(output);

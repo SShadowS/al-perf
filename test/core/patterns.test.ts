@@ -54,8 +54,8 @@ describe("runDetectors", () => {
     }
   });
 
-  test("works on real Session6 profile (no false positives from IdleTime)", async () => {
-    const parsed = await parseProfile("exampledata/PerformanceProfile_Session6.alcpuprofile");
+  test("does not produce false positives from IdleTime", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);
     const patterns = runDetectors(processed);
 

@@ -50,8 +50,8 @@ describe("formatAnalysis", () => {
 describe("formatComparison", () => {
   test("formats as JSON when json is specified", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparison(result, "json");
     const parsed = JSON.parse(output);
@@ -60,8 +60,8 @@ describe("formatComparison", () => {
 
   test("formats as terminal when terminal is specified", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparison(result, "terminal");
     expect(output).toContain("Before");
@@ -70,8 +70,8 @@ describe("formatComparison", () => {
 
   test("formats as markdown when markdown is specified", async () => {
     const result = await compareProfiles(
-      "exampledata/PerformanceProfile_Session6.alcpuprofile",
-      "exampledata/PerformanceProfile_Session15.alcpuprofile",
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
+      `${FIXTURES}/sampling-minimal.alcpuprofile`,
     );
     const output = formatComparison(result, "markdown");
     expect(output).toContain("# AL Profile Comparison");

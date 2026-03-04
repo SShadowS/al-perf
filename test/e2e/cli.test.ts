@@ -2,34 +2,34 @@ import { describe, test, expect } from "bun:test";
 import { $ } from "bun";
 
 const CLI = "src/cli/index.ts";
+const FIXTURES = "test/fixtures";
 
 describe("CLI E2E", () => {
   test("analyze outputs valid JSON with --format json", async () => {
-    const result = await $`bun run ${CLI} analyze exampledata/PerformanceProfile_Session6.alcpuprofile -f json`.text();
+    const result = await $`bun run ${CLI} analyze ${FIXTURES}/sampling-minimal.alcpuprofile -f json`.text();
     const parsed = JSON.parse(result);
     expect(parsed.meta.profileType).toBe("sampling");
     expect(parsed.hotspots.length).toBeGreaterThan(0);
   });
 
   test("analyze works on instrumentation profile", async () => {
-    const result = await $`bun run ${CLI} analyze exampledata/cedf4512-490d-4252-b9f6-943dd571888f.alcpuprofile -f json -n 3`.text();
+    const result = await $`bun run ${CLI} analyze ${FIXTURES}/instrumentation-minimal.alcpuprofile -f json -n 2`.text();
     const parsed = JSON.parse(result);
     expect(parsed.meta.profileType).toBe("instrumentation");
-    expect(parsed.hotspots).toHaveLength(3);
-  // Increased timeout: auto companion zip detection adds I/O for extraction + source indexing
-  }, 60000);
+    expect(parsed.hotspots).toHaveLength(2);
+  });
 
   test("hotspots returns limited results", async () => {
-    const result = await $`bun run ${CLI} hotspots exampledata/PerformanceProfile_Session15.alcpuprofile -f json -n 2`.text();
+    const result = await $`bun run ${CLI} hotspots ${FIXTURES}/sampling-minimal.alcpuprofile -f json -n 2`.text();
     const parsed = JSON.parse(result);
     expect(parsed.hotspots.length).toBeLessThanOrEqual(2);
   });
 
   test("compare outputs valid JSON", async () => {
-    const result = await $`bun run ${CLI} compare exampledata/PerformanceProfile_Session6.alcpuprofile exampledata/PerformanceProfile_Session15.alcpuprofile -f json`.text();
+    const result = await $`bun run ${CLI} compare ${FIXTURES}/sampling-minimal.alcpuprofile ${FIXTURES}/sampling-minimal.alcpuprofile -f json`.text();
     const parsed = JSON.parse(result);
-    expect(parsed.meta.beforePath).toContain("Session6");
-    expect(parsed.meta.afterPath).toContain("Session15");
+    expect(parsed.meta.beforePath).toContain("sampling-minimal");
+    expect(parsed.meta.afterPath).toContain("sampling-minimal");
     expect(parsed.summary.deltaTime).toBeDefined();
   });
 

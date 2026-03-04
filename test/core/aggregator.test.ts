@@ -17,7 +17,7 @@ describe("aggregateByApp", () => {
   });
 
   test("sorts by selfTime descending", async () => {
-    const parsed = await parseProfile("exampledata/PerformanceProfile_Session6.alcpuprofile");
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);
     const apps = aggregateByApp(processed);
 
