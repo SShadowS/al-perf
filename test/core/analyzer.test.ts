@@ -42,6 +42,20 @@ describe("analyzeProfile", () => {
     expect(result.hotspots.length).toBeGreaterThan(0);
   });
 
+  test("extracts critical path through the call tree", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    expect(result.criticalPath).toBeDefined();
+    expect(result.criticalPath.length).toBeGreaterThan(0);
+    // The critical path should start at root and follow highest totalTime
+    // sampling-minimal: OnRun (totalTime=2500000) → ProcessLine (totalTime=2000000)
+    expect(result.criticalPath[0].functionName).toBe("OnRun");
+    expect(result.criticalPath[1].functionName).toBe("ProcessLine");
+    // Each step should have increasing depth
+    for (let i = 1; i < result.criticalPath.length; i++) {
+      expect(result.criticalPath[i].depth).toBeGreaterThan(result.criticalPath[i - 1].depth);
+    }
+  });
+
   test("attaches source locations to hotspots when source available", async () => {
     const result = await analyzeProfile(
       `${FIXTURES}/instrumentation-minimal.alcpuprofile`,

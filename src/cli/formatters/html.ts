@@ -239,6 +239,17 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     </table>
   </div>` : ""}
 
+  ${result.criticalPath && result.criticalPath.length > 1 ? `<div class="section">
+    <h2>Critical Path</h2>
+    <div style="font-family:monospace;font-size:0.95em">
+      ${result.criticalPath.map(step => {
+        const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
+        const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
+        return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
+      }).join("\n")}
+    </div>
+  </div>` : ""}
+
   ${result.patterns.length > 0 ? `<div class="section">
     <h2>Detected Patterns</h2>
     ${patternsHtml}

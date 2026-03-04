@@ -92,6 +92,18 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
     lines.push("");
   }
 
+  // Critical Path
+  if (result.criticalPath && result.criticalPath.length > 1) {
+    lines.push(chalk.bold("Critical Path"));
+    lines.push("");
+    for (const step of result.criticalPath) {
+      const indent = "  ".repeat(step.depth + 1);
+      const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
+      lines.push(`${indent}${arrow}${chalk.white.bold(step.functionName)} (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`);
+    }
+    lines.push("");
+  }
+
   // 4. Detected Patterns
   if (result.patterns.length > 0) {
     lines.push(chalk.bold("Detected Patterns"));

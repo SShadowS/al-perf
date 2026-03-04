@@ -343,6 +343,39 @@ function renderHotspots(data) {
 /**
  * Render the patterns section, grouped by severity.
  */
+function renderCriticalPath(data) {
+  const section = document.getElementById("critical-path-section");
+  if (!section) return;
+  section.innerHTML = "";
+
+  const path = data.criticalPath;
+  if (!path || path.length < 2) {
+    section.style.display = "none";
+    return;
+  }
+  section.style.display = "";
+
+  const heading = document.createElement("h2");
+  heading.textContent = "Critical Path";
+  section.appendChild(heading);
+
+  const container = document.createElement("div");
+  container.style.fontFamily = "monospace";
+  container.style.fontSize = "0.95em";
+  container.style.padding = "12px 0";
+
+  for (const step of path) {
+    const div = document.createElement("div");
+    div.style.margin = "2px 0";
+    const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
+    const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
+    div.innerHTML = `${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`;
+    container.appendChild(div);
+  }
+
+  section.appendChild(container);
+}
+
 function renderPatterns(data) {
   const section = document.getElementById("patterns-section");
   if (!section) return;
@@ -648,6 +681,7 @@ function buildSidebar() {
     { id: "explanation-section", label: "AI Analysis" },
     { id: "app-breakdown-section", label: "App Breakdown" },
     { id: "hotspots-section", label: "Hotspots" },
+    { id: "critical-path-section", label: "Critical Path" },
     { id: "patterns-section", label: "Patterns" },
     { id: "object-breakdown-section", label: "Object Breakdown" },
   ];
@@ -700,6 +734,7 @@ function renderResults(data) {
   renderExplanation(data);
   renderAppBreakdown(data);
   renderHotspots(data);
+  renderCriticalPath(data);
   renderPatterns(data);
   renderObjectBreakdown(data);
   buildSidebar();

@@ -84,6 +84,18 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
     lines.push("");
   }
 
+  // Critical Path
+  if (result.criticalPath && result.criticalPath.length > 1) {
+    lines.push("## Critical Path");
+    lines.push("");
+    for (const step of result.criticalPath) {
+      const indent = "\u00A0\u00A0".repeat(step.depth);
+      const arrow = step.depth > 0 ? "\u2514 " : "";
+      lines.push(`${indent}${arrow}**${step.functionName}** (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`);
+    }
+    lines.push("");
+  }
+
   // 4. Detected Patterns
   if (result.patterns.length > 0) {
     lines.push("## Detected Patterns");

@@ -1,5 +1,5 @@
 import { parseProfile } from "./parser.js";
-import { processProfile } from "./processor.js";
+import { processProfile, isIdleNode } from "./processor.js";
 import { aggregateByApp, aggregateByMethod, aggregateByObject } from "./aggregator.js";
 import { runDetectors } from "./patterns.js";
 import { buildSourceIndex } from "../source/indexer.js";
@@ -7,8 +7,9 @@ import { runSourceDetectors } from "../source/source-patterns.js";
 import { matchAllHotspots } from "../source/locator.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { SourceIndex } from "../types/source-index.js";
-import type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta } from "../output/types.js";
+import type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta, CriticalPathStep } from "../output/types.js";
 import type { DetectedPattern } from "../types/patterns.js";
+import type { ProcessedProfile, ProcessedNode } from "../types/processed.js";
 
 export interface AnalyzeOptions {
   top?: number;
@@ -38,6 +39,36 @@ export function formatTime(us: number): string {
     return `${(us / 1_000).toFixed(1)}ms`;
   }
   return `${Math.round(us)}\u00b5s`;
+}
+
+function extractCriticalPath(profile: ProcessedProfile): CriticalPathStep[] {
+  const path: CriticalPathStep[] = [];
+
+  // Start from the non-idle root with highest totalTime
+  let current: ProcessedNode | undefined = profile.roots
+    .filter(r => !isIdleNode(r))
+    .sort((a, b) => b.totalTime - a.totalTime)[0];
+
+  while (current) {
+    path.push({
+      functionName: current.callFrame.functionName,
+      objectType: current.applicationDefinition.objectType,
+      objectId: current.applicationDefinition.objectId,
+      objectName: current.applicationDefinition.objectName,
+      appName: current.declaringApplication?.appName ?? "(System)",
+      selfTime: current.selfTime,
+      totalTime: current.totalTime,
+      totalTimePercent: current.totalTimePercent,
+      depth: current.depth,
+    });
+
+    // Follow the child with highest totalTime (excluding idle)
+    const nonIdleChildren = current.children.filter(c => !isIdleNode(c));
+    if (nonIdleChildren.length === 0) break;
+    current = nonIdleChildren.sort((a, b) => b.totalTime - a.totalTime)[0];
+  }
+
+  return path;
 }
 
 function isIdle(method: MethodBreakdown): boolean {
@@ -77,6 +108,9 @@ export async function analyzeProfile(
     patterns.push(...sourcePatterns);
     patterns.sort((a, b) => b.impact - a.impact);
   }
+
+  // Extract critical path
+  const criticalPath = extractCriticalPath(processed);
 
   // Filter out IdleTime from hotspots
   let hotspots = methods.filter((m) => !isIdle(m));
@@ -158,6 +192,7 @@ export async function analyzeProfile(
       topMethod,
       patternCount,
     },
+    criticalPath,
     hotspots,
     patterns,
     appBreakdown: apps,

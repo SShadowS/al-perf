@@ -21,6 +21,7 @@ export interface AnalysisResult {
     topMethod: { name: string; object: string; percent: number } | null;
     patternCount: { critical: number; warning: number; info: number };
   };
+  criticalPath: CriticalPathStep[];
   hotspots: MethodBreakdown[];
   patterns: DetectedPattern[];
   appBreakdown: AppBreakdown[];
@@ -48,6 +49,18 @@ export interface ComparisonResult {
   newMethods: MethodBreakdown[];
   removedMethods: MethodBreakdown[];
   patternDeltas: PatternDelta[];
+}
+
+export interface CriticalPathStep {
+  functionName: string;
+  objectType: string;
+  objectId: number;
+  objectName: string;
+  appName: string;
+  selfTime: number;
+  totalTime: number;
+  totalTimePercent: number;
+  depth: number;
 }
 
 export interface PatternDelta {
