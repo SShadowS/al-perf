@@ -178,6 +178,57 @@ export const detectEventSubscriberHotspot: PatternDetector = (
 };
 
 /**
+ * Detect recursive calls: a method that appears as its own ancestor.
+ * Severity: warning.
+ */
+export const detectRecursion: PatternDetector = (
+  profile: ProcessedProfile,
+): DetectedPattern[] => {
+  const reported = new Set<string>();
+  const patterns: DetectedPattern[] = [];
+
+  for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
+    const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+    if (reported.has(key)) continue;
+
+    // Walk up ancestors to check for same method
+    let ancestor = node.parent;
+    let depth = 0;
+    while (ancestor) {
+      if (
+        ancestor.callFrame.functionName === node.callFrame.functionName &&
+        ancestor.applicationDefinition.objectId === node.applicationDefinition.objectId
+      ) {
+        reported.add(key);
+
+        const allInstances = profile.allNodes.filter(
+          n => n.callFrame.functionName === node.callFrame.functionName &&
+               n.applicationDefinition.objectId === node.applicationDefinition.objectId
+        );
+        const totalImpact = allInstances.reduce((sum, n) => sum + n.selfTime, 0);
+
+        patterns.push({
+          id: "recursive-call",
+          severity: "warning",
+          title: `${node.callFrame.functionName} calls itself recursively (depth ${depth + 1}+)`,
+          description: `${formatMethodRef(node)} appears ${allInstances.length} times in the call tree as a recursive chain.`,
+          impact: totalImpact,
+          involvedMethods: [formatMethodRef(node)],
+          evidence: `${allInstances.length} instances of the same method in ancestor-descendant relationships`,
+          suggestion: "Recursive calls in AL often indicate unintentional trigger chains or BOM explosion patterns. Consider iterative approaches or caching to limit recursion depth.",
+        });
+        break;
+      }
+      ancestor = ancestor.parent;
+      depth++;
+    }
+  }
+
+  return patterns;
+};
+
+/**
  * All built-in pattern detectors.
  */
 const allDetectors: PatternDetector[] = [
@@ -186,6 +237,7 @@ const allDetectors: PatternDetector[] = [
   detectDeepCallStack,
   detectRepeatedSiblings,
   detectEventSubscriberHotspot,
+  detectRecursion,
 ];
 
 /**

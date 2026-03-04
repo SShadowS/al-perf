@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
-import { runDetectors, detectSingleMethodDominance, detectHighHitCount, detectDeepCallStack } from "../../src/core/patterns.js";
+import { runDetectors, detectSingleMethodDominance, detectHighHitCount, detectDeepCallStack, detectRecursion } from "../../src/core/patterns.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -38,6 +38,27 @@ describe("detectDeepCallStack", () => {
     const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const processed = processProfile(parsed);
     const patterns = detectDeepCallStack(processed);
+
+    expect(patterns).toHaveLength(0);
+  });
+});
+
+describe("detectRecursion", () => {
+  test("detects recursive calls", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/recursive-profile.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const patterns = detectRecursion(processed);
+
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns[0].id).toBe("recursive-call");
+    expect(patterns[0].severity).toBe("warning");
+    expect(patterns[0].involvedMethods[0]).toContain("ProcessRecursive");
+  });
+
+  test("does not flag non-recursive profiles", async () => {
+    const parsed = await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const processed = processProfile(parsed);
+    const patterns = detectRecursion(processed);
 
     expect(patterns).toHaveLength(0);
   });
