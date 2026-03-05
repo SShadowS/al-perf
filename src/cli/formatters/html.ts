@@ -1,5 +1,7 @@
 import { marked } from "marked";
 import type { AnalysisResult } from "../../output/types.js";
+import type { SectionRenderers } from "../../output/sections.js";
+import { SECTION_ORDER } from "../../output/sections.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 import { formatTime } from "../../core/analyzer.js";
 
@@ -29,14 +31,41 @@ function severityColor(severity: "critical" | "warning" | "info"): string {
   }
 }
 
-/**
- * Format a single analysis result as a self-contained BC-themed HTML page.
- * Layout: AI Analysis → Profile Details → Hotspots → Patterns → App Breakdown.
- */
-export function formatAnalysisHtml(result: AnalysisResult): string {
+function renderSummary(result: AnalysisResult): string {
   const pc = result.summary.patternCount;
+  const source = result.meta.sourceAvailable ? "source available" : "no source";
+  const samplingRow = result.meta.samplingInterval !== undefined
+    ? `<tr><td>Sampling Interval</td><td>${formatTime(result.meta.samplingInterval)}</td></tr>`
+    : "";
 
-  const hotspotsRows = result.hotspots
+  return `<p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
+  <div class="badges">
+    <span class="badge" style="background:#EB6965">${pc.critical} Critical</span>
+    <span class="badge" style="background:#9F9700">${pc.warning} Warning</span>
+    <span class="badge" style="background:#505C6D">${pc.info} Info</span>
+  </div>
+
+  <div class="section">
+    <h2>Profile Details</h2>
+    <table class="meta-table">
+      <tr><td>Type</td><td>${escapeHtml(result.meta.profileType)}</td></tr>
+      <tr><td>Nodes</td><td>${result.meta.totalNodes}</td></tr>
+      <tr><td>Max Depth</td><td>${result.meta.maxDepth}</td></tr>
+      <tr><td>Source</td><td>${source}</td></tr>
+      ${samplingRow}
+      ${result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0
+        ? `<tr><td>Built-in Overhead</td><td>${formatTime(result.meta.builtinSelfTime)}</td></tr>`
+        : ""}
+      <tr><td>Confidence</td><td>${result.meta.confidenceScore}/100</td></tr>
+      <tr><td>Health</td><td>${result.summary.healthScore}/100</td></tr>
+    </table>
+  </div>`;
+}
+
+function renderHotspots(result: AnalysisResult): string {
+  if (result.hotspots.length === 0) return "";
+
+  const rows = result.hotspots
     .map((h: MethodBreakdown, i: number) => {
       const gapStr = h.gapTime && h.gapTime > 0
         ? ` <span style="color:#9F9700">+${formatTime(h.gapTime)} wait</span>`
@@ -60,6 +89,37 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     })
     .join("\n");
 
+  return `<div class="section">
+    <h2>Top Hotspots</h2>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Function</th><th>Object</th><th>App</th><th>Self Time</th><th>Total Time</th><th>Hits</th><th>Called By</th></tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderCriticalPath(result: AnalysisResult): string {
+  if (!result.criticalPath || result.criticalPath.length <= 1) return "";
+
+  return `<div class="section">
+    <h2>Critical Path</h2>
+    <div style="font-family:monospace;font-size:0.95em">
+      ${result.criticalPath.map(step => {
+        const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
+        const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
+        return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
+      }).join("\n")}
+    </div>
+  </div>`;
+}
+
+function renderPatterns(result: AnalysisResult): string {
+  if (result.patterns.length === 0) return "";
+
   const patternsHtml = result.patterns
     .map((p) => {
       const color = severityColor(p.severity);
@@ -78,7 +138,16 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     })
     .join("\n");
 
-  const appRows = result.appBreakdown
+  return `<div class="section">
+    <h2>Detected Patterns</h2>
+    ${patternsHtml}
+  </div>`;
+}
+
+function renderAppBreakdown(result: AnalysisResult): string {
+  if (result.appBreakdown.length === 0) return "";
+
+  const rows = result.appBreakdown
     .map((app) => {
       const pct = app.selfTimePercent.toFixed(1);
       const barWidth = Math.round(app.selfTimePercent);
@@ -91,18 +160,111 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     })
     .join("\n");
 
-  const explanationHtml = result.explanation
-    ? marked.parse(result.explanation.replace(/<[^>]*>/g, ""))
-    : "";
+  return `<div class="section">
+    <h2>App Breakdown</h2>
+    <table>
+      <thead>
+        <tr><th>App</th><th>Self Time</th><th>%</th><th>Chart</th></tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>`;
+}
 
-  const explanationSection = explanationHtml
-    ? `<div class="section explanation">${explanationHtml}</div>`
-    : "";
+function renderTableBreakdown(result: AnalysisResult): string {
+  if (!result.tableBreakdown || result.tableBreakdown.length === 0) return "";
 
-  const source = result.meta.sourceAvailable ? "source available" : "no source";
-  const samplingRow = result.meta.samplingInterval !== undefined
-    ? `<tr><td>Sampling Interval</td><td>${formatTime(result.meta.samplingInterval)}</td></tr>`
-    : "";
+  const rows = result.tableBreakdown.map(t => {
+    const topOp = t.operationBreakdown.length > 0
+      ? `${escapeHtml(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
+      : "\u2014";
+    return `<tr>
+            <td>${escapeHtml(t.tableName)}</td>
+            <td>${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)</td>
+            <td>${topOp}</td>
+            <td>${t.callSiteCount}</td>
+            <td>${t.hasSetLoadFields ? "Yes" : "No"}</td>
+            <td>${t.hasFilters ? "Yes" : "No"}</td>
+          </tr>`;
+  }).join("\n");
+
+  return `<div class="section">
+    <h2>Table Breakdown</h2>
+    <table>
+      <thead>
+        <tr><th>Table</th><th>Self Time</th><th>Top Operation</th><th>Call Sites</th><th>SetLoadFields</th><th>Filtered</th></tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderObjectBreakdown(result: AnalysisResult): string {
+  if (result.objectBreakdown.length === 0) return "";
+
+  const rows = result.objectBreakdown.map(obj => {
+    const headerRow = `<tr style="font-weight:600">
+            <td>${escapeHtml(obj.objectType)} ${escapeHtml(obj.objectName)}</td>
+            <td>${obj.objectId}</td>
+            <td>${escapeHtml(obj.appName)}</td>
+            <td>${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)</td>
+            <td>${obj.methodCount}</td>
+          </tr>`;
+    const methodRows = obj.methods.map(m =>
+      `<tr>
+              <td style="padding-left:24px;color:#505C6D">${escapeHtml(m.functionName)}</td>
+              <td></td>
+              <td></td>
+              <td style="color:#505C6D">${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)</td>
+              <td style="color:#505C6D">${m.hitCount} hits</td>
+            </tr>`
+    ).join("\n");
+    return headerRow + "\n" + methodRows;
+  }).join("\n");
+
+  return `<div class="section">
+    <h2>Object Breakdown</h2>
+    <table>
+      <thead>
+        <tr><th>Object</th><th>ID</th><th>App</th><th>Self Time</th><th>Methods</th></tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderExplanation(result: AnalysisResult): string {
+  if (!result.explanation) return "";
+
+  const explanationHtml = marked.parse(result.explanation.replace(/<[^>]*>/g, ""));
+  return `<div class="section explanation">${explanationHtml}</div>`;
+}
+
+const htmlSections: SectionRenderers<string> = {
+  summary: renderSummary,
+  hotspots: renderHotspots,
+  criticalPath: renderCriticalPath,
+  patterns: renderPatterns,
+  appBreakdown: renderAppBreakdown,
+  tableBreakdown: renderTableBreakdown,
+  objectBreakdown: renderObjectBreakdown,
+  explanation: renderExplanation,
+};
+
+/**
+ * Format a single analysis result as a self-contained BC-themed HTML page.
+ */
+export function formatAnalysisHtml(result: AnalysisResult): string {
+  const sectionHtml = SECTION_ORDER
+    .map(section => htmlSections[section](result))
+    .filter(html => html !== "")
+    .join("\n\n  ");
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -204,124 +366,7 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
   </style>
 </head>
 <body>
-  <p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
-  <div class="badges">
-    <span class="badge" style="background:#EB6965">${pc.critical} Critical</span>
-    <span class="badge" style="background:#9F9700">${pc.warning} Warning</span>
-    <span class="badge" style="background:#505C6D">${pc.info} Info</span>
-  </div>
-
-  ${explanationSection}
-
-  <div class="section">
-    <h2>Profile Details</h2>
-    <table class="meta-table">
-      <tr><td>Type</td><td>${escapeHtml(result.meta.profileType)}</td></tr>
-      <tr><td>Nodes</td><td>${result.meta.totalNodes}</td></tr>
-      <tr><td>Max Depth</td><td>${result.meta.maxDepth}</td></tr>
-      <tr><td>Source</td><td>${source}</td></tr>
-      ${samplingRow}
-      ${result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0
-        ? `<tr><td>Built-in Overhead</td><td>${formatTime(result.meta.builtinSelfTime)}</td></tr>`
-        : ""}
-      <tr><td>Confidence</td><td>${result.meta.confidenceScore}/100</td></tr>
-      <tr><td>Health</td><td>${result.summary.healthScore}/100</td></tr>
-    </table>
-  </div>
-
-  ${result.hotspots.length > 0 ? `<div class="section">
-    <h2>Top Hotspots</h2>
-    <table>
-      <thead>
-        <tr><th>#</th><th>Function</th><th>Object</th><th>App</th><th>Self Time</th><th>Total Time</th><th>Hits</th><th>Called By</th></tr>
-      </thead>
-      <tbody>
-        ${hotspotsRows}
-      </tbody>
-    </table>
-  </div>` : ""}
-
-  ${result.criticalPath && result.criticalPath.length > 1 ? `<div class="section">
-    <h2>Critical Path</h2>
-    <div style="font-family:monospace;font-size:0.95em">
-      ${result.criticalPath.map(step => {
-        const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
-        const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
-        return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
-      }).join("\n")}
-    </div>
-  </div>` : ""}
-
-  ${result.patterns.length > 0 ? `<div class="section">
-    <h2>Detected Patterns</h2>
-    ${patternsHtml}
-  </div>` : ""}
-
-  ${result.appBreakdown.length > 0 ? `<div class="section">
-    <h2>App Breakdown</h2>
-    <table>
-      <thead>
-        <tr><th>App</th><th>Self Time</th><th>%</th><th>Chart</th></tr>
-      </thead>
-      <tbody>
-        ${appRows}
-      </tbody>
-    </table>
-  </div>` : ""}
-
-  ${result.tableBreakdown && result.tableBreakdown.length > 0 ? `<div class="section">
-    <h2>Table Breakdown</h2>
-    <table>
-      <thead>
-        <tr><th>Table</th><th>Self Time</th><th>Top Operation</th><th>Call Sites</th><th>SetLoadFields</th><th>Filtered</th></tr>
-      </thead>
-      <tbody>
-        ${result.tableBreakdown.map(t => {
-          const topOp = t.operationBreakdown.length > 0
-            ? `${escapeHtml(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
-            : "\u2014";
-          return `<tr>
-            <td>${escapeHtml(t.tableName)}</td>
-            <td>${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)</td>
-            <td>${topOp}</td>
-            <td>${t.callSiteCount}</td>
-            <td>${t.hasSetLoadFields ? "Yes" : "No"}</td>
-            <td>${t.hasFilters ? "Yes" : "No"}</td>
-          </tr>`;
-        }).join("\n")}
-      </tbody>
-    </table>
-  </div>` : ""}
-
-  ${result.objectBreakdown.length > 0 ? `<div class="section">
-    <h2>Object Breakdown</h2>
-    <table>
-      <thead>
-        <tr><th>Object</th><th>ID</th><th>App</th><th>Self Time</th><th>Methods</th></tr>
-      </thead>
-      <tbody>
-        ${result.objectBreakdown.map(obj => {
-          const headerRow = `<tr style="font-weight:600">
-            <td>${escapeHtml(obj.objectType)} ${escapeHtml(obj.objectName)}</td>
-            <td>${obj.objectId}</td>
-            <td>${escapeHtml(obj.appName)}</td>
-            <td>${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)</td>
-            <td>${obj.methodCount}</td>
-          </tr>`;
-          const methodRows = obj.methods.map(m =>
-            `<tr>
-              <td style="padding-left:24px;color:#505C6D">${escapeHtml(m.functionName)}</td>
-              <td></td>
-              <td></td>
-              <td style="color:#505C6D">${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)</td>
-              <td style="color:#505C6D">${m.hitCount} hits</td>
-            </tr>`
-          ).join("\n");
-          return headerRow + "\n" + methodRows;
-        }).join("\n")}
-      </tbody>
-    </table>
-  </div>` : ""}
+  ${sectionHtml}
 </body>
 </html>`;
 }
