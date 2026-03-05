@@ -290,6 +290,36 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
       </tbody>
     </table>
   </div>` : ""}
+
+  ${result.objectBreakdown.length > 0 ? `<div class="section">
+    <h2>Object Breakdown</h2>
+    <table>
+      <thead>
+        <tr><th>Object</th><th>ID</th><th>App</th><th>Self Time</th><th>Methods</th></tr>
+      </thead>
+      <tbody>
+        ${result.objectBreakdown.map(obj => {
+          const headerRow = `<tr style="font-weight:600">
+            <td>${escapeHtml(obj.objectType)} ${escapeHtml(obj.objectName)}</td>
+            <td>${obj.objectId}</td>
+            <td>${escapeHtml(obj.appName)}</td>
+            <td>${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)</td>
+            <td>${obj.methodCount}</td>
+          </tr>`;
+          const methodRows = obj.methods.map(m =>
+            `<tr>
+              <td style="padding-left:24px;color:#505C6D">${escapeHtml(m.functionName)}</td>
+              <td></td>
+              <td></td>
+              <td style="color:#505C6D">${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)</td>
+              <td style="color:#505C6D">${m.hitCount} hits</td>
+            </tr>`
+          ).join("\n");
+          return headerRow + "\n" + methodRows;
+        }).join("\n")}
+      </tbody>
+    </table>
+  </div>` : ""}
 </body>
 </html>`;
 }
