@@ -152,7 +152,29 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
     lines.push("");
   }
 
-  // 7. AI Analysis (optional)
+  // 7. Object Breakdown
+  if (result.objectBreakdown.length > 0) {
+    lines.push("## Object Breakdown");
+    lines.push("");
+
+    for (const obj of result.objectBreakdown) {
+      lines.push(`### ${obj.objectType} ${obj.objectName} (ID ${obj.objectId})`);
+      lines.push("");
+      lines.push(`**App:** ${obj.appName} | **Self Time:** ${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%) | **Methods:** ${obj.methodCount}`);
+      lines.push("");
+
+      if (obj.methods.length > 0) {
+        lines.push("| Function | Self Time | Total Time | Hits |");
+        lines.push("| --- | --- | --- | --- |");
+        for (const m of obj.methods) {
+          lines.push(`| ${m.functionName} | ${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%) | ${formatTime(m.totalTime)} (${m.totalTimePercent.toFixed(1)}%) | ${m.hitCount} |`);
+        }
+        lines.push("");
+      }
+    }
+  }
+
+  // 8. AI Analysis (optional)
   if (result.explanation) {
     lines.push("## AI Analysis");
     lines.push("");
