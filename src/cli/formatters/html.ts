@@ -224,6 +224,8 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
       ${result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0
         ? `<tr><td>Built-in Overhead</td><td>${formatTime(result.meta.builtinSelfTime)}</td></tr>`
         : ""}
+      <tr><td>Confidence</td><td>${result.meta.confidenceScore}/100</td></tr>
+      <tr><td>Health</td><td>${result.summary.healthScore}/100</td></tr>
     </table>
   </div>
 
