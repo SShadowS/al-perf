@@ -39,6 +39,14 @@ describe("formatAnalysisTerminal", () => {
     expect(output).toContain("This profile shows significant time in ProcessLine.");
   });
 
+  test("includes pattern suggestion when present", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisTerminal(result);
+    if (result.patterns.some(p => p.suggestion)) {
+      expect(output).toContain("Suggestion:");
+    }
+  });
+
   test("includes object breakdown section", async () => {
     const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const output = formatAnalysisTerminal(result);

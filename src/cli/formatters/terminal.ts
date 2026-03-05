@@ -118,6 +118,9 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
       if (p.estimatedSavings && p.estimatedSavings > 0) {
         lines.push(`    Estimated savings: ${chalk.green(formatTime(p.estimatedSavings))}`);
       }
+      if (p.suggestion) {
+        lines.push(`    ${chalk.cyan("Suggestion:")} ${p.suggestion}`);
+      }
       lines.push("");
     }
   }
