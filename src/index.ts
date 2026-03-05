@@ -23,6 +23,7 @@ export { buildTableRelationGraph, tableConnectivityStats } from "./source/table-
 // Explainer
 export { explainAnalysis, trimResultForPrompt, SYSTEM_PROMPT } from "./explain/explainer.js";
 export type { ExplainOptions, ExplainModel } from "./explain/explainer.js";
+export { explainBatchAnalysis, trimBatchResultForPrompt, BATCH_SYSTEM_PROMPT } from "./explain/batch-explainer.js";
 
 // CLI types
 export type { GateResult } from "./cli/commands/gate.js";

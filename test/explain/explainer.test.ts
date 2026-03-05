@@ -100,4 +100,18 @@ describe("SYSTEM_PROMPT", () => {
   test("mentions Business Central", () => {
     expect(SYSTEM_PROMPT).toContain("Business Central");
   });
+
+  test("includes BC domain knowledge for metadata cache warming", () => {
+    expect(SYSTEM_PROMPT).toContain("metadata cache");
+    expect(SYSTEM_PROMPT).toContain("Service tier");
+  });
+
+  test("includes BC domain knowledge for JIT and permissions", () => {
+    expect(SYSTEM_PROMPT).toContain("JIT");
+    expect(SYSTEM_PROMPT).toContain("Permission");
+  });
+
+  test("warns against premature code-fix recommendations", () => {
+    expect(SYSTEM_PROMPT).toContain("infrastructure");
+  });
 });
