@@ -42,7 +42,10 @@ export function parseProfileFromRaw(raw: RawProfile): ParsedProfile {
   if (type === "sampling" && raw.timeDeltas?.length) {
     const nonZero = raw.timeDeltas.filter(d => d > 0);
     if (nonZero.length > 0) {
-      samplingInterval = Math.round(nonZero.reduce((a, b) => a + b, 0) / nonZero.length);
+      // Use median instead of mean to ignore large outlier gaps
+      // (BC scheduled profiler profiles have huge idle gaps between samples)
+      const sorted = [...nonZero].sort((a, b) => a - b);
+      samplingInterval = sorted[Math.floor(sorted.length / 2)];
     }
   }
 
