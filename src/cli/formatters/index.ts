@@ -6,6 +6,7 @@ import { formatAnalysisJson, formatComparisonJson } from "./json.js";
 import { formatAnalysisMarkdown, formatComparisonMarkdown } from "./markdown.js";
 import { formatAnalysisTerminal, formatComparisonTerminal } from "./terminal.js";
 import { formatBatchTerminal } from "./batch-terminal.js";
+import { formatBatchMarkdown } from "./batch-markdown.js";
 
 export type { OutputFormat } from "./auto.js";
 
@@ -31,7 +32,7 @@ export function formatBatch(result: BatchAnalysisResult, format: OutputFormat): 
   const resolved = resolveFormat(format);
   switch (resolved) {
     case "json": return JSON.stringify(result, null, 2);
-    case "markdown": return JSON.stringify(result, null, 2); // Placeholder until markdown formatter
+    case "markdown": return formatBatchMarkdown(result);
     case "terminal": return formatBatchTerminal(result);
   }
 }
