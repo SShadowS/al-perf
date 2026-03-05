@@ -98,13 +98,18 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         // Expand directory paths to .alcpuprofile files
         const resolvedPaths: string[] = [];
         for (const p of profilePaths) {
-          const stat = statSync(p);
-          if (stat.isDirectory()) {
-            const files = readdirSync(p)
-              .filter((f) => f.endsWith(".alcpuprofile"))
-              .map((f) => join(p, f));
-            resolvedPaths.push(...files);
-          } else {
+          try {
+            const stat = statSync(p);
+            if (stat.isDirectory()) {
+              const files = readdirSync(p)
+                .filter((f) => f.endsWith(".alcpuprofile"))
+                .map((f) => join(p, f));
+              resolvedPaths.push(...files);
+            } else {
+              resolvedPaths.push(p);
+            }
+          } catch {
+            // Path doesn't exist — pass through for analysis-time error handling
             resolvedPaths.push(p);
           }
         }

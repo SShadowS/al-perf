@@ -49,11 +49,13 @@ export async function analyzeBatch(
 
   const results: AnalysisResult[] = [];
   const errors: { profilePath: string; error: string }[] = [];
+  const succeededIndices: number[] = [];
 
   for (let i = 0; i < settled.length; i++) {
     const outcome = settled[i];
     if (outcome.status === "fulfilled") {
       results.push(outcome.value);
+      succeededIndices.push(i);
     } else {
       errors.push({
         profilePath: profilePaths[i],
@@ -68,7 +70,12 @@ export async function analyzeBatch(
     );
   }
 
-  return aggregateResults(results, errors, options?.metadata);
+  // Filter metadata to match succeeded results so indices stay aligned
+  const alignedMetadata = options?.metadata
+    ? succeededIndices.map((i) => options.metadata![i]).filter((m): m is ProfileMetadata => m != null)
+    : undefined;
+
+  return aggregateResults(results, errors, alignedMetadata);
 }
 
 export function aggregateResults(

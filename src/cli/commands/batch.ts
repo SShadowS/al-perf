@@ -112,18 +112,11 @@ export function registerBatchCommand(program: Command) {
         } else {
           try {
             const modelLabel = model === "opus" ? "Opus" : "Sonnet";
-            // Dynamic import with variable path to avoid compile-time module resolution
-            const modulePath = "../../explain/batch-explainer.js";
-            try {
-              const mod = await import(/* @vite-ignore */ modulePath);
-              result.explanation = await withStatus(
-                `Generating AI batch explanation (Claude ${modelLabel})...`,
-                () => mod.explainBatch(result, { apiKey, model: model as ExplainModel }),
-              );
-            } catch {
-              // batch-explainer not implemented yet — skip gracefully
-              console.error("Warning: Batch explanation not yet available. Skipping --explain.");
-            }
+            const mod = await import("../../explain/batch-explainer.js");
+            result.explanation = await withStatus(
+              `Generating AI batch explanation (Claude ${modelLabel})...`,
+              () => mod.explainBatchAnalysis(result, { apiKey, model: model as ExplainModel }),
+            );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --explain failed: ${message}`);
