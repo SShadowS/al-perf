@@ -4,6 +4,8 @@ export { processProfile } from "./core/processor.js";
 export { aggregateByApp, aggregateByMethod, aggregateByObject } from "./core/aggregator.js";
 export { runDetectors } from "./core/patterns.js";
 export { analyzeProfile, compareProfiles } from "./core/analyzer.js";
+export { analyzeBatch, aggregateResults } from "./core/batch-analyzer.js";
+export type { BatchOptions } from "./core/batch-analyzer.js";
 export { drilldownMethod } from "./core/drilldown.js";
 export { buildTableBreakdown } from "./core/table-view.js";
 
