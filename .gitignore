@@ -11,3 +11,4 @@ web/stats.json
 exampledata/
 CLAUDE.md
 .al-profile-cache/
+.worktrees/
