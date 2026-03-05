@@ -1,0 +1,32 @@
+[
+  {
+    "activityId": "activity-001",
+    "activityType": "WebClient",
+    "activityDescription": "Sales Order List",
+    "startTime": "2026-03-01T08:00:00Z",
+    "activityDuration": 5000,
+    "alExecutionDuration": 3200,
+    "sqlCallDuration": 1200,
+    "sqlCallCount": 45,
+    "httpCallDuration": 0,
+    "httpCallCount": 0,
+    "userName": "admin",
+    "clientSessionId": 101,
+    "scheduleDescription": "Morning check"
+  },
+  {
+    "activityId": "activity-002",
+    "activityType": "Background",
+    "activityDescription": "Job Queue: Calc Inventory",
+    "startTime": "2026-03-01T09:00:00Z",
+    "activityDuration": 8000,
+    "alExecutionDuration": 6100,
+    "sqlCallDuration": 3400,
+    "sqlCallCount": 120,
+    "httpCallDuration": 200,
+    "httpCallCount": 2,
+    "userName": "admin",
+    "clientSessionId": 102,
+    "scheduleDescription": "Morning check"
+  }
+]
