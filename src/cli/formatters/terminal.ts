@@ -5,6 +5,7 @@ import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 import { formatTime } from "../../core/analyzer.js";
+import { truncateFunctionName } from "../../core/display-utils.js";
 
 /**
  * Build a simple bar chart string using filled/empty blocks.
@@ -74,7 +75,7 @@ function renderHotspots(result: AnalysisResult): string {
       : `${h.objectType} ${h.objectId} (${h.objectName})`;
     hotspotsTable.push([
       String(i + 1),
-      chalk.white.bold(h.functionName),
+      chalk.white.bold(truncateFunctionName(h.functionName, 80)),
       objectStr,
       h.appName,
       selfTimeStr + gapStr,

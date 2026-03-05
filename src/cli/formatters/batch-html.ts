@@ -3,6 +3,7 @@ import type { BatchAnalysisResult } from "../../output/batch-types.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
 import { formatTime } from "../../core/analyzer.js";
+import { truncateFunctionName } from "../../core/display-utils.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
@@ -202,8 +203,12 @@ function renderCumulativeHotspots(result: BatchAnalysisResult): string {
   const rows = result.cumulativeHotspots
     .map((h) => {
       const barWidth = maxTime > 0 ? Math.round((h.cumulativeSelfTime / maxTime) * 100) : 0;
+      const displayName = truncateFunctionName(h.functionName);
+      const nameHtml = displayName !== h.functionName
+        ? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
+        : `<strong>${escapeHtml(h.functionName)}</strong>`;
       return `<tr>
-        <td><strong>${escapeHtml(h.functionName)}</strong></td>
+        <td>${nameHtml}</td>
         <td>${escapeHtml(h.objectType)} ${h.objectId} (${escapeHtml(h.objectName)})</td>
         <td>
           <div class="time-bar-container">

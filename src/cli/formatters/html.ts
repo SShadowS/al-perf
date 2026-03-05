@@ -4,6 +4,7 @@ import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 import { formatTime } from "../../core/analyzer.js";
+import { truncateFunctionName } from "../../core/display-utils.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
@@ -76,9 +77,13 @@ function renderHotspots(result: AnalysisResult): string {
       const calledByStr = h.calledBy.length > 0
         ? escapeHtml(h.calledBy.slice(0, 3).join(", "))
         : "\u2014";
+      const displayName = truncateFunctionName(h.functionName);
+      const nameHtml = displayName !== h.functionName
+        ? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
+        : `<strong>${escapeHtml(h.functionName)}</strong>`;
       return `<tr>
         <td>${i + 1}</td>
-        <td><strong>${escapeHtml(h.functionName)}</strong></td>
+        <td>${nameHtml}</td>
         <td>${objectStr}</td>
         <td>${escapeHtml(h.appName)}</td>
         <td>${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)${gapStr}</td>

@@ -5,6 +5,7 @@ import type { BatchAnalysisResult } from "../../output/batch-types.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
 import { formatTime } from "../../core/analyzer.js";
+import { truncateFunctionName } from "../../core/display-utils.js";
 
 /**
  * Build a simple bar chart string using filled/empty blocks.
@@ -176,7 +177,7 @@ function renderCumulativeHotspots(result: BatchAnalysisResult): string {
 
   for (const hotspot of result.cumulativeHotspots) {
     table.push([
-      chalk.white.bold(hotspot.functionName),
+      chalk.white.bold(truncateFunctionName(hotspot.functionName, 80)),
       `${hotspot.objectType} ${hotspot.objectId} (${hotspot.objectName})`,
       formatTime(hotspot.cumulativeSelfTime),
       `${hotspot.profileCount}/${result.meta.profileCount}`,
