@@ -2,9 +2,13 @@ import { resolve, join, basename } from "path";
 import { mkdir, rm, readFile, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { analyzeProfile } from "../src/core/analyzer.js";
+import { analyzeBatch } from "../src/core/batch-analyzer.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
 import { explainAnalysis } from "../src/explain/explainer.js";
+import { explainBatchAnalysis } from "../src/explain/batch-explainer.js";
 import { formatAnalysisHtml } from "../src/cli/formatters/html.js";
+import { formatBatchHtml } from "../src/cli/formatters/batch-html.js";
+import type { ProfileMetadata } from "../src/types/batch.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 const STATS_FILE = resolve(import.meta.dir, "stats.json");
@@ -176,6 +180,133 @@ async function handleAnalyze(req: Request): Promise<Response> {
   }
 }
 
+/**
+ * Handle POST /api/analyze-batch — accepts multipart/form-data with:
+ *   - profiles[] (required): multiple .alcpuprofile files
+ *   - manifest (optional): JSON text with ProfileMetadata[]
+ *   - source (optional): .zip of AL source files
+ *
+ * Returns BatchAnalysisResult as JSON or HTML.
+ */
+async function handleAnalyzeBatch(req: Request): Promise<Response> {
+  const contentType = req.headers.get("content-type") || "";
+  if (!contentType.startsWith("multipart/form-data")) {
+    return Response.json(
+      { error: "Content-Type must be multipart/form-data" },
+      { status: 400 },
+    );
+  }
+
+  let tempDir: string | undefined;
+  let sourceCleanup: (() => Promise<void>) | undefined;
+
+  try {
+    const formData = await req.formData();
+    const profileFiles = formData.getAll("profiles[]");
+
+    if (!profileFiles.length || !profileFiles.every((f) => f instanceof File)) {
+      return Response.json(
+        { error: "Missing required 'profiles[]' field (must be one or more files)" },
+        { status: 400 },
+      );
+    }
+
+    // Write uploads to a per-request temp directory
+    tempDir = await makeTempDir();
+
+    const profilePaths: string[] = [];
+    for (let i = 0; i < profileFiles.length; i++) {
+      const file = profileFiles[i] as File;
+      const safeName = `${i}-${basename(file.name || `profile-${i}.alcpuprofile`)}`;
+      const filePath = join(tempDir, safeName);
+      await Bun.write(filePath, file);
+      profilePaths.push(filePath);
+    }
+
+    // Parse optional manifest
+    let metadata: ProfileMetadata[] | undefined;
+    const manifestField = formData.get("manifest");
+    if (manifestField) {
+      const manifestText =
+        manifestField instanceof File
+          ? await manifestField.text()
+          : String(manifestField);
+      metadata = JSON.parse(manifestText) as ProfileMetadata[];
+    }
+
+    // Handle optional source zip
+    let sourcePath: string | undefined;
+    const sourceFile = formData.get("source");
+    if (sourceFile && sourceFile instanceof File) {
+      const safeZipName = basename(sourceFile.name || "source.zip");
+      const zipPath = join(tempDir, safeZipName);
+      await Bun.write(zipPath, sourceFile);
+      const extracted = await extractCompanionZip(zipPath);
+      sourcePath = extracted.extractDir;
+      sourceCleanup = extracted.cleanup;
+    }
+
+    // Run batch analysis
+    const result = await analyzeBatch(profilePaths, {
+      metadata,
+      sourcePath,
+    });
+
+    // Run AI explanation if API key is available
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (apiKey) {
+      try {
+        result.explanation = await explainBatchAnalysis(result, { apiKey, model: "sonnet" });
+      } catch {
+        // Non-fatal — analysis still returns without explanation
+      }
+    }
+
+    // Record successful analysis for stats
+    recordAnalysis().catch(() => {});
+
+    // Branch on requested output format
+    const url = new URL(req.url);
+    const format = url.searchParams.get("format");
+
+    if (format === "html") {
+      const html = formatBatchHtml(result);
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    if (format && format !== "json") {
+      return Response.json(
+        { error: `Unsupported format '${format}'. Supported: json, html` },
+        { status: 400 },
+      );
+    }
+    return Response.json(result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[analyze-batch error] ${message}`);
+    if (err instanceof Error && err.stack) console.error(err.stack);
+    return Response.json({ error: "Batch analysis failed. Please check the uploaded files." }, { status: 500 });
+  } finally {
+    // Clean up source extraction temp dir
+    if (sourceCleanup) {
+      try {
+        await sourceCleanup();
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    // Clean up the per-request temp dir
+    if (tempDir) {
+      try {
+        await rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+}
+
 const CSP_HEADERS = {
   "Content-Security-Policy":
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
@@ -208,6 +339,12 @@ export const server = Bun.serve({
     if (url.pathname === "/api/analyze" && req.method === "POST") {
       const res = await handleAnalyze(req);
       console.log(`${new Date().toISOString()} ${ip} POST /api/analyze ${res.status} ${Date.now() - start}ms`);
+      return withSecurityHeaders(res);
+    }
+
+    if (url.pathname === "/api/analyze-batch" && req.method === "POST") {
+      const res = await handleAnalyzeBatch(req);
+      console.log(`${new Date().toISOString()} ${ip} POST /api/analyze-batch ${res.status} ${Date.now() - start}ms`);
       return withSecurityHeaders(res);
     }
 
