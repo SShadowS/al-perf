@@ -1,4 +1,5 @@
 import { basename } from "path";
+import { marked } from "marked";
 import type { BatchAnalysisResult } from "../../output/batch-types.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
@@ -79,9 +80,10 @@ function renderBatchSummary(result: BatchAnalysisResult): string {
 function renderBatchExplanation(result: BatchAnalysisResult): string {
   if (!result.explanation) return "";
 
+  const explanationHtml = marked.parse(result.explanation.replace(/<[^>]*>/g, ""));
   return `<div class="section explanation">
     <h2>AI Analysis</h2>
-    <div class="explanation-content">${escapeHtml(result.explanation).replace(/\n/g, "<br>")}</div>
+    <div class="explanation-content">${explanationHtml}</div>
   </div>`;
 }
 
@@ -410,6 +412,14 @@ export function formatBatchHtml(result: BatchAnalysisResult): string {
       padding: 12px 0;
       line-height: 1.6;
     }
+    .explanation h2, .explanation h3 { color: #212121; border-bottom: 1px solid #E0E0E0; }
+    .explanation h2 { font-size: 1.1em; margin: 20px 0 8px; }
+    .explanation h3 { font-size: 1em; margin: 16px 0 6px; }
+    .explanation p { margin: 8px 0; }
+    .explanation ul, .explanation ol { margin: 8px 0 8px 24px; }
+    .explanation code { background: #F5F5F5; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+    .explanation table { margin: 12px 0; }
+    .explanation hr { border: none; border-top: 1px solid #E0E0E0; margin: 16px 0; }
   </style>
 </head>
 <body>
