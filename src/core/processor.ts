@@ -1,5 +1,6 @@
 import type { ParsedProfile, RawProfileNode } from "../types/profile.js";
 import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
+import { normalizeObjectType } from "./object-types.js";
 
 export function isIdleNode(node: ProcessedNode): boolean {
   return node.callFrame.functionName === "IdleTime" && node.applicationDefinition.objectId === 0;
@@ -89,7 +90,10 @@ function createProcessedNode(raw: RawProfileNode): ProcessedNode {
   return {
     id: raw.id,
     callFrame: raw.callFrame,
-    applicationDefinition: raw.applicationDefinition,
+    applicationDefinition: {
+      ...raw.applicationDefinition,
+      objectType: normalizeObjectType(raw.applicationDefinition.objectType),
+    },
     declaringApplication: raw.declaringApplication,
     hitCount: raw.hitCount,
     children: [],
