@@ -109,12 +109,12 @@ describe("aggregateByMethod", () => {
     const methods = aggregateByMethod(processed);
 
     const processLine = methods.find(m => m.functionName === "ProcessLine")!;
-    // selfTime=2000000, hitCount=20 => costPerHit=100000
-    expect(processLine.costPerHit).toBe(100000);
+    // With sample-based selfTime: selfTime=400000, hitCount=20 => costPerHit=20000
+    expect(processLine.costPerHit).toBe(20000);
 
     const onRun = methods.find(m => m.functionName === "OnRun")!;
-    // selfTime=500000, hitCount=5 => costPerHit=100000
-    expect(onRun.costPerHit).toBe(100000);
+    // With sample-based selfTime: selfTime=0, hitCount=5 => costPerHit=0
+    expect(onRun.costPerHit).toBe(0);
   });
 
   test("computes efficiencyScore for each method", async () => {
@@ -123,12 +123,12 @@ describe("aggregateByMethod", () => {
     const methods = aggregateByMethod(processed);
 
     const processLine = methods.find(m => m.functionName === "ProcessLine")!;
-    // selfTime=2000000, totalTime=2000000 (leaf node) => efficiencyScore=1.0
+    // With sample-based selfTime: selfTime=400000, totalTime=400000 (leaf) => efficiencyScore=1.0
     expect(processLine.efficiencyScore).toBeCloseTo(1.0, 2);
 
     const onRun = methods.find(m => m.functionName === "OnRun")!;
-    // selfTime=500000, totalTime=2500000 => efficiencyScore=0.2
-    expect(onRun.efficiencyScore).toBeCloseTo(0.2, 2);
+    // With sample-based selfTime: selfTime=0, totalTime=400000 => efficiencyScore=0.0
+    expect(onRun.efficiencyScore).toBeCloseTo(0.0, 2);
   });
 
   test("computes callAmplification from hitCount ratio", async () => {

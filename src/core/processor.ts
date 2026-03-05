@@ -41,8 +41,17 @@ export function processProfile(parsed: ParsedProfile): ProcessedProfile {
   for (const root of roots) setDepths(root, 0);
 
   // Calculate selfTime
+  // For sampling profiles, detect if hitCount represents invocation count rather than sample count.
+  // BC scheduled profiler profiles can have hitCount >> samples.length, producing wildly wrong selfTime.
+  let sampleAppearances: Map<number, number> | undefined;
+  if (parsed.type === "sampling" && parsed.samples && parsed.samples.length > 0) {
+    const totalHitCount = parsed.nodes.reduce((sum, n) => sum + n.hitCount, 0);
+    if (totalHitCount > parsed.samples.length * 2) {
+      sampleAppearances = countSampleAppearances(parsed.samples);
+    }
+  }
   for (const node of nodeMap.values()) {
-    node.selfTime = calculateSelfTime(node, parsed);
+    node.selfTime = calculateSelfTime(node, parsed, sampleAppearances);
   }
 
   // Calculate totalTime bottom-up (deepest nodes first)
@@ -109,10 +118,19 @@ function createProcessedNode(raw: RawProfileNode): ProcessedNode {
   };
 }
 
-function calculateSelfTime(node: ProcessedNode, parsed: ParsedProfile): number {
+export function countSampleAppearances(samples: number[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const id of samples) {
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function calculateSelfTime(node: ProcessedNode, parsed: ParsedProfile, sampleAppearances?: Map<number, number>): number {
   if (parsed.type === "instrumentation" && node.positionTicks?.length) {
     return node.positionTicks.reduce((sum, pt) => sum + pt.executionTime, 0);
   }
   const interval = parsed.samplingInterval ?? 0;
-  return node.hitCount * interval;
+  const count = sampleAppearances ? (sampleAppearances.get(node.id) ?? 0) : node.hitCount;
+  return count * interval;
 }
