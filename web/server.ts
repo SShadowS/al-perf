@@ -12,8 +12,11 @@ import type { ProfileMetadata } from "../src/types/batch.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 const STATS_FILE = resolve(import.meta.dir, "stats.json");
+const RECORD_DIR = resolve(import.meta.dir, "..", "test", "fixtures", "batch-recorded");
 const MAX_BODY_SIZE = 100 * 1024 * 1024; // 100MB
 const PORT = parseInt(process.env.PORT || "3010", 10);
+
+let recordNextBatch = false;
 
 interface Stats {
   totalAnalyses: number;
@@ -225,13 +228,28 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
 
     // Parse optional manifest
     let metadata: ProfileMetadata[] | undefined;
+    let manifestText: string | undefined;
     const manifestField = formData.get("manifest");
     if (manifestField) {
-      const manifestText =
+      manifestText =
         manifestField instanceof File
           ? await manifestField.text()
           : String(manifestField);
       metadata = JSON.parse(manifestText) as ProfileMetadata[];
+    }
+
+    // Record request as test fixture (one-shot)
+    if (recordNextBatch) {
+      recordNextBatch = false;
+      await mkdir(RECORD_DIR, { recursive: true });
+      for (let i = 0; i < profilePaths.length; i++) {
+        const dest = join(RECORD_DIR, `profile-${i + 1}.alcpuprofile`);
+        await Bun.write(dest, Bun.file(profilePaths[i]));
+      }
+      if (manifestText) {
+        await writeFile(join(RECORD_DIR, "manifest.json"), manifestText);
+      }
+      console.log(`[record] Saved ${profilePaths.length} profiles + manifest to ${RECORD_DIR}`);
     }
 
     // Handle optional source zip
@@ -340,6 +358,15 @@ export const server = Bun.serve({
       const res = await handleAnalyze(req);
       console.log(`${new Date().toISOString()} ${ip} POST /api/analyze ${res.status} ${Date.now() - start}ms`);
       return withSecurityHeaders(res);
+    }
+
+    if (url.pathname === "/api/record-next-batch" && req.method === "POST") {
+      if (process.env.NODE_ENV === "production") {
+        return withSecurityHeaders(new Response("Not available in production", { status: 403 }));
+      }
+      recordNextBatch = true;
+      console.log("[record] Armed — next batch request will be saved to test fixtures");
+      return withSecurityHeaders(Response.json({ status: "armed" }));
     }
 
     if (url.pathname === "/api/analyze-batch" && req.method === "POST") {
