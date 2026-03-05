@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { analyzeProfile, compareProfiles, formatTime } from "../core/analyzer.js";
+import { analyzeBatch } from "../core/batch-analyzer.js";
 import { drilldownMethod } from "../core/drilldown.js";
 import { parseProfile } from "../core/parser.js";
 import { processProfile } from "../core/processor.js";
@@ -10,6 +11,7 @@ import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
 import { findCompanionZip, extractCompanionZip } from "../source/zip-extractor.js";
 import { HistoryStore } from "../history/store.js";
 import type { AnalysisResult } from "../output/types.js";
+import type { ProfileMetadata } from "../types/batch.js";
 import pkg from "../../package.json";
 
 export interface McpServerOptions {
@@ -61,6 +63,74 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         lastAnalysis = result;
         // Safe to cleanup before return: result is fully materialized in memory (no lazy refs to temp dir)
         if (cleanup) await cleanup();
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- analyze_batch ---
+  server.registerTool(
+    "analyze_batch",
+    {
+      title: "Analyze Profile Batch",
+      description: "Analyze multiple AL CPU profiles and produce an aggregate report with recurring patterns, cumulative hotspots, and per-activity breakdown. Useful for analyzing scheduled profiler output.",
+      inputSchema: {
+        profilePaths: z.array(z.string()).describe("Paths to .alcpuprofile files, or a single directory path"),
+        sourcePath: z.string().optional().describe("Path to AL source directory (overrides auto-detection and server default)"),
+        manifestPath: z.string().optional().describe("Path to manifest.json with ProfileMetadata[]"),
+        top: z.number().int().min(1).max(100).default(10).describe("Number of top hotspots per profile"),
+        appFilter: z.string().optional().describe("Comma-separated app names to focus on"),
+      },
+    },
+    async ({ profilePaths, sourcePath, manifestPath, top, appFilter }) => {
+      try {
+        const { readdirSync, statSync } = await import("fs");
+        const { join } = await import("path");
+
+        // Expand directory paths to .alcpuprofile files
+        const resolvedPaths: string[] = [];
+        for (const p of profilePaths) {
+          const stat = statSync(p);
+          if (stat.isDirectory()) {
+            const files = readdirSync(p)
+              .filter((f) => f.endsWith(".alcpuprofile"))
+              .map((f) => join(p, f));
+            resolvedPaths.push(...files);
+          } else {
+            resolvedPaths.push(p);
+          }
+        }
+
+        if (resolvedPaths.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "Error: No .alcpuprofile files found in the provided paths." }],
+            isError: true,
+          };
+        }
+
+        // Read manifest if provided
+        let metadata: ProfileMetadata[] | undefined;
+        if (manifestPath) {
+          const manifestContent = await Bun.file(manifestPath).text();
+          metadata = JSON.parse(manifestContent) as ProfileMetadata[];
+        }
+
+        const resolvedSourcePath = sourcePath ?? options?.defaultSourcePath;
+
+        const result = await analyzeBatch(resolvedPaths, {
+          metadata,
+          sourcePath: resolvedSourcePath,
+          top,
+          appFilter: appFilter?.split(",").map((s) => s.trim()),
+        });
 
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
