@@ -110,6 +110,14 @@ function renderSummary(data) {
       value: formatTime(data.meta.builtinSelfTime),
     });
   }
+  stats.push({
+    label: "Confidence",
+    value: data.meta.confidenceScore + "/100",
+  });
+  stats.push({
+    label: "Health",
+    value: data.summary.healthScore + "/100",
+  });
 
   for (const s of stats) {
     const stat = document.createElement("span");
