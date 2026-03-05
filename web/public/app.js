@@ -65,6 +65,13 @@ function renderMarkdown(text) {
 // Section renderers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Section renderers — mirrors SECTION_ORDER from src/output/sections.ts:
+//   summary, explanation, appBreakdown, tableBreakdown,
+//   hotspots, criticalPath, patterns, objectBreakdown
+// When adding a new section, update both this file AND src/output/sections.ts.
+// ---------------------------------------------------------------------------
+
 /**
  * Render the summary section.
  */
@@ -756,6 +763,7 @@ function buildSidebar() {
   if (!nav) return;
   nav.innerHTML = "";
 
+  // Mirrors SECTION_ORDER from src/output/sections.ts
   const sections = [
     { id: "summary-section", label: "Summary" },
     { id: "explanation-section", label: "AI Analysis" },
