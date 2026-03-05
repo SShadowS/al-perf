@@ -54,3 +54,5 @@ export type {
   LineRange,
   TableRelationInfo,
 } from "./types/source-index.js";
+export type { ProfileMetadata } from "./types/batch.js";
+export type { BatchAnalysisResult, RecurringPattern, CumulativeHotspot, ActivitySummary } from "./output/batch-types.js";
