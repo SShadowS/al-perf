@@ -9,6 +9,7 @@ import { registerMcpCommand } from "./commands/mcp.js";
 import { registerGateCommand } from "./commands/gate.js";
 import { registerAnalyzeSourceCommand } from "./commands/analyze-source.js";
 import { createHistoryCommand } from "./commands/history.js";
+import { registerBatchCommand } from "./commands/batch.js";
 import pkg from "../../package.json";
 
 const program = new Command();
@@ -27,5 +28,6 @@ registerMcpCommand(program);
 registerGateCommand(program);
 registerAnalyzeSourceCommand(program);
 program.addCommand(createHistoryCommand());
+registerBatchCommand(program);
 
 program.parse();

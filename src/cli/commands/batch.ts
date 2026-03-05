@@ -1,0 +1,143 @@
+import type { Command } from "commander";
+import { resolve, extname } from "path";
+import { readdirSync, statSync, readFileSync } from "fs";
+import { analyzeBatch, type BatchOptions } from "../../core/batch-analyzer.js";
+import { formatBatch, type OutputFormat } from "../formatters/index.js";
+import type { ExplainModel } from "../../explain/explainer.js";
+import type { ProfileMetadata } from "../../types/batch.js";
+import { SourceIndexCache } from "../../source/cache.js";
+import type { SourceIndex } from "../../types/source-index.js";
+import { withStatus } from "../status.js";
+
+/**
+ * Resolve a list of paths (files and directories) into a flat list of
+ * .alcpuprofile file paths. Directories are scanned for matching files.
+ */
+function resolveProfilePaths(paths: string[]): string[] {
+  const result: string[] = [];
+  for (const p of paths) {
+    const resolved = resolve(p);
+    let stat;
+    try {
+      stat = statSync(resolved);
+    } catch {
+      // If stat fails, treat it as a file path (will fail at analysis time with a clear error)
+      result.push(resolved);
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      const entries = readdirSync(resolved);
+      for (const entry of entries) {
+        if (extname(entry).toLowerCase() === ".alcpuprofile") {
+          result.push(resolve(resolved, entry));
+        }
+      }
+    } else {
+      result.push(resolved);
+    }
+  }
+  return result;
+}
+
+export function registerBatchCommand(program: Command) {
+  program
+    .command("batch")
+    .description("Analyze multiple AL CPU profiles as a batch")
+    .argument("<paths...>", "Profile files or directories containing .alcpuprofile files")
+    .option("-f, --format <format>", "Output format: auto|terminal|json|markdown", "auto")
+    .option("-n, --top <number>", "Number of top hotspots per profile", "10")
+    .option("--manifest <path>", "Path to JSON manifest with profile metadata")
+    .option("--app-filter <names>", "Focus on specific app(s), comma-separated")
+    .option("-s, --source <path>", "Path to AL source directory (enables source correlation)")
+    .option("--cache", "Cache source index for faster re-analysis")
+    .option("--explain", "Append AI-generated batch analysis summary (requires ANTHROPIC_API_KEY)")
+    .option("--model <model>", "Model for --explain: sonnet (default) or opus", "sonnet")
+    .option("--api-key <key>", "Anthropic API key (visible in process listings; prefer ANTHROPIC_API_KEY env var)")
+    .action(async (paths: string[], opts: any) => {
+      // Resolve files and directories into profile paths
+      const profilePaths = resolveProfilePaths(paths);
+
+      if (profilePaths.length === 0) {
+        console.error("Error: No .alcpuprofile files found in the provided paths.");
+        process.exit(1);
+      }
+
+      // Read manifest if provided
+      let metadata: ProfileMetadata[] | undefined;
+      if (opts.manifest) {
+        try {
+          const manifestContent = readFileSync(resolve(opts.manifest), "utf-8");
+          metadata = JSON.parse(manifestContent);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`Error reading manifest: ${message}`);
+          process.exit(1);
+        }
+      }
+
+      // Build source index once if --source provided
+      let sourceIndex: SourceIndex | undefined;
+      const sourcePath = opts.source;
+      if (sourcePath && opts.cache) {
+        const cache = new SourceIndexCache(resolve(sourcePath, ".al-profile-cache"));
+        sourceIndex = await withStatus("Building source index...", () =>
+          cache.getOrBuild(sourcePath!),
+        );
+      }
+
+      const batchOptions: BatchOptions = {
+        metadata,
+        top: parseInt(opts.top, 10),
+        appFilter: opts.appFilter?.split(",").map((s: string) => s.trim()),
+        sourcePath: opts.cache ? undefined : sourcePath,
+        sourceIndex,
+      };
+
+      const result = await withStatus(
+        `Analyzing ${profilePaths.length} profiles...`,
+        () => analyzeBatch(profilePaths, batchOptions),
+      );
+
+      // Run LLM explanation if --explain is provided
+      if (opts.explain) {
+        const model = opts.model ?? "sonnet";
+        if (model !== "sonnet" && model !== "opus") {
+          console.error(`Error: --model must be "sonnet" or "opus", got "${model}"`);
+          process.exit(1);
+        }
+        const apiKey = opts.apiKey || process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) {
+          console.error("Warning: --explain requires an API key. Set ANTHROPIC_API_KEY or use --api-key.");
+        } else {
+          try {
+            const modelLabel = model === "opus" ? "Opus" : "Sonnet";
+            // Dynamic import with variable path to avoid compile-time module resolution
+            const modulePath = "../../explain/batch-explainer.js";
+            try {
+              const mod = await import(/* @vite-ignore */ modulePath);
+              result.explanation = await withStatus(
+                `Generating AI batch explanation (Claude ${modelLabel})...`,
+                () => mod.explainBatch(result, { apiKey, model: model as ExplainModel }),
+              );
+            } catch {
+              // batch-explainer not implemented yet — skip gracefully
+              console.error("Warning: Batch explanation not yet available. Skipping --explain.");
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`Warning: --explain failed: ${message}`);
+          }
+        }
+      }
+
+      // Report errors to stderr
+      if (result.errors.length > 0) {
+        for (const err of result.errors) {
+          console.error(`Warning: Failed to analyze ${err.profilePath}: ${err.error}`);
+        }
+      }
+
+      process.stdout.write(formatBatch(result, opts.format as OutputFormat) + "\n");
+    });
+}
