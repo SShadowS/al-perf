@@ -1,8 +1,9 @@
 import chalk from "chalk";
 import Table from "cli-table3";
-import type { AnalysisResult, ComparisonResult, MethodDelta, TableBreakdown } from "../../output/types.js";
-import type { MethodBreakdown, AppBreakdown } from "../../types/aggregated.js";
-import type { DetectedPattern } from "../../types/patterns.js";
+import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
+import type { SectionRenderers } from "../../output/sections.js";
+import { SECTION_ORDER } from "../../output/sections.js";
+import type { MethodBreakdown } from "../../types/aggregated.js";
 import { formatTime } from "../../core/analyzer.js";
 
 /**
@@ -28,18 +29,8 @@ function formatSeverity(severity: "critical" | "warning" | "info"): string {
   }
 }
 
-/**
- * Format a single analysis result for terminal display.
- */
-export function formatAnalysisTerminal(result: AnalysisResult): string {
+function renderSummary(result: AnalysisResult): string {
   const lines: string[] = [];
-
-  // 1. Header
-  lines.push("");
-  lines.push(chalk.bold.cyan(`\u2500\u2500 AL Profile Analysis \u2014 ${result.meta.profilePath} \u2500\u2500`));
-  lines.push("");
-
-  // 2. Summary
   lines.push(chalk.bold("Summary"));
   lines.push(`  ${result.summary.oneLiner}`);
   const sourceTag = result.meta.sourceAvailable ? chalk.green("source available") : chalk.gray("no source");
@@ -52,168 +43,215 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
   }
   lines.push(`  Confidence: ${result.meta.confidenceScore}/100`);
   lines.push(`  Health: ${result.summary.healthScore}/100`);
+  return lines.join("\n");
+}
+
+function renderHotspots(result: AnalysisResult): string {
+  if (result.hotspots.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("Top Hotspots"));
+
+  const hotspotsTable = new Table({
+    head: [
+      chalk.gray("#"),
+      chalk.gray("Function"),
+      chalk.gray("Object"),
+      chalk.gray("App"),
+      chalk.gray("Self Time"),
+      chalk.gray("Total Time"),
+      chalk.gray("Hits"),
+      chalk.gray("Called By"),
+    ],
+    style: { head: [], border: [] },
+  });
+
+  result.hotspots.forEach((h: MethodBreakdown, i: number) => {
+    const selfTimeStr = `${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)`;
+    const gapStr = h.gapTime && h.gapTime > 0 ? chalk.yellow(` +${formatTime(h.gapTime)} wait`) : "";
+    const objectStr = h.sourceLocation
+      ? `${h.objectType} ${h.objectId}\n${chalk.gray(h.sourceLocation.filePath + ":" + h.sourceLocation.lineStart)}`
+      : `${h.objectType} ${h.objectId} (${h.objectName})`;
+    hotspotsTable.push([
+      String(i + 1),
+      chalk.white.bold(h.functionName),
+      objectStr,
+      h.appName,
+      selfTimeStr + gapStr,
+      `${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%)`,
+      String(h.hitCount),
+      h.calledBy.length > 0 ? h.calledBy.slice(0, 3).join(", ") : "-",
+    ]);
+  });
+
+  lines.push(hotspotsTable.toString());
+  return lines.join("\n");
+}
+
+function renderCriticalPath(result: AnalysisResult): string {
+  if (!result.criticalPath || result.criticalPath.length <= 1) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("Critical Path"));
+  lines.push("");
+  for (const step of result.criticalPath) {
+    const indent = "  ".repeat(step.depth + 1);
+    const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
+    lines.push(`${indent}${arrow}${chalk.white.bold(step.functionName)} (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`);
+  }
+  return lines.join("\n");
+}
+
+function renderPatterns(result: AnalysisResult): string {
+  if (result.patterns.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("Detected Patterns"));
   lines.push("");
 
-  // 3. Top Hotspots
-  if (result.hotspots.length > 0) {
-    lines.push(chalk.bold("Top Hotspots"));
-
-    const hotspotsTable = new Table({
-      head: [
-        chalk.gray("#"),
-        chalk.gray("Function"),
-        chalk.gray("Object"),
-        chalk.gray("App"),
-        chalk.gray("Self Time"),
-        chalk.gray("Total Time"),
-        chalk.gray("Hits"),
-        chalk.gray("Called By"),
-      ],
-      style: { head: [], border: [] },
-    });
-
-    result.hotspots.forEach((h: MethodBreakdown, i: number) => {
-      const selfTimeStr = `${formatTime(h.selfTime)} (${h.selfTimePercent.toFixed(1)}%)`;
-      const gapStr = h.gapTime && h.gapTime > 0 ? chalk.yellow(` +${formatTime(h.gapTime)} wait`) : "";
-      const objectStr = h.sourceLocation
-        ? `${h.objectType} ${h.objectId}\n${chalk.gray(h.sourceLocation.filePath + ":" + h.sourceLocation.lineStart)}`
-        : `${h.objectType} ${h.objectId} (${h.objectName})`;
-      hotspotsTable.push([
-        String(i + 1),
-        chalk.white.bold(h.functionName),
-        objectStr,
-        h.appName,
-        selfTimeStr + gapStr,
-        `${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%)`,
-        String(h.hitCount),
-        h.calledBy.length > 0 ? h.calledBy.slice(0, 3).join(", ") : "-",
-      ]);
-    });
-
-    lines.push(hotspotsTable.toString());
-    lines.push("");
-  }
-
-  // Critical Path
-  if (result.criticalPath && result.criticalPath.length > 1) {
-    lines.push(chalk.bold("Critical Path"));
-    lines.push("");
-    for (const step of result.criticalPath) {
-      const indent = "  ".repeat(step.depth + 1);
-      const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
-      lines.push(`${indent}${arrow}${chalk.white.bold(step.functionName)} (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`);
+  for (const p of result.patterns) {
+    lines.push(`  ${formatSeverity(p.severity)}  ${chalk.bold(p.title)}`);
+    lines.push(`    ${p.description}`);
+    lines.push(`    Impact: ${formatTime(p.impact)}`);
+    if (p.estimatedSavings && p.estimatedSavings > 0) {
+      lines.push(`    Estimated savings: ${chalk.green(formatTime(p.estimatedSavings))}`);
+    }
+    if (p.suggestion) {
+      lines.push(`    ${chalk.cyan("Suggestion:")} ${p.suggestion}`);
     }
     lines.push("");
   }
 
-  // 4. Detected Patterns
-  if (result.patterns.length > 0) {
-    lines.push(chalk.bold("Detected Patterns"));
-    lines.push("");
+  return lines.join("\n");
+}
 
-    for (const p of result.patterns) {
-      lines.push(`  ${formatSeverity(p.severity)}  ${chalk.bold(p.title)}`);
-      lines.push(`    ${p.description}`);
-      lines.push(`    Impact: ${formatTime(p.impact)}`);
-      if (p.estimatedSavings && p.estimatedSavings > 0) {
-        lines.push(`    Estimated savings: ${chalk.green(formatTime(p.estimatedSavings))}`);
-      }
-      if (p.suggestion) {
-        lines.push(`    ${chalk.cyan("Suggestion:")} ${p.suggestion}`);
-      }
+function renderAppBreakdown(result: AnalysisResult): string {
+  if (result.appBreakdown.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("App Breakdown"));
+  lines.push("");
+
+  for (const app of result.appBreakdown) {
+    const pct = app.selfTimePercent.toFixed(1);
+    lines.push(`  ${bar(app.selfTimePercent)} ${pct.padStart(5)}%  ${formatTime(app.selfTime).padStart(8)}  ${app.appName}`);
+  }
+  return lines.join("\n");
+}
+
+function renderTableBreakdown(result: AnalysisResult): string {
+  if (!result.tableBreakdown || result.tableBreakdown.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("Table Breakdown"));
+
+  const tableBreakdownTable = new Table({
+    head: [
+      chalk.gray("Table"),
+      chalk.gray("Self Time"),
+      chalk.gray("Top Operation"),
+      chalk.gray("Call Sites"),
+      chalk.gray("SetLoadFields"),
+      chalk.gray("Filtered"),
+    ],
+    style: { head: [], border: [] },
+  });
+
+  for (const t of result.tableBreakdown) {
+    const topOp = t.operationBreakdown.length > 0
+      ? `${t.operationBreakdown[0].operation} (${formatTime(t.operationBreakdown[0].selfTime)})`
+      : "-";
+    tableBreakdownTable.push([
+      t.tableName,
+      `${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)`,
+      topOp,
+      String(t.callSiteCount),
+      t.hasSetLoadFields ? chalk.green("Yes") : chalk.gray("No"),
+      t.hasFilters ? chalk.green("Yes") : chalk.gray("No"),
+    ]);
+  }
+
+  lines.push(tableBreakdownTable.toString());
+  return lines.join("\n");
+}
+
+function renderObjectBreakdown(result: AnalysisResult): string {
+  if (result.objectBreakdown.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("Object Breakdown"));
+
+  const objTable = new Table({
+    head: [
+      chalk.gray("Object"),
+      chalk.gray("ID"),
+      chalk.gray("App"),
+      chalk.gray("Self Time"),
+      chalk.gray("Methods"),
+    ],
+    style: { head: [], border: [] },
+  });
+
+  for (const obj of result.objectBreakdown) {
+    objTable.push([
+      `${obj.objectType} ${obj.objectName}`,
+      String(obj.objectId),
+      obj.appName,
+      `${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)`,
+      String(obj.methodCount),
+    ]);
+    for (const m of obj.methods) {
+      objTable.push([
+        chalk.gray(`  ${m.functionName}`),
+        "",
+        "",
+        chalk.gray(`${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)`),
+        chalk.gray(String(m.hitCount) + " hits"),
+      ]);
+    }
+  }
+
+  lines.push(objTable.toString());
+  return lines.join("\n");
+}
+
+function renderExplanation(result: AnalysisResult): string {
+  if (!result.explanation) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("AI Analysis"));
+  lines.push(`  ${result.explanation.split("\n").join("\n  ")}`);
+  return lines.join("\n");
+}
+
+const terminalSections: SectionRenderers<string> = {
+  summary: renderSummary,
+  hotspots: renderHotspots,
+  criticalPath: renderCriticalPath,
+  patterns: renderPatterns,
+  appBreakdown: renderAppBreakdown,
+  tableBreakdown: renderTableBreakdown,
+  objectBreakdown: renderObjectBreakdown,
+  explanation: renderExplanation,
+};
+
+/**
+ * Format a single analysis result for terminal display.
+ */
+export function formatAnalysisTerminal(result: AnalysisResult): string {
+  const lines: string[] = [];
+
+  // Header (formatter chrome, not a section)
+  lines.push("");
+  lines.push(chalk.bold.cyan(`\u2500\u2500 AL Profile Analysis \u2014 ${result.meta.profilePath} \u2500\u2500`));
+  lines.push("");
+
+  for (const section of SECTION_ORDER) {
+    const rendered = terminalSections[section](result);
+    if (rendered) {
+      lines.push(rendered);
       lines.push("");
     }
-  }
-
-  // 5. App Breakdown
-  if (result.appBreakdown.length > 0) {
-    lines.push(chalk.bold("App Breakdown"));
-    lines.push("");
-
-    for (const app of result.appBreakdown) {
-      const pct = app.selfTimePercent.toFixed(1);
-      lines.push(`  ${bar(app.selfTimePercent)} ${pct.padStart(5)}%  ${formatTime(app.selfTime).padStart(8)}  ${app.appName}`);
-    }
-    lines.push("");
-  }
-
-  // 6. Table Breakdown
-  if (result.tableBreakdown && result.tableBreakdown.length > 0) {
-    lines.push(chalk.bold("Table Breakdown"));
-
-    const tableBreakdownTable = new Table({
-      head: [
-        chalk.gray("Table"),
-        chalk.gray("Self Time"),
-        chalk.gray("Top Operation"),
-        chalk.gray("Call Sites"),
-        chalk.gray("SetLoadFields"),
-        chalk.gray("Filtered"),
-      ],
-      style: { head: [], border: [] },
-    });
-
-    for (const t of result.tableBreakdown) {
-      const topOp = t.operationBreakdown.length > 0
-        ? `${t.operationBreakdown[0].operation} (${formatTime(t.operationBreakdown[0].selfTime)})`
-        : "-";
-      tableBreakdownTable.push([
-        t.tableName,
-        `${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)`,
-        topOp,
-        String(t.callSiteCount),
-        t.hasSetLoadFields ? chalk.green("Yes") : chalk.gray("No"),
-        t.hasFilters ? chalk.green("Yes") : chalk.gray("No"),
-      ]);
-    }
-
-    lines.push(tableBreakdownTable.toString());
-    lines.push("");
-  }
-
-  // 7. Object Breakdown
-  if (result.objectBreakdown.length > 0) {
-    lines.push(chalk.bold("Object Breakdown"));
-
-    const objTable = new Table({
-      head: [
-        chalk.gray("Object"),
-        chalk.gray("ID"),
-        chalk.gray("App"),
-        chalk.gray("Self Time"),
-        chalk.gray("Methods"),
-      ],
-      style: { head: [], border: [] },
-    });
-
-    for (const obj of result.objectBreakdown) {
-      objTable.push([
-        `${obj.objectType} ${obj.objectName}`,
-        String(obj.objectId),
-        obj.appName,
-        `${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)`,
-        String(obj.methodCount),
-      ]);
-      for (const m of obj.methods) {
-        objTable.push([
-          chalk.gray(`  ${m.functionName}`),
-          "",
-          "",
-          chalk.gray(`${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)`),
-          chalk.gray(String(m.hitCount) + " hits"),
-        ]);
-      }
-    }
-
-    lines.push(objTable.toString());
-    lines.push("");
-  }
-
-  // 8. AI Analysis (optional)
-  if (result.explanation) {
-    lines.push(chalk.bold("AI Analysis"));
-    lines.push(`  ${result.explanation.split("\n").join("\n  ")}`);
-    lines.push("");
   }
 
   return lines.join("\n");
