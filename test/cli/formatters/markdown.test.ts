@@ -48,6 +48,13 @@ describe("formatAnalysisMarkdown", () => {
     }
   });
 
+  test("includes confidence and health scores", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisMarkdown(result);
+    expect(output).toContain("Confidence");
+    expect(output).toContain("Health");
+  });
+
   test("includes object breakdown section", async () => {
     const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const output = formatAnalysisMarkdown(result);

@@ -55,6 +55,8 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
   if (result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0) {
     lines.push(`| Built-in Overhead | ${formatTime(result.meta.builtinSelfTime)} |`);
   }
+  lines.push(`| Confidence | ${result.meta.confidenceScore}/100 |`);
+  lines.push(`| Health | ${result.summary.healthScore}/100 |`);
   lines.push("");
 
   // Pattern count
