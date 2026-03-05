@@ -12,6 +12,22 @@ import type {
 import type { SourceIndex } from "../types/source-index.js";
 import { buildSourceIndex } from "../source/indexer.js";
 
+/**
+ * Detect whether a profile captured the analyzer itself (e.g. when the BC profiler
+ * runs while AnalyzeBatch is executing). Such profiles muddy aggregate results.
+ */
+export function isSelfReferentialProfile(result: AnalysisResult): boolean {
+  return result.hotspots.some((h) => {
+    const obj = (h.objectName ?? "").toLowerCase();
+    const fn = (h.functionName ?? "").toLowerCase();
+    return (
+      obj.includes("al perf") ||
+      fn.includes("analyzebatch") ||
+      fn.includes("analyzeprofile")
+    );
+  });
+}
+
 export interface BatchOptions {
   metadata?: ProfileMetadata[];
   sourcePath?: string;
@@ -254,6 +270,8 @@ function buildActivityBreakdown(
           }
         : null;
 
+      const selfReferential = isSelfReferentialProfile(r);
+
       return {
         profilePath: r.meta.profilePath,
         healthScore: r.summary.healthScore,
@@ -261,6 +279,7 @@ function buildActivityBreakdown(
         topHotspot,
         duration: r.meta.totalSelfTime,
         metadata: metadata?.[i],
+        ...(selfReferential ? { selfReferential } : {}),
       } satisfies ActivitySummary;
     })
     .sort((a, b) => b.duration - a.duration);

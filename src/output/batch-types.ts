@@ -34,6 +34,7 @@ export interface ActivitySummary {
   topHotspot: { functionName: string; objectName: string; selfTimePercent: number } | null;
   duration: number;
   metadata?: ProfileMetadata;
+  selfReferential?: boolean;
 }
 
 /** Aggregate analysis result for a batch of profiles. */

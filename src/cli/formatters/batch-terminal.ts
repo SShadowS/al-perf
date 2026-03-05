@@ -114,12 +114,14 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
     if (activity.patternCount.info > 0)
       patternParts.push(chalk.blue(`${activity.patternCount.info}I`));
 
+    const selfRefNote = activity.selfReferential ? chalk.yellow(" \u26A0 self-ref") : "";
+
     table.push([
       label,
       activityType,
       formatTime(activity.duration),
       colorHealth(activity.healthScore) + "/100",
-      patternParts.length > 0 ? patternParts.join(" ") : chalk.green("-"),
+      (patternParts.length > 0 ? patternParts.join(" ") : chalk.green("-")) + selfRefNote,
     ]);
   }
 

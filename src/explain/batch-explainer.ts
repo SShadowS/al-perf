@@ -13,6 +13,9 @@ Focus on:
 3. Activity breakdown — are certain activity types (web client, background jobs, web services) consistently slower?
 4. Actionable recommendations — what should the team fix first for maximum impact?
 
+Note: Profiles flagged as "selfReferential" captured the performance analyzer tool itself.
+Deprioritize findings from these profiles and note this context when discussing them.
+
 Be specific. Reference method names, object names, and pattern types. Prioritize by business impact.
 Keep the analysis concise — under 500 words.`;
 
@@ -28,6 +31,7 @@ export interface TrimmedBatchResult {
     topHotspot: { functionName: string; objectName: string; selfTimePercent: number } | null;
     duration: number;
     metadata?: { activityDescription: string; activityType: string };
+    selfReferential?: boolean;
   }>;
   appBreakdown: BatchAnalysisResult["appBreakdown"];
   errors: BatchAnalysisResult["errors"];
@@ -50,6 +54,7 @@ export function trimBatchResultForPrompt(result: BatchAnalysisResult): TrimmedBa
       metadata: a.metadata
         ? { activityDescription: a.metadata.activityDescription, activityType: a.metadata.activityType }
         : undefined,
+      ...(a.selfReferential ? { selfReferential: a.selfReferential } : {}),
     })),
     appBreakdown: result.appBreakdown.slice(0, 10),
     errors: result.errors,

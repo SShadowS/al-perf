@@ -121,7 +121,7 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
               <span class="activity-cell">${escapeHtml(activityType)}</span>
               <span class="activity-cell">${formatTime(activity.duration)}</span>
               <span class="activity-cell"><span style="color:${healthCol};font-weight:600">${activity.healthScore}/100</span></span>
-              <span class="activity-cell">${patternsStr}</span>
+              <span class="activity-cell">${patternsStr}${activity.selfReferential ? ' <span class="badge" style="background:#9F9700" title="This profile captured the analyzer itself running — results may be skewed">&#9888; Self-referential</span>' : ""}</span>
             </summary>
             <div class="activity-detail">
               <p>${topHotspotStr}</p>

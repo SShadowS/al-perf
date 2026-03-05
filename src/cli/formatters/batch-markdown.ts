@@ -59,8 +59,9 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
     if (activity.patternCount.warning > 0) patternParts.push(`${activity.patternCount.warning}W`);
     if (activity.patternCount.info > 0) patternParts.push(`${activity.patternCount.info}I`);
 
+    const selfRefNote = activity.selfReferential ? " \u26A0\uFE0F self-ref" : "";
     lines.push(
-      `| ${label} | ${activityType} | ${formatTime(activity.duration)} | ${activity.healthScore}/100 | ${patternParts.length > 0 ? patternParts.join(" ") : "-"} |`,
+      `| ${label} | ${activityType} | ${formatTime(activity.duration)} | ${activity.healthScore}/100 | ${patternParts.length > 0 ? patternParts.join(" ") : "-"}${selfRefNote} |`,
     );
   }
 
