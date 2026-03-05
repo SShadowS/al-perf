@@ -39,6 +39,15 @@ describe("formatAnalysisTerminal", () => {
     expect(output).toContain("This profile shows significant time in ProcessLine.");
   });
 
+  test("includes object breakdown section", async () => {
+    const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
+    const output = formatAnalysisTerminal(result);
+    expect(output).toContain("Object Breakdown");
+    expect(output).toContain("My Processor");
+    expect(output).toContain("50000");
+    expect(output).toContain("ProcessLine");
+  });
+
   test("omits explanation section when not present", async () => {
     const result = await analyzeProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`);
     const output = formatAnalysisTerminal(result);

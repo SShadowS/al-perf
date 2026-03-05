@@ -168,7 +168,45 @@ export function formatAnalysisTerminal(result: AnalysisResult): string {
     lines.push("");
   }
 
-  // 7. AI Analysis (optional)
+  // 7. Object Breakdown
+  if (result.objectBreakdown.length > 0) {
+    lines.push(chalk.bold("Object Breakdown"));
+
+    const objTable = new Table({
+      head: [
+        chalk.gray("Object"),
+        chalk.gray("ID"),
+        chalk.gray("App"),
+        chalk.gray("Self Time"),
+        chalk.gray("Methods"),
+      ],
+      style: { head: [], border: [] },
+    });
+
+    for (const obj of result.objectBreakdown) {
+      objTable.push([
+        `${obj.objectType} ${obj.objectName}`,
+        String(obj.objectId),
+        obj.appName,
+        `${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)`,
+        String(obj.methodCount),
+      ]);
+      for (const m of obj.methods) {
+        objTable.push([
+          chalk.gray(`  ${m.functionName}`),
+          "",
+          "",
+          chalk.gray(`${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)`),
+          chalk.gray(String(m.hitCount) + " hits"),
+        ]);
+      }
+    }
+
+    lines.push(objTable.toString());
+    lines.push("");
+  }
+
+  // 8. AI Analysis (optional)
   if (result.explanation) {
     lines.push(chalk.bold("AI Analysis"));
     lines.push(`  ${result.explanation.split("\n").join("\n  ")}`);
