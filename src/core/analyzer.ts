@@ -24,6 +24,8 @@ export interface AnalyzeOptions {
   sourcePath?: string;
   /** Pre-built source index — skips buildSourceIndex when provided */
   sourceIndex?: SourceIndex;
+  /** Callback to access the ProcessedProfile (for deep AI analysis) */
+  onProcessedProfile?: (profile: ProcessedProfile) => void;
 }
 
 export interface CompareOptions {
@@ -128,6 +130,7 @@ export async function analyzeProfile(
 ): Promise<AnalysisResult> {
   const parsed = await parseProfile(filePath);
   const processed = processProfile(parsed);
+  options?.onProcessedProfile?.(processed);
 
   const methods = aggregateByMethod(processed);
   const apps = aggregateByApp(processed);
