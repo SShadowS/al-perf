@@ -24,6 +24,11 @@ export { buildTableRelationGraph, tableConnectivityStats } from "./source/table-
 export { explainAnalysis, trimResultForPrompt, SYSTEM_PROMPT } from "./explain/explainer.js";
 export type { ExplainOptions, ExplainModel } from "./explain/explainer.js";
 export { explainBatchAnalysis, trimBatchResultForPrompt, BATCH_SYSTEM_PROMPT } from "./explain/batch-explainer.js";
+export { deepAnalysis, buildDeepPayload, type DeepExplainOptions, type DeepExplainResult, type CallTreeStrategy, type DeepPayload } from "./explain/deep-analyzer.js";
+export { parseDeepResponse, type DeepAnalysisResponse } from "./explain/response-parser.js";
+export { serializePrunedTree } from "./explain/payloads/call-tree-pruned.js";
+export { serializeChainList } from "./explain/payloads/call-tree-chains.js";
+export { serializeAdjacencySummary } from "./explain/payloads/call-tree-adjacency.js";
 
 // CLI types
 export type { GateResult } from "./cli/commands/gate.js";
