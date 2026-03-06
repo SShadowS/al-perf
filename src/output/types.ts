@@ -1,5 +1,6 @@
 import type { AppBreakdown, ObjectBreakdown, MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
+import type { AIFinding } from "../types/ai-findings.js";
 
 export interface AnalysisResult {
   meta: {
@@ -37,6 +38,8 @@ export interface AnalysisResult {
   objectBreakdown: ObjectBreakdown[];
   tableBreakdown?: TableBreakdown[];
   explanation?: string;
+  aiFindings?: AIFinding[];
+  aiNarrative?: string;
 }
 
 export interface TableBreakdown {

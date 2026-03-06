@@ -45,16 +45,22 @@ export function registerBatchCommand(program: Command) {
     .command("batch")
     .description("Analyze multiple AL CPU profiles as a batch")
     .argument("<paths...>", "Profile files or directories containing .alcpuprofile files")
-    .option("-f, --format <format>", "Output format: auto|terminal|json|markdown", "auto")
+    .option("-f, --format <format>", "Output format: auto|terminal|json|markdown|html", "auto")
     .option("-n, --top <number>", "Number of top hotspots per profile", "10")
     .option("--manifest <path>", "Path to JSON manifest with profile metadata")
     .option("--app-filter <names>", "Focus on specific app(s), comma-separated")
     .option("-s, --source <path>", "Path to AL source directory (enables source correlation)")
     .option("--cache", "Cache source index for faster re-analysis")
     .option("--explain", "Append AI-generated batch analysis summary (requires ANTHROPIC_API_KEY)")
+    .option("--deep", "Enable deep AI analysis (not yet supported for batch; falls back to --explain)")
     .option("--model <model>", "Model for --explain: sonnet (default) or opus", "sonnet")
     .option("--api-key <key>", "Anthropic API key (visible in process listings; prefer ANTHROPIC_API_KEY env var)")
     .action(async (paths: string[], opts: any) => {
+      if (opts.deep) {
+        console.error("Note: --deep is not yet supported for batch analysis. Using --explain instead.");
+        opts.explain = true;
+      }
+
       // Resolve files and directories into profile paths
       const profilePaths = resolveProfilePaths(paths);
 

@@ -5,7 +5,9 @@ import { analyzeProfile } from "../src/core/analyzer.js";
 import { analyzeBatch } from "../src/core/batch-analyzer.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
 import { explainAnalysis } from "../src/explain/explainer.js";
+import { deepAnalysis } from "../src/explain/deep-analyzer.js";
 import { explainBatchAnalysis } from "../src/explain/batch-explainer.js";
+import type { ProcessedProfile } from "../src/types/processed.js";
 import { formatAnalysisHtml } from "../src/cli/formatters/html.js";
 import { formatBatchHtml } from "../src/cli/formatters/batch-html.js";
 import type { ProfileMetadata } from "../src/types/batch.js";
@@ -122,10 +124,12 @@ async function handleAnalyze(req: Request): Promise<Response> {
     }
 
     // Run analysis
+    let processedProfile: ProcessedProfile | undefined;
     const result = await analyzeProfile(profilePath, {
       top: 20,
       includePatterns: true,
       sourcePath,
+      onProcessedProfile: (p) => { processedProfile = p; },
     });
 
     // Always run AI explanation if API key is available
@@ -135,6 +139,17 @@ async function handleAnalyze(req: Request): Promise<Response> {
         result.explanation = await explainAnalysis(result, { apiKey, model: "sonnet" });
       } catch {
         // Non-fatal — analysis still returns without explanation
+      }
+
+      // Deep AI analysis (always attempted in web UI)
+      if (processedProfile) {
+        try {
+          const deep = await deepAnalysis(result, processedProfile, { apiKey, model: "sonnet" });
+          result.aiFindings = deep.aiFindings;
+          result.aiNarrative = deep.aiNarrative;
+        } catch {
+          // Non-fatal — analysis still returns without deep findings
+        }
       }
     }
 

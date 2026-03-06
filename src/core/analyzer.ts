@@ -7,6 +7,8 @@ import { buildTableBreakdown } from "./table-view.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceDetectors } from "../source/source-patterns.js";
 import { matchAllHotspots } from "../source/locator.js";
+import { extractSnippet } from "../source/snippets.js";
+import { resolve } from "path";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { SourceIndex } from "../types/source-index.js";
 import type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta, CriticalPathStep } from "../output/types.js";
@@ -22,6 +24,8 @@ export interface AnalyzeOptions {
   sourcePath?: string;
   /** Pre-built source index — skips buildSourceIndex when provided */
   sourceIndex?: SourceIndex;
+  /** Callback to access the ProcessedProfile (for deep AI analysis) */
+  onProcessedProfile?: (profile: ProcessedProfile) => void;
 }
 
 export interface CompareOptions {
@@ -126,6 +130,7 @@ export async function analyzeProfile(
 ): Promise<AnalysisResult> {
   const parsed = await parseProfile(filePath);
   const processed = processProfile(parsed);
+  options?.onProcessedProfile?.(processed);
 
   const methods = aggregateByMethod(processed);
   const apps = aggregateByApp(processed);
@@ -187,6 +192,28 @@ export async function analyzeProfile(
           lineStart: match.lineStart,
           lineEnd: match.lineEnd,
         };
+      }
+    }
+  }
+
+  // Attach source snippets to matched hotspots (for AI and formatters)
+  const sourcePath = options?.sourcePath;
+  if (sourcePath) {
+    const snippetLimit = 15;
+    let snippetsRead = 0;
+    for (const h of hotspots) {
+      if (snippetsRead >= snippetLimit) break;
+      if (h.sourceLocation) {
+        try {
+          h.sourceSnippet = await extractSnippet(
+            resolve(sourcePath, h.sourceLocation.filePath),
+            h.sourceLocation.lineStart,
+            h.sourceLocation.lineEnd,
+          );
+          snippetsRead++;
+        } catch {
+          // Source file may not be readable; skip silently
+        }
       }
     }
   }
