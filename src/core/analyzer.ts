@@ -196,27 +196,27 @@ export async function analyzeProfile(
     }
   }
 
-    // Attach source snippets to matched hotspots (for AI and formatters)
-    const sourcePath = options?.sourcePath;
-    if (sourcePath) {
-      const snippetLimit = 15;
-      let snippetsRead = 0;
-      for (const h of hotspots) {
-        if (snippetsRead >= snippetLimit) break;
-        if (h.sourceLocation) {
-          try {
-            h.sourceSnippet = await extractSnippet(
-              resolve(sourcePath, h.sourceLocation.filePath),
-              h.sourceLocation.lineStart,
-              h.sourceLocation.lineEnd,
-            );
-            snippetsRead++;
-          } catch {
-            // Source file may not be readable; skip silently
-          }
+  // Attach source snippets to matched hotspots (for AI and formatters)
+  const sourcePath = options?.sourcePath;
+  if (sourcePath) {
+    const snippetLimit = 15;
+    let snippetsRead = 0;
+    for (const h of hotspots) {
+      if (snippetsRead >= snippetLimit) break;
+      if (h.sourceLocation) {
+        try {
+          h.sourceSnippet = await extractSnippet(
+            resolve(sourcePath, h.sourceLocation.filePath),
+            h.sourceLocation.lineStart,
+            h.sourceLocation.lineEnd,
+          );
+          snippetsRead++;
+        } catch {
+          // Source file may not be readable; skip silently
         }
       }
     }
+  }
 
   // Build summary
   const topApp =

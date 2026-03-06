@@ -111,12 +111,14 @@ export async function deepAnalysis(
   });
 
   const textBlock = response.content.find((b) => b.type === "text");
-  let text = textBlock?.text ?? "";
-  if (response.stop_reason === "max_tokens") {
-    text += "\n\n*(Response truncated)*";
-  }
+  const text = textBlock?.text ?? "";
 
   const parsed = parseDeepResponse(text);
+
+  // If truncated, note it in the narrative
+  if (response.stop_reason === "max_tokens" && parsed.narrative) {
+    parsed.narrative += "\n\n*(Response truncated)*";
+  }
 
   return {
     aiFindings: parsed.findings,

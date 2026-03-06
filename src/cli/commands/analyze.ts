@@ -31,6 +31,9 @@ export function registerAnalyzeCommand(program: Command) {
     .option("--git-commit <hash>", "Git commit hash to associate with this analysis")
     .option("--label <label>", "Label for this analysis run (e.g., 'baseline', 'after-fix')")
     .action(async (profilePath: string, opts: any) => {
+      // --deep implies --explain
+      if (opts.deep && !opts.explain) opts.explain = true;
+
       // Resolve source path: explicit --source, or auto-detect companion zip
       let sourcePath: string | undefined = opts.source;
       let cleanup: (() => Promise<void>) | undefined;
@@ -63,7 +66,7 @@ export function registerAnalyzeCommand(program: Command) {
           threshold: parseFloat(opts.threshold) * 1000,
           appFilter: opts.appFilter?.split(",").map((s: string) => s.trim()),
           includePatterns: opts.patterns !== false,
-          sourcePath: opts.cache ? undefined : sourcePath,
+          sourcePath: sourcePath,
           sourceIndex,
           onProcessedProfile: opts.deep ? (p: ProcessedProfile) => { processedProfile = p; } : undefined,
         }),

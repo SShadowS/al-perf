@@ -11,14 +11,15 @@ You MUST respond with valid JSON matching this schema exactly. Do not include an
 {
   "findings": [
     {
-      "category": "cross-method" | "anomaly" | "business-logic" | "code-fix",
       "title": "Short descriptive title of the finding",
-      "description": "Detailed explanation of the issue, including evidence from the profile data",
-      "impact": "high" | "medium" | "low",
+      "category": "cross-method" | "anomaly" | "business-logic" | "code-fix",
+      "severity": "critical" | "warning" | "info",
       "confidence": "high" | "medium" | "low",
-      "suggestion": "Specific, actionable recommendation. For code-fix category, include AL code snippets.",
-      "relatedMethods": ["List of method identifiers involved in this finding"],
-      "estimatedSavingsMs": null | number
+      "description": "Detailed explanation of the issue",
+      "involvedMethods": ["MethodA", "MethodB"],
+      "suggestion": "Specific, actionable recommendation",
+      "codeFix": "// Optional: AL code fix (only for code-fix category)",
+      "evidence": "What data from the profile supports this finding"
     }
   ],
   "narrative": "A 2-4 paragraph markdown summary that tells the performance story. Start with the overall health assessment, then cover the most impactful findings, and end with prioritized next steps. This should read as a coherent narrative, not a list of findings."
@@ -27,14 +28,16 @@ You MUST respond with valid JSON matching this schema exactly. Do not include an
 
 ### Rules
 
-1. Return 3-10 findings, ordered by impact (highest first).
+1. Return 3-10 findings, ordered by severity (critical first).
 2. Each finding must have a unique, specific title — not generic labels.
-3. The \`confidence\` field reflects how certain you are about the finding: "high" means clear evidence in the data, "medium" means probable but could have alternative explanations, "low" means speculative or based on incomplete data.
-4. The \`category\` must be one of: "cross-method", "anomaly", "business-logic", "code-fix".
-5. \`estimatedSavingsMs\` should be null if you cannot reasonably estimate, otherwise provide a conservative estimate in milliseconds.
-6. \`relatedMethods\` should use the method identifiers as they appear in the profile data (e.g., "CodeUnit.Sales-Post.PostSalesLine").
-7. The \`narrative\` must be self-contained — a reader should understand the performance situation from the narrative alone without reading individual findings.
-8. Do NOT repeat findings that the rule-based pattern detectors have already identified. Focus on insights that require understanding call tree relationships, domain context, or source code semantics.
+3. \`severity\`: "critical" = significant performance impact, "warning" = moderate concern, "info" = observation or suggestion.
+4. \`confidence\`: "high" = clear evidence in the data, "medium" = probable but could have alternative explanations, "low" = speculative or based on incomplete data.
+5. \`category\` must be one of: "cross-method", "anomaly", "business-logic", "code-fix".
+6. \`involvedMethods\` should use method names as they appear in the profile data.
+7. \`codeFix\` is optional — only include for "code-fix" category when you can provide concrete AL code.
+8. \`evidence\` must reference specific data from the profile (times, hit counts, call relationships).
+9. The \`narrative\` must be self-contained — a reader should understand the performance situation from the narrative alone without reading individual findings.
+10. Do NOT repeat findings that the rule-based pattern detectors have already identified. Focus on insights that require understanding call tree relationships, domain context, or source code semantics.
 `;
 
 export interface BuildDeepSystemPromptOptions {

@@ -34,11 +34,15 @@ describe("prompt modules", () => {
     expect(AI_FINDINGS_SCHEMA.length).toBeGreaterThan(50);
   });
 
-  test("AI_FINDINGS_SCHEMA mentions required fields", () => {
+  test("AI_FINDINGS_SCHEMA mentions required fields matching AIFinding type", () => {
     expect(AI_FINDINGS_SCHEMA).toContain("findings");
     expect(AI_FINDINGS_SCHEMA).toContain("narrative");
     expect(AI_FINDINGS_SCHEMA).toContain("category");
     expect(AI_FINDINGS_SCHEMA).toContain("confidence");
+    expect(AI_FINDINGS_SCHEMA).toContain("severity");
+    expect(AI_FINDINGS_SCHEMA).toContain("involvedMethods");
+    expect(AI_FINDINGS_SCHEMA).toContain("evidence");
+    expect(AI_FINDINGS_SCHEMA).toContain("codeFix");
   });
 });
 
