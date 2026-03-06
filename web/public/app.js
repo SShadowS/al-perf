@@ -752,9 +752,129 @@ function renderExplanation(data) {
 }
 
 /**
- * Render analysis results into the results container.
- * Dispatches to individual section renderers.
+ * Render the deep AI analysis section (structured findings + narrative).
  */
+function renderAiDeep(data) {
+  const section = document.getElementById("ai-deep-section");
+  if (!section) return;
+  section.innerHTML = "";
+
+  const hasFindings = data.aiFindings && data.aiFindings.length > 0;
+  const hasNarrative = data.aiNarrative;
+  if (!hasFindings && !hasNarrative) return;
+
+  const title = document.createElement("div");
+  title.className = "section-title";
+  title.textContent = "Deep AI Analysis";
+  section.appendChild(title);
+
+  // Narrative
+  if (hasNarrative) {
+    const narrativeCard = document.createElement("div");
+    narrativeCard.className = "card";
+    narrativeCard.innerHTML = renderMarkdown(data.aiNarrative);
+    section.appendChild(narrativeCard);
+  }
+
+  // Structured findings
+  if (hasFindings) {
+    const severityOrder = { critical: 0, warning: 1, info: 2 };
+    const severityIcon = { critical: "\u2716", warning: "\u26A0", info: "\u2139" };
+    const confidenceLabel = { high: "\u2714 High confidence", medium: "\u007E Medium confidence", low: "? Low confidence" };
+
+    const sorted = [...data.aiFindings].sort(
+      (a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3),
+    );
+
+    for (const f of sorted) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.style.marginBottom = "0.75rem";
+
+      // Badge + category + title row
+      const headerRow = document.createElement("div");
+      headerRow.style.display = "flex";
+      headerRow.style.alignItems = "center";
+      headerRow.style.gap = "0.75rem";
+      headerRow.style.marginBottom = "0.5rem";
+
+      const badge = document.createElement("span");
+      badge.className = "severity-badge severity-" + f.severity;
+      badge.textContent = severityIcon[f.severity] + " " + capitalize(f.severity);
+      headerRow.appendChild(badge);
+
+      const catBadge = document.createElement("span");
+      catBadge.style.fontSize = "0.8rem";
+      catBadge.style.padding = "0.15rem 0.5rem";
+      catBadge.style.borderRadius = "3px";
+      catBadge.style.background = "var(--bg-secondary)";
+      catBadge.style.color = "var(--text-secondary)";
+      catBadge.textContent = f.category;
+      headerRow.appendChild(catBadge);
+
+      const titleEl = document.createElement("strong");
+      titleEl.textContent = f.title;
+      headerRow.appendChild(titleEl);
+
+      card.appendChild(headerRow);
+
+      // Confidence
+      const confDiv = document.createElement("div");
+      confDiv.style.fontSize = "0.85rem";
+      confDiv.style.color = "var(--text-secondary)";
+      confDiv.style.marginBottom = "0.5rem";
+      confDiv.textContent = confidenceLabel[f.confidence] || f.confidence;
+      card.appendChild(confDiv);
+
+      // Description
+      const desc = document.createElement("div");
+      desc.style.marginBottom = "0.5rem";
+      desc.textContent = f.description;
+      card.appendChild(desc);
+
+      // Evidence
+      if (f.evidence) {
+        const evDiv = document.createElement("div");
+        evDiv.style.fontSize = "0.85rem";
+        evDiv.style.color = "var(--text-secondary)";
+        evDiv.style.marginBottom = "0.5rem";
+        evDiv.innerHTML = "<strong>Evidence:</strong> " + escapeHtml(f.evidence);
+        card.appendChild(evDiv);
+      }
+
+      // Suggestion
+      if (f.suggestion) {
+        const sugBox = document.createElement("div");
+        sugBox.className = "suggestion-box";
+        sugBox.textContent = f.suggestion;
+        card.appendChild(sugBox);
+      }
+
+      // Code fix
+      if (f.codeFix) {
+        const pre = document.createElement("pre");
+        pre.style.marginTop = "0.5rem";
+        const code = document.createElement("code");
+        code.textContent = f.codeFix;
+        pre.appendChild(code);
+        card.appendChild(pre);
+      }
+
+      // Involved methods
+      if (f.involvedMethods && f.involvedMethods.length > 0) {
+        const methodsDiv = document.createElement("div");
+        methodsDiv.style.fontSize = "0.85rem";
+        methodsDiv.style.color = "var(--text-secondary)";
+        methodsDiv.style.marginTop = "0.5rem";
+        methodsDiv.textContent = "Methods: " + f.involvedMethods.join(", ");
+        card.appendChild(methodsDiv);
+      }
+
+      section.appendChild(card);
+    }
+  }
+}
+
 /**
  * Build the sidebar navigation from visible sections.
  */
@@ -767,6 +887,7 @@ function buildSidebar() {
   const sections = [
     { id: "summary-section", label: "Summary" },
     { id: "explanation-section", label: "AI Analysis" },
+    { id: "ai-deep-section", label: "Deep AI Findings" },
     { id: "app-breakdown-section", label: "App Breakdown" },
     { id: "table-breakdown-section", label: "Table Breakdown" },
     { id: "hotspots-section", label: "Hotspots" },
@@ -827,6 +948,7 @@ function renderResults(data) {
 
   renderSummary(data);
   renderExplanation(data);
+  renderAiDeep(data);
   renderAppBreakdown(data);
   renderTableBreakdown(data);
   renderHotspots(data);
