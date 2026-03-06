@@ -4,6 +4,7 @@ import { readdirSync, statSync, readFileSync } from "fs";
 import { analyzeBatch, type BatchOptions } from "../../core/batch-analyzer.js";
 import { formatBatch, type OutputFormat } from "../formatters/index.js";
 import type { ExplainModel } from "../../explain/explainer.js";
+import { formatCallCost } from "../../explain/api-cost.js";
 import type { ProfileMetadata } from "../../types/batch.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import type { SourceIndex } from "../../types/source-index.js";
@@ -119,10 +120,12 @@ export function registerBatchCommand(program: Command) {
           try {
             const modelLabel = model === "opus" ? "Opus" : "Sonnet";
             const mod = await import("../../explain/batch-explainer.js");
-            result.explanation = await withStatus(
+            const explain = await withStatus(
               `Generating AI batch explanation (Claude ${modelLabel})...`,
               () => mod.explainBatchAnalysis(result, { apiKey, model: model as ExplainModel }),
             );
+            result.explanation = explain.text;
+            console.error(`[api-cost] ${formatCallCost(explain.cost)}`);
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --explain failed: ${message}`);

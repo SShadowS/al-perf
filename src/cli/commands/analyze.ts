@@ -4,6 +4,7 @@ import { analyzeProfile } from "../../core/analyzer.js";
 import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
 import { explainAnalysis, type ExplainModel } from "../../explain/explainer.js";
 import { deepAnalysis } from "../../explain/deep-analyzer.js";
+import { formatCallCost } from "../../explain/api-cost.js";
 import { findCompanionZip, extractCompanionZip } from "../../source/zip-extractor.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import type { SourceIndex } from "../../types/source-index.js";
@@ -84,12 +85,14 @@ export function registerAnalyzeCommand(program: Command) {
         } else {
           try {
             const modelLabel = model === "opus" ? "Opus" : "Sonnet";
-            result.explanation = await withStatus(`Generating AI explanation (Claude ${modelLabel})...`, () =>
+            const explain = await withStatus(`Generating AI explanation (Claude ${modelLabel})...`, () =>
               explainAnalysis(result, {
                 apiKey,
                 model: model as ExplainModel,
               }),
             );
+            result.explanation = explain.text;
+            console.error(`[api-cost] ${formatCallCost(explain.cost)}`);
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --explain failed: ${message}`);
@@ -114,6 +117,7 @@ export function registerAnalyzeCommand(program: Command) {
             );
             result.aiFindings = deep.aiFindings;
             result.aiNarrative = deep.aiNarrative;
+            console.error(`[api-cost] ${formatCallCost(deep.cost)}`);
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --deep analysis failed: ${message}`);

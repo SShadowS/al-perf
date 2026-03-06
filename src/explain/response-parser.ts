@@ -34,28 +34,44 @@ function isValidFinding(f: unknown): f is AIFinding {
 }
 
 export function parseDeepResponse(raw: string): DeepAnalysisResponse {
-  // Strip markdown code fences if present
+  // Strip markdown code fences if present (flexible matching)
   let jsonStr = raw.trim();
-  const fenceMatch = jsonStr.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/);
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
   if (fenceMatch) {
-    jsonStr = fenceMatch[1];
+    jsonStr = fenceMatch[1].trim();
   }
 
-  try {
-    const parsed = JSON.parse(jsonStr);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      Array.isArray(parsed.findings) &&
-      typeof parsed.narrative === "string"
-    ) {
-      const findings = parsed.findings.filter(isValidFinding);
-      return { findings, narrative: parsed.narrative };
+  // Also try extracting the first { ... } block if the above didn't yield valid JSON
+  const tryParse = (str: string): unknown | null => {
+    try {
+      return JSON.parse(str);
+    } catch {
+      return null;
     }
-    // Parsed JSON but wrong structure
-    return { findings: [], narrative: raw };
-  } catch {
-    // JSON parse failed
-    return { findings: [], narrative: raw };
+  };
+
+  let parsed = tryParse(jsonStr);
+
+  // If that failed, try extracting from first { to last }
+  if (parsed === null) {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start !== -1 && end > start) {
+      parsed = tryParse(raw.slice(start, end + 1));
+    }
   }
+
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    Array.isArray((parsed as Record<string, unknown>).findings) &&
+    typeof (parsed as Record<string, unknown>).narrative === "string"
+  ) {
+    const obj = parsed as { findings: unknown[]; narrative: string };
+    const findings = obj.findings.filter(isValidFinding);
+    return { findings, narrative: obj.narrative };
+  }
+
+  // Could not parse structured response — treat entire text as narrative
+  return { findings: [], narrative: raw };
 }

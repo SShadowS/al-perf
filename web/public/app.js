@@ -759,8 +759,38 @@ function renderAiDeep(data) {
   if (!section) return;
   section.innerHTML = "";
 
-  const hasFindings = data.aiFindings && data.aiFindings.length > 0;
-  const hasNarrative = data.aiNarrative;
+  // If the server-side parser fell back (findings=[] and narrative=JSON), try client-side recovery
+  let findings = data.aiFindings || [];
+  let narrative = data.aiNarrative || "";
+  if (findings.length === 0 && narrative) {
+    try {
+      let jsonStr = narrative.trim();
+      // Strip code fences
+      const fenceMatch = jsonStr.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
+      if (fenceMatch) jsonStr = fenceMatch[1].trim();
+      // Try parsing as-is first
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        // Fallback: extract first { to last }
+        const start = jsonStr.indexOf("{");
+        const end = jsonStr.lastIndexOf("}");
+        if (start !== -1 && end > start) {
+          parsed = JSON.parse(jsonStr.slice(start, end + 1));
+        }
+      }
+      if (parsed && Array.isArray(parsed.findings)) {
+        findings = parsed.findings;
+        narrative = parsed.narrative || "";
+      }
+    } catch {
+      // Keep original values
+    }
+  }
+
+  const hasFindings = findings.length > 0;
+  const hasNarrative = narrative && narrative.length > 0;
   if (!hasFindings && !hasNarrative) return;
 
   const title = document.createElement("div");
@@ -772,7 +802,7 @@ function renderAiDeep(data) {
   if (hasNarrative) {
     const narrativeCard = document.createElement("div");
     narrativeCard.className = "card";
-    narrativeCard.innerHTML = renderMarkdown(data.aiNarrative);
+    narrativeCard.innerHTML = renderMarkdown(narrative);
     section.appendChild(narrativeCard);
   }
 
@@ -782,7 +812,7 @@ function renderAiDeep(data) {
     const severityIcon = { critical: "\u2716", warning: "\u26A0", info: "\u2139" };
     const confidenceLabel = { high: "\u2714 High confidence", medium: "\u007E Medium confidence", low: "? Low confidence" };
 
-    const sorted = [...data.aiFindings].sort(
+    const sorted = [...findings].sort(
       (a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3),
     );
 

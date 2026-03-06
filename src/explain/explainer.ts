@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AnalysisResult } from "../output/types.js";
+import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 
 export const SYSTEM_PROMPT = `You are a Business Central AL performance expert. You are given the JSON output of a profile analysis. Write a concise, actionable summary covering:
 
@@ -57,10 +58,15 @@ export interface ExplainOptions {
   model?: ExplainModel;
 }
 
+export interface ExplainResult {
+  text: string;
+  cost: ApiCallCost;
+}
+
 export async function explainAnalysis(
   result: AnalysisResult,
   options: ExplainOptions,
-): Promise<string> {
+): Promise<ExplainResult> {
   const client = new Anthropic({ apiKey: options.apiKey });
   const trimmed = trimResultForPrompt(result);
   const model = MODEL_IDS[options.model ?? "sonnet"];
@@ -82,5 +88,13 @@ export async function explainAnalysis(
   if (response.stop_reason === "max_tokens") {
     text += "\n\n*(Response truncated)*";
   }
-  return text;
+
+  const cost = computeCallCost(
+    "explain",
+    model,
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+  );
+
+  return { text, cost };
 }

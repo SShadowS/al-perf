@@ -22,8 +22,11 @@ export { buildTableRelationGraph, tableConnectivityStats } from "./source/table-
 
 // Explainer
 export { explainAnalysis, trimResultForPrompt, SYSTEM_PROMPT } from "./explain/explainer.js";
-export type { ExplainOptions, ExplainModel } from "./explain/explainer.js";
+export type { ExplainOptions, ExplainModel, ExplainResult } from "./explain/explainer.js";
 export { explainBatchAnalysis, trimBatchResultForPrompt, BATCH_SYSTEM_PROMPT } from "./explain/batch-explainer.js";
+export type { BatchExplainResult } from "./explain/batch-explainer.js";
+export { computeCallCost, summarizeCosts, formatCallCost, formatCostSummary } from "./explain/api-cost.js";
+export type { ApiCallCost, ApiCostSummary } from "./explain/api-cost.js";
 export { deepAnalysis, buildDeepPayload, type DeepExplainOptions, type DeepExplainResult, type CallTreeStrategy, type DeepPayload } from "./explain/deep-analyzer.js";
 export { parseDeepResponse, type DeepAnalysisResponse } from "./explain/response-parser.js";
 export { serializePrunedTree } from "./explain/payloads/call-tree-pruned.js";

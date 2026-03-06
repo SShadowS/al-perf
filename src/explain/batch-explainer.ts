@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { BatchAnalysisResult } from "../output/batch-types.js";
 import type { ExplainModel, ExplainOptions } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
+import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 
 export const BATCH_SYSTEM_PROMPT = `You are a Business Central performance analyst reviewing a batch of AL CPU profiles collected from the scheduled performance profiler. These profiles represent multiple user activities over a time window.
 
@@ -63,10 +64,15 @@ export function trimBatchResultForPrompt(result: BatchAnalysisResult): TrimmedBa
   };
 }
 
+export interface BatchExplainResult {
+  text: string;
+  cost: ApiCallCost;
+}
+
 export async function explainBatchAnalysis(
   result: BatchAnalysisResult,
   options: ExplainOptions,
-): Promise<string> {
+): Promise<BatchExplainResult> {
   const client = new Anthropic({ apiKey: options.apiKey });
   const trimmed = trimBatchResultForPrompt(result);
   const model = MODEL_IDS[options.model ?? "sonnet"];
@@ -88,5 +94,13 @@ export async function explainBatchAnalysis(
   if (response.stop_reason === "max_tokens") {
     text += "\n\n*(Response truncated)*";
   }
-  return text;
+
+  const cost = computeCallCost(
+    "batch-explain",
+    model,
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+  );
+
+  return { text, cost };
 }

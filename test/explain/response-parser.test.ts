@@ -91,4 +91,26 @@ describe("parseDeepResponse", () => {
     expect(result.findings).toHaveLength(0);
     expect(result.narrative).toBe(raw);
   });
+
+  test("JSON embedded in surrounding text is extracted", () => {
+    const json = JSON.stringify({
+      findings: [validFinding],
+      narrative: "Embedded narrative.",
+    });
+    const raw = "Here is my analysis:\n\n" + json + "\n\nHope this helps!";
+    const result = parseDeepResponse(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.narrative).toBe("Embedded narrative.");
+  });
+
+  test("code fence with extra whitespace is handled", () => {
+    const inner = JSON.stringify({
+      findings: [validFinding],
+      narrative: "Whitespace fenced.",
+    });
+    const raw = "```json\n" + inner + "\n  ```\n";
+    const result = parseDeepResponse(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.narrative).toBe("Whitespace fenced.");
+  });
 });

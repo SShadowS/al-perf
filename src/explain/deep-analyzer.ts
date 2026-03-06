@@ -10,6 +10,7 @@ import { buildDeepSystemPrompt } from "./prompts/schema.js";
 import { parseDeepResponse } from "./response-parser.js";
 import type { ExplainModel } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
+import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 
 export type CallTreeStrategy = "pruned" | "chains" | "adjacency";
 
@@ -37,6 +38,7 @@ export interface DeepExplainOptions {
 export interface DeepExplainResult {
   aiFindings: AIFinding[];
   aiNarrative: string;
+  cost: ApiCallCost;
 }
 
 export function buildDeepPayload(
@@ -120,8 +122,16 @@ export async function deepAnalysis(
     parsed.narrative += "\n\n*(Response truncated)*";
   }
 
+  const cost = computeCallCost(
+    "deep",
+    model,
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+  );
+
   return {
     aiFindings: parsed.findings,
     aiNarrative: parsed.narrative,
+    cost,
   };
 }

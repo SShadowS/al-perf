@@ -7,6 +7,7 @@ import { extractCompanionZip } from "../src/source/zip-extractor.js";
 import { explainAnalysis } from "../src/explain/explainer.js";
 import { deepAnalysis } from "../src/explain/deep-analyzer.js";
 import { explainBatchAnalysis } from "../src/explain/batch-explainer.js";
+import { summarizeCosts, formatCostSummary, type ApiCallCost } from "../src/explain/api-cost.js";
 import type { ProcessedProfile } from "../src/types/processed.js";
 import { formatAnalysisHtml } from "../src/cli/formatters/html.js";
 import { formatBatchHtml } from "../src/cli/formatters/batch-html.js";
@@ -134,9 +135,12 @@ async function handleAnalyze(req: Request): Promise<Response> {
 
     // Always run AI explanation if API key is available
     const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiCosts: ApiCallCost[] = [];
     if (apiKey) {
       try {
-        result.explanation = await explainAnalysis(result, { apiKey, model: "sonnet" });
+        const explain = await explainAnalysis(result, { apiKey, model: "sonnet" });
+        result.explanation = explain.text;
+        apiCosts.push(explain.cost);
       } catch {
         // Non-fatal — analysis still returns without explanation
       }
@@ -147,10 +151,16 @@ async function handleAnalyze(req: Request): Promise<Response> {
           const deep = await deepAnalysis(result, processedProfile, { apiKey, model: "sonnet" });
           result.aiFindings = deep.aiFindings;
           result.aiNarrative = deep.aiNarrative;
+          apiCosts.push(deep.cost);
         } catch {
           // Non-fatal — analysis still returns without deep findings
         }
       }
+    }
+
+    if (apiCosts.length > 0) {
+      const summary = summarizeCosts(apiCosts);
+      console.log(`[api-cost] ${formatCostSummary(summary)}`);
     }
 
     // Record successful analysis for stats
@@ -287,12 +297,20 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
 
     // Run AI explanation if API key is available
     const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiCosts: ApiCallCost[] = [];
     if (apiKey) {
       try {
-        result.explanation = await explainBatchAnalysis(result, { apiKey, model: "sonnet" });
+        const explain = await explainBatchAnalysis(result, { apiKey, model: "sonnet" });
+        result.explanation = explain.text;
+        apiCosts.push(explain.cost);
       } catch {
         // Non-fatal — analysis still returns without explanation
       }
+    }
+
+    if (apiCosts.length > 0) {
+      const summary = summarizeCosts(apiCosts);
+      console.log(`[api-cost] ${formatCostSummary(summary)}`);
     }
 
     // Record successful analysis for stats
