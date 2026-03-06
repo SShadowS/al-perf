@@ -113,4 +113,33 @@ describe("parseDeepResponse", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.narrative).toBe("Whitespace fenced.");
   });
+
+  test("truncated JSON with open code fence salvages complete findings", () => {
+    const finding1 = JSON.stringify(validFinding);
+    const finding2 = JSON.stringify({ ...validFinding, title: "Second finding", category: "anomaly" });
+    // Simulate truncated response: fence opens, two complete findings, then cuts off mid-third
+    const raw = '```json\n{\n  "findings": [\n    ' + finding1 + ',\n    ' + finding2 + ',\n    { "title": "Incomplete finding", "categ';
+    const result = parseDeepResponse(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[0].title).toBe("Excessive table reads in loop");
+    expect(result.findings[1].title).toBe("Second finding");
+    expect(result.narrative).toContain("truncated");
+  });
+
+  test("truncated JSON without code fence salvages findings", () => {
+    const finding1 = JSON.stringify(validFinding);
+    const raw = '{\n  "findings": [\n    ' + finding1 + ',\n    { "title": "Cut off here';
+    const result = parseDeepResponse(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].title).toBe("Excessive table reads in loop");
+  });
+
+  test("missing narrative field with truncation still salvages findings", () => {
+    const finding1 = JSON.stringify(validFinding);
+    // Complete JSON object but no narrative key (truncated before narrative)
+    const raw = '```json\n{\n  "findings": [\n    ' + finding1 + '\n  ],\n  "narrat';
+    const result = parseDeepResponse(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].title).toBe("Excessive table reads in loop");
+  });
 });

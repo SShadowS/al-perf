@@ -765,8 +765,8 @@ function renderAiDeep(data) {
   if (findings.length === 0 && narrative) {
     try {
       let jsonStr = narrative.trim();
-      // Strip code fences
-      const fenceMatch = jsonStr.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
+      // Strip code fences (complete or truncated/open)
+      const fenceMatch = jsonStr.match(/```(?:json)?\s*\n([\s\S]*?)(?:\n\s*```|$)/);
       if (fenceMatch) jsonStr = fenceMatch[1].trim();
       // Try parsing as-is first
       let parsed;
@@ -777,12 +777,30 @@ function renderAiDeep(data) {
         const start = jsonStr.indexOf("{");
         const end = jsonStr.lastIndexOf("}");
         if (start !== -1 && end > start) {
-          parsed = JSON.parse(jsonStr.slice(start, end + 1));
+          try { parsed = JSON.parse(jsonStr.slice(start, end + 1)); } catch { /* ignore */ }
         }
       }
       if (parsed && Array.isArray(parsed.findings)) {
-        findings = parsed.findings;
+        findings = parsed.findings.filter(function(f) {
+          return f && f.title && f.category && f.severity && f.description;
+        });
         narrative = parsed.narrative || "";
+      }
+      // Last resort: salvage complete {...} objects from truncated JSON
+      if (findings.length === 0) {
+        const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+        let m;
+        while ((m = objectPattern.exec(jsonStr)) !== null) {
+          try {
+            const obj = JSON.parse(m[0]);
+            if (obj && obj.title && obj.category && obj.severity && obj.description && obj.evidence) {
+              findings.push(obj);
+            }
+          } catch { /* skip incomplete */ }
+        }
+        if (findings.length > 0) {
+          narrative = "*(AI analysis was truncated — showing salvaged findings)*";
+        }
       }
     } catch {
       // Keep original values

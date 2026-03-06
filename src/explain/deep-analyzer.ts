@@ -102,7 +102,7 @@ export async function deepAnalysis(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 16384,
     system: systemPrompt,
     messages: [
       {
