@@ -194,6 +194,45 @@ function renderExplanation(result: AnalysisResult): string {
   return lines.join("\n");
 }
 
+function renderAiNarrative(result: AnalysisResult): string {
+  if (!result.aiNarrative) return "";
+
+  const lines: string[] = [];
+  lines.push("## AI Narrative");
+  lines.push("");
+  lines.push(result.aiNarrative);
+  return lines.join("\n");
+}
+
+function renderAiFindings(result: AnalysisResult): string {
+  if (!result.aiFindings || result.aiFindings.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push("## AI Findings");
+  lines.push("");
+
+  for (const f of result.aiFindings) {
+    lines.push(`### ${severityBadge(f.severity)} ${f.title}`);
+    lines.push("");
+    lines.push(`**Confidence:** ${f.confidence} | **Category:** ${f.category}`);
+    lines.push("");
+    lines.push(f.description);
+    lines.push("");
+    lines.push(`**Suggestion:** ${f.suggestion}`);
+    lines.push("");
+    lines.push(`**Evidence:** ${f.evidence}`);
+    if (f.codeFix) {
+      lines.push("");
+      lines.push("```al");
+      lines.push(f.codeFix);
+      lines.push("```");
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 const markdownSections: SectionRenderers<string> = {
   summary: renderSummary,
   hotspots: renderHotspots,
@@ -203,6 +242,8 @@ const markdownSections: SectionRenderers<string> = {
   tableBreakdown: renderTableBreakdown,
   objectBreakdown: renderObjectBreakdown,
   explanation: renderExplanation,
+  aiNarrative: renderAiNarrative,
+  aiFindings: renderAiFindings,
 };
 
 /**

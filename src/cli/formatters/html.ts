@@ -251,6 +251,46 @@ function renderExplanation(result: AnalysisResult): string {
   return `<div class="section explanation">${explanationHtml}</div>`;
 }
 
+function renderAiNarrative(result: AnalysisResult): string {
+  if (!result.aiNarrative) return "";
+
+  const narrativeHtml = marked.parse(result.aiNarrative.replace(/<[^>]*>/g, ""));
+  return `<div class="section explanation">
+    <h2>AI Narrative</h2>
+    ${narrativeHtml}
+  </div>`;
+}
+
+function renderAiFindings(result: AnalysisResult): string {
+  if (!result.aiFindings || result.aiFindings.length === 0) return "";
+
+  const findingsHtml = result.aiFindings
+    .map((f) => {
+      const color = severityColor(f.severity);
+      const codeFixHtml = f.codeFix
+        ? `<pre><code class="language-al">${escapeHtml(f.codeFix)}</code></pre>`
+        : "";
+      return `<div class="pattern">
+        <div class="pattern-header">
+          <span class="severity-badge" style="background:${color}">${f.severity.toUpperCase()}</span>
+          <span class="pattern-title">${escapeHtml(f.title)}</span>
+          <span style="color:#505C6D;font-size:0.85em">[${f.confidence} confidence]</span>
+        </div>
+        <p style="color:#505C6D;font-size:0.85em">Category: ${escapeHtml(f.category)}</p>
+        <p>${escapeHtml(f.description)}</p>
+        <p class="suggestion"><strong>Suggestion:</strong> ${escapeHtml(f.suggestion)}</p>
+        <p class="impact"><strong>Evidence:</strong> ${escapeHtml(f.evidence)}</p>
+        ${codeFixHtml}
+      </div>`;
+    })
+    .join("\n");
+
+  return `<div class="section">
+    <h2>AI Findings</h2>
+    ${findingsHtml}
+  </div>`;
+}
+
 const htmlSections: SectionRenderers<string> = {
   summary: renderSummary,
   hotspots: renderHotspots,
@@ -260,6 +300,8 @@ const htmlSections: SectionRenderers<string> = {
   tableBreakdown: renderTableBreakdown,
   objectBreakdown: renderObjectBreakdown,
   explanation: renderExplanation,
+  aiNarrative: renderAiNarrative,
+  aiFindings: renderAiFindings,
 };
 
 /**

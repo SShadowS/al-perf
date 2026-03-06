@@ -225,6 +225,40 @@ function renderExplanation(result: AnalysisResult): string {
   return lines.join("\n");
 }
 
+function renderAiNarrative(result: AnalysisResult): string {
+  if (!result.aiNarrative) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("AI Narrative"));
+  lines.push(`  ${result.aiNarrative.split("\n").join("\n  ")}`);
+  return lines.join("\n");
+}
+
+function renderAiFindings(result: AnalysisResult): string {
+  if (!result.aiFindings || result.aiFindings.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("AI Findings"));
+  lines.push("");
+
+  for (const f of result.aiFindings) {
+    lines.push(`  ${formatSeverity(f.severity)}  ${chalk.bold(f.title)}  [${f.confidence} confidence]`);
+    lines.push(`    Category: ${f.category}`);
+    lines.push(`    ${f.description}`);
+    lines.push(`    ${chalk.cyan("Suggestion:")} ${f.suggestion}`);
+    lines.push(`    Evidence: ${f.evidence}`);
+    if (f.codeFix) {
+      lines.push(`    Code fix:`);
+      for (const line of f.codeFix.split("\n")) {
+        lines.push(`      ${line}`);
+      }
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 const terminalSections: SectionRenderers<string> = {
   summary: renderSummary,
   hotspots: renderHotspots,
@@ -234,6 +268,8 @@ const terminalSections: SectionRenderers<string> = {
   tableBreakdown: renderTableBreakdown,
   objectBreakdown: renderObjectBreakdown,
   explanation: renderExplanation,
+  aiNarrative: renderAiNarrative,
+  aiFindings: renderAiFindings,
 };
 
 /**
