@@ -110,6 +110,30 @@ describe("computeDiagnostics", () => {
       expect(diag.coldCacheWarning).toBe(true);
     });
 
+    it("detects cold cache from SQL function names in sampling profiles", () => {
+      const sqlMetadataNode = makeNode({
+        objectType: "Page",
+        objectName: "Sales Quote",
+        functionName: "SELECT [Metadata] FROM dbo.[Application Object Metadata] WHERE ...",
+        selfTime: 700,
+      });
+      const normalNode = makeNode({
+        id: 2,
+        objectType: "CodeUnit",
+        objectName: "Sales Management",
+        selfTime: 300,
+      });
+      const profile = makeProfile({
+        allNodes: [sqlMetadataNode, normalNode],
+        totalSelfTime: 1000,
+        activeSelfTime: 1000,
+      });
+
+      const diag = computeDiagnostics(profile, makeResult());
+      expect(diag.coldCacheScore).toBeCloseTo(0.7, 1);
+      expect(diag.coldCacheWarning).toBe(true);
+    });
+
     it("returns low cold cache score for normal profiles", () => {
       const normalNode1 = makeNode({
         objectType: "CodeUnit",

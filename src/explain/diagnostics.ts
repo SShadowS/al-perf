@@ -17,6 +17,8 @@ export interface ProfileDiagnostics {
   transactionCount: number;
   tableAccessMap: TableAccessEntry[];
   healthScoreNote: string | null;
+  /** Note about profile scale — included when active time is very low */
+  scaleNote: string | null;
 }
 
 const METADATA_TABLES = new Set([
@@ -30,8 +32,23 @@ const METADATA_TABLES = new Set([
   "metadata",
 ]);
 
+/** Metadata table patterns that appear in SQL function names (sampling profiles) */
+const METADATA_SQL_PATTERNS = [
+  "[application object metadata]",
+  "[translation text]",
+  "[permission set]",
+  "[tenant permission]",
+  "[access control]",
+];
+
 function isMetadataTable(objectName: string): boolean {
   return METADATA_TABLES.has(objectName.toLowerCase());
+}
+
+/** Check if a node's SQL function name references metadata tables (for sampling profiles) */
+function isMetadataSqlNode(functionName: string): boolean {
+  const lower = functionName.toLowerCase();
+  return METADATA_SQL_PATTERNS.some((p) => lower.includes(p));
 }
 
 function isTableNode(node: ProcessedNode): boolean {
@@ -50,11 +67,14 @@ export function computeDiagnostics(
   profile: ProcessedProfile,
   result: AnalysisResult,
 ): ProfileDiagnostics {
-  // 1. Cold cache score
+  // 1. Cold cache score — check both objectName (instrumentation) and SQL text (sampling)
   let metadataSelfTime = 0;
   for (const node of profile.allNodes) {
     if (isIdleNode(node)) continue;
-    if (isTableNode(node) && isMetadataTable(node.applicationDefinition.objectName)) {
+    const isMetadata =
+      (isTableNode(node) && isMetadataTable(node.applicationDefinition.objectName)) ||
+      isMetadataSqlNode(node.callFrame.functionName);
+    if (isMetadata) {
       metadataSelfTime += node.selfTime;
     }
   }
@@ -137,6 +157,13 @@ export function computeDiagnostics(
     healthScoreNote = `Health score (${healthScore}) is driven by high pattern count (${totalPatterns}) and may be misleading.`;
   }
 
+  // 6. Scale note
+  const activeTimeSeconds = profile.activeSelfTime / 1_000_000; // microseconds to seconds
+  let scaleNote: string | null = null;
+  if (activeTimeSeconds < 2) {
+    scaleNote = `Total active time is only ${activeTimeSeconds.toFixed(1)}s. This is a fast operation — avoid "critical" severity for code-pattern findings. Patterns adding small amounts to a sub-2-second operation are "info" or "warning" at most.`;
+  }
+
   return {
     coldCacheScore,
     coldCacheWarning,
@@ -145,5 +172,6 @@ export function computeDiagnostics(
     transactionCount,
     tableAccessMap,
     healthScoreNote,
+    scaleNote,
   };
 }
