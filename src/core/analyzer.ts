@@ -15,6 +15,7 @@ import type { AnalysisResult, ComparisonResult, MethodDelta, PatternDelta, Criti
 import type { DetectedPattern } from "../types/patterns.js";
 import type { ProcessedProfile, ProcessedNode } from "../types/processed.js";
 import type { ParsedProfile } from "../types/profile.js";
+import { config } from "../config.js";
 
 export interface AnalyzeOptions {
   top?: number;
@@ -199,7 +200,7 @@ export async function analyzeProfile(
   // Attach source snippets to matched hotspots (for AI and formatters)
   const sourcePath = options?.sourcePath;
   if (sourcePath) {
-    const snippetLimit = 15;
+    const snippetLimit = config.snippetLimit;
     let snippetsRead = 0;
     for (const h of hotspots) {
       if (snippetsRead >= snippetLimit) break;

@@ -36,8 +36,8 @@ describe("trimResultForPrompt", () => {
     expect(trimmed.summary).toEqual(result.summary);
   });
 
-  test("limits hotspots to 10", () => {
-    const hotspots = Array.from({ length: 20 }, (_, i) => ({
+  test("limits hotspots to 20", () => {
+    const hotspots = Array.from({ length: 30 }, (_, i) => ({
       functionName: `Method${i}`,
       objectType: "CodeUnit",
       objectName: `Test ${i}`,
@@ -53,8 +53,8 @@ describe("trimResultForPrompt", () => {
     }));
     const result = makeResult({ hotspots });
     const trimmed = trimResultForPrompt(result);
-    expect(trimmed.hotspots.length).toBe(10);
-    expect(trimmed.totalHotspots).toBe(20);
+    expect(trimmed.hotspots.length).toBe(20);
+    expect(trimmed.totalHotspots).toBe(30);
   });
 
   test("limits patterns to 15", () => {

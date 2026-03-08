@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AnalysisResult } from "../output/types.js";
 import { computeCallCost, type ApiCallCost } from "./api-cost.js";
+import { config } from "../config.js";
 
 export const SYSTEM_PROMPT = `You are a Business Central AL performance expert. You are given the JSON output of a profile analysis. Write a concise, actionable summary covering:
 
@@ -38,9 +39,9 @@ export function trimResultForPrompt(result: AnalysisResult): TrimmedResult {
   return {
     meta: result.meta,
     summary: result.summary,
-    hotspots: result.hotspots.slice(0, 10),
+    hotspots: result.hotspots.slice(0, config.explain.trimmedHotspots),
     totalHotspots: result.hotspots.length,
-    patterns: result.patterns.slice(0, 15),
+    patterns: result.patterns.slice(0, config.explain.trimmedPatterns),
     totalPatterns: result.patterns.length,
     appBreakdown: result.appBreakdown,
   };
@@ -69,11 +70,11 @@ export async function explainAnalysis(
 ): Promise<ExplainResult> {
   const client = new Anthropic({ apiKey: options.apiKey });
   const trimmed = trimResultForPrompt(result);
-  const model = MODEL_IDS[options.model ?? "sonnet"];
+  const model = MODEL_IDS[options.model ?? config.defaultModel];
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: config.explain.maxTokens,
     system: SYSTEM_PROMPT,
     messages: [
       {

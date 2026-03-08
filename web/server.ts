@@ -12,6 +12,7 @@ import type { ProcessedProfile } from "../src/types/processed.js";
 import { formatAnalysisHtml } from "../src/cli/formatters/html.js";
 import { formatBatchHtml } from "../src/cli/formatters/batch-html.js";
 import type { ProfileMetadata } from "../src/types/batch.js";
+import { config } from "../src/config.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 const STATS_FILE = resolve(import.meta.dir, "stats.json");
@@ -127,7 +128,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
     // Run analysis
     let processedProfile: ProcessedProfile | undefined;
     const result = await analyzeProfile(profilePath, {
-      top: 20,
+      top: config.analysisTopN,
       includePatterns: true,
       sourcePath,
       onProcessedProfile: (p) => { processedProfile = p; },
@@ -138,7 +139,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
     const apiCosts: ApiCallCost[] = [];
     if (apiKey) {
       try {
-        const explain = await explainAnalysis(result, { apiKey, model: "sonnet" });
+        const explain = await explainAnalysis(result, { apiKey, model: config.defaultModel });
         result.explanation = explain.text;
         apiCosts.push(explain.cost);
       } catch {
@@ -148,7 +149,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
       // Deep AI analysis (always attempted in web UI)
       if (processedProfile) {
         try {
-          const deep = await deepAnalysis(result, processedProfile, { apiKey, model: "sonnet" });
+          const deep = await deepAnalysis(result, processedProfile, { apiKey, model: config.defaultModel });
           result.aiFindings = deep.aiFindings;
           result.aiNarrative = deep.aiNarrative;
           apiCosts.push(deep.cost);
@@ -300,7 +301,7 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
     const apiCosts: ApiCallCost[] = [];
     if (apiKey) {
       try {
-        const explain = await explainBatchAnalysis(result, { apiKey, model: "sonnet" });
+        const explain = await explainBatchAnalysis(result, { apiKey, model: config.defaultModel });
         result.explanation = explain.text;
         apiCosts.push(explain.cost);
       } catch {

@@ -11,6 +11,7 @@ import { parseDeepResponse } from "./response-parser.js";
 import type { ExplainModel } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
 import { computeCallCost, type ApiCallCost } from "./api-cost.js";
+import { config } from "../config.js";
 
 export type CallTreeStrategy = "pruned" | "chains" | "adjacency";
 
@@ -52,16 +53,16 @@ export function buildDeepPayload(
   switch (strategy) {
     case "pruned":
       callTree = serializePrunedTree(profile, {
-        maxSubtrees: 5,
-        maxDepth: 5,
-        minPercent: 1,
+        maxSubtrees: config.deep.prunedMaxSubtrees,
+        maxDepth: config.deep.prunedMaxDepth,
+        minPercent: config.deep.prunedMinPercent,
       });
       break;
     case "chains":
-      callTree = serializeChainList(profile, { maxChains: 10 });
+      callTree = serializeChainList(profile, { maxChains: config.deep.chainsMaxChains });
       break;
     case "adjacency":
-      callTree = serializeAdjacencySummary(profile, { topMethods: 10 });
+      callTree = serializeAdjacencySummary(profile, { topMethods: config.deep.adjacencyTopMethods });
       break;
   }
 
@@ -91,18 +92,18 @@ export async function deepAnalysis(
   profile: ProcessedProfile,
   options: DeepExplainOptions,
 ): Promise<DeepExplainResult> {
-  const strategy = options.strategy ?? "adjacency";
+  const strategy = options.strategy ?? config.deep.strategy;
   const payload = buildDeepPayload(result, profile, strategy);
 
   const hasSource = payload.sourceSnippets !== undefined;
   const systemPrompt = buildDeepSystemPrompt({ hasSource });
 
   const client = new Anthropic({ apiKey: options.apiKey });
-  const model = MODEL_IDS[options.model ?? "sonnet"];
+  const model = MODEL_IDS[options.model ?? config.defaultModel];
 
   const response = await client.messages.create({
     model,
-    max_tokens: 16384,
+    max_tokens: config.deep.maxTokens,
     system: systemPrompt,
     messages: [
       {

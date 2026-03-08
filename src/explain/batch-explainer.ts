@@ -3,6 +3,7 @@ import type { BatchAnalysisResult } from "../output/batch-types.js";
 import type { ExplainModel, ExplainOptions } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
 import { computeCallCost, type ApiCallCost } from "./api-cost.js";
+import { config } from "../config.js";
 
 export const BATCH_SYSTEM_PROMPT = `You are a Business Central performance analyst reviewing a batch of AL CPU profiles collected from the scheduled performance profiler. These profiles represent multiple user activities over a time window.
 
@@ -44,9 +45,9 @@ export function trimBatchResultForPrompt(result: BatchAnalysisResult): TrimmedBa
   return {
     meta: result.meta,
     summary: result.summary,
-    recurringPatterns: result.recurringPatterns.slice(0, 15),
-    cumulativeHotspots: result.cumulativeHotspots.slice(0, 20),
-    activityBreakdown: result.activityBreakdown.slice(0, 20).map((a) => ({
+    recurringPatterns: result.recurringPatterns.slice(0, config.batchExplain.trimmedPatterns),
+    cumulativeHotspots: result.cumulativeHotspots.slice(0, config.batchExplain.trimmedHotspots),
+    activityBreakdown: result.activityBreakdown.slice(0, config.batchExplain.trimmedActivities).map((a) => ({
       profilePath: a.profilePath,
       healthScore: a.healthScore,
       patternCount: a.patternCount,
@@ -57,7 +58,7 @@ export function trimBatchResultForPrompt(result: BatchAnalysisResult): TrimmedBa
         : undefined,
       ...(a.selfReferential ? { selfReferential: a.selfReferential } : {}),
     })),
-    appBreakdown: result.appBreakdown.slice(0, 10),
+    appBreakdown: result.appBreakdown.slice(0, config.batchExplain.trimmedApps),
     errors: result.errors,
     totalHotspots: result.cumulativeHotspots.length,
     totalPatterns: result.recurringPatterns.length,
@@ -75,11 +76,11 @@ export async function explainBatchAnalysis(
 ): Promise<BatchExplainResult> {
   const client = new Anthropic({ apiKey: options.apiKey });
   const trimmed = trimBatchResultForPrompt(result);
-  const model = MODEL_IDS[options.model ?? "sonnet"];
+  const model = MODEL_IDS[options.model ?? config.defaultModel];
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: config.batchExplain.maxTokens,
     system: BATCH_SYSTEM_PROMPT,
     messages: [
       {
