@@ -2,6 +2,36 @@
 // AL Profile Analyzer — Web UI
 // ---------------------------------------------------------------------------
 
+// Check debug mode on page load
+fetch("/api/debug/status")
+  .then((r) => r.json())
+  .then((status) => {
+    if (status.debugMode) {
+      document.getElementById("debug-banner").style.display = "block";
+    }
+    window.__debugMode = status.debugMode;
+  })
+  .catch(() => {});
+
+/**
+ * Reset consent UI state (called before each new analysis).
+ */
+function resetConsentState() {
+  document.getElementById("consent-prompt").style.display = "none";
+  document.getElementById("consent-thanks").style.display = "none";
+  window.__debugToken = undefined;
+}
+
+/**
+ * Show consent prompt if applicable (not in debug mode, has a debug token).
+ */
+function showConsentIfApplicable(data) {
+  window.__debugToken = data.debugToken;
+  if (!window.__debugMode && data.debugToken) {
+    document.getElementById("consent-prompt").style.display = "block";
+  }
+}
+
 /**
  * Switch between views: dropzone, loading, results, error.
  * Hides all views and shows only the specified one.
@@ -1034,6 +1064,9 @@ async function handleSingleUpload(profileFile, sourceFile) {
     formData.append("source", sourceFile);
   }
 
+  // Reset consent state from any previous analysis
+  resetConsentState();
+
   // Show loading state with elapsed timer
   showView("loading");
   const timerEl = document.getElementById("elapsed-timer");
@@ -1066,6 +1099,7 @@ async function handleSingleUpload(profileFile, sourceFile) {
 
     const data = await response.json();
     renderResults(data);
+    showConsentIfApplicable(data);
     showView("results");
   } catch (err) {
     document.getElementById("error-message").textContent =
@@ -1080,6 +1114,7 @@ async function handleSingleUpload(profileFile, sourceFile) {
  * Upload multiple profiles for batch analysis.
  */
 async function handleBatchUpload(profileFiles, sourceFile) {
+  resetConsentState();
   showView("loading");
   const timerEl = document.getElementById("elapsed-timer");
   const startTime = Date.now();
@@ -1119,6 +1154,7 @@ async function handleBatchUpload(profileFiles, sourceFile) {
 
     const data = await response.json();
     renderBatchResults(data);
+    showConsentIfApplicable(data);
     showView("results");
   } catch (err) {
     document.getElementById("error-message").textContent =
@@ -1864,5 +1900,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   tryAgainBtn.addEventListener("click", () => {
     showView("dropzone");
+  });
+
+  // --- Consent handlers ---
+  document.getElementById("consent-allow").addEventListener("click", async () => {
+    if (!window.__debugToken) return;
+    try {
+      const res = await fetch("/api/debug/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ debugToken: window.__debugToken }),
+      });
+      if (res.ok) {
+        document.getElementById("consent-prompt").style.display = "none";
+        document.getElementById("consent-thanks").style.display = "block";
+      }
+    } catch {
+      // Silent fail
+    }
+  });
+
+  document.getElementById("consent-dismiss").addEventListener("click", () => {
+    document.getElementById("consent-prompt").style.display = "none";
   });
 });
