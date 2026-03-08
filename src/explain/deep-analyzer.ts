@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AnalysisResult } from "../output/types.js";
 import type { AIFinding } from "../types/ai-findings.js";
 import type { ProcessedProfile } from "../types/processed.js";
-import { trimResultForPrompt, type TrimmedResult } from "./explainer.js";
+import { trimResultForPrompt, type TrimmedResult, type AiDebugInfo } from "./explainer.js";
 import { serializePrunedTree } from "./payloads/call-tree-pruned.js";
 import { serializeChainList } from "./payloads/call-tree-chains.js";
 import { serializeAdjacencySummary } from "./payloads/call-tree-adjacency.js";
@@ -40,6 +40,7 @@ export interface DeepExplainResult {
   aiFindings: AIFinding[];
   aiNarrative: string;
   cost: ApiCallCost;
+  debugInfo: AiDebugInfo;
 }
 
 export function buildDeepPayload(
@@ -134,5 +135,10 @@ export async function deepAnalysis(
     aiFindings: parsed.findings,
     aiNarrative: parsed.narrative,
     cost,
+    debugInfo: {
+      systemPrompt,
+      userPayload: payload,
+      rawResponse: response,
+    },
   };
 }

@@ -59,9 +59,16 @@ export interface ExplainOptions {
   model?: ExplainModel;
 }
 
+export interface AiDebugInfo {
+  systemPrompt: string;
+  userPayload: object;
+  rawResponse: object;
+}
+
 export interface ExplainResult {
   text: string;
   cost: ApiCallCost;
+  debugInfo: AiDebugInfo;
 }
 
 export async function explainAnalysis(
@@ -97,5 +104,13 @@ export async function explainAnalysis(
     response.usage.output_tokens,
   );
 
-  return { text, cost };
+  return {
+    text,
+    cost,
+    debugInfo: {
+      systemPrompt: SYSTEM_PROMPT,
+      userPayload: trimmed,
+      rawResponse: response,
+    },
+  };
 }

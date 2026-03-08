@@ -22,7 +22,7 @@ export { buildTableRelationGraph, tableConnectivityStats } from "./source/table-
 
 // Explainer
 export { explainAnalysis, trimResultForPrompt, SYSTEM_PROMPT } from "./explain/explainer.js";
-export type { ExplainOptions, ExplainModel, ExplainResult } from "./explain/explainer.js";
+export type { ExplainOptions, ExplainModel, ExplainResult, AiDebugInfo } from "./explain/explainer.js";
 export { explainBatchAnalysis, trimBatchResultForPrompt, BATCH_SYSTEM_PROMPT } from "./explain/batch-explainer.js";
 export type { BatchExplainResult } from "./explain/batch-explainer.js";
 export { computeCallCost, summarizeCosts, formatCallCost, formatCostSummary } from "./explain/api-cost.js";
