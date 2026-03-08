@@ -34,9 +34,10 @@ export async function writeCaptureToDisk(
   debugDir: string,
   mode: CaptureMode,
   consent?: ConsentInfo,
+  folderName?: string,
 ): Promise<string> {
-  const folderName = `${padId(capture.id)}_${formatTimestamp(capture.timestamp)}`;
-  const folder = resolve(debugDir, folderName);
+  const name = folderName ?? `${padId(capture.id)}_${formatTimestamp(capture.timestamp)}`;
+  const folder = resolve(debugDir, name);
   await mkdir(folder, { recursive: true });
 
   const meta: CaptureMeta = {
