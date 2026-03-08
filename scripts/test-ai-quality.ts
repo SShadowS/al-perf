@@ -16,7 +16,7 @@ import type { DebugCapture } from "../src/debug/types.js";
 import type { ProcessedProfile } from "../src/types/processed.js";
 import type { ApiCallCost } from "../src/explain/api-cost.js";
 import { formatCallCost } from "../src/explain/api-cost.js";
-import { readdir, mkdir, readFile, writeFile as fsWriteFile } from "fs/promises";
+import { readdir, mkdir, readFile, writeFile as fsWriteFile, stat } from "fs/promises";
 import { resolve, basename } from "path";
 import { existsSync } from "fs";
 import type { AIFinding } from "../src/types/ai-findings.js";
@@ -285,8 +285,13 @@ async function findPreviousRun(currentRunName: string): Promise<string | undefin
   const runsDir = resolve(EXAMPLE_DIR, "runs");
   if (!existsSync(runsDir)) return undefined;
 
-  const entries = await readdir(runsDir);
-  const sorted = entries.filter((e) => e < currentRunName).sort();
+  const allEntries = await readdir(runsDir);
+  const dirs: string[] = [];
+  for (const e of allEntries) {
+    const s = await stat(resolve(runsDir, e));
+    if (s.isDirectory()) dirs.push(e);
+  }
+  const sorted = dirs.filter((e) => e < currentRunName).sort();
   if (sorted.length === 0) return undefined;
   return resolve(runsDir, sorted[sorted.length - 1]);
 }

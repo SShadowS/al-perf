@@ -9,7 +9,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { readdir, readFile, writeFile } from "fs/promises";
+import { readdir, readFile, writeFile, stat } from "fs/promises";
 import { resolve, basename } from "path";
 import { existsSync } from "fs";
 import { computeCallCost, formatCallCost } from "../src/explain/api-cost.js";
@@ -84,8 +84,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Determine which two runs to compare
-  const allRuns = (await readdir(RUNS_DIR)).sort();
+  // Determine which two runs to compare (filter to directories only)
+  const entries = await readdir(RUNS_DIR);
+  const allRuns: string[] = [];
+  for (const entry of entries) {
+    const s = await stat(resolve(RUNS_DIR, entry));
+    if (s.isDirectory()) allRuns.push(entry);
+  }
+  allRuns.sort();
   let runA: string;
   let runB: string;
 
