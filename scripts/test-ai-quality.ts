@@ -7,7 +7,7 @@
  */
 
 import { analyzeProfile } from "../src/core/analyzer.js";
-import { explainAnalysis, type ExplainResult } from "../src/explain/explainer.js";
+import { explainAnalysis, type ExplainResult, type ExplainModel } from "../src/explain/explainer.js";
 import { deepAnalysis, type DeepExplainResult } from "../src/explain/deep-analyzer.js";
 import { findCompanionZip, extractCompanionZip } from "../src/source/zip-extractor.js";
 import { writeCaptureToDisk } from "../src/debug/writer.js";
@@ -31,6 +31,7 @@ async function analyzeOne(
   profilePath: string,
   runDir: string,
   apiKey: string,
+  model: ExplainModel,
 ): Promise<number> {
   const profileName = basename(profilePath);
   log(`\n--- ${profileName} ---`);
@@ -69,7 +70,7 @@ async function analyzeOne(
 
     // Run explain
     log("  Running explain...");
-    const explainResult: ExplainResult = await explainAnalysis(result, { apiKey });
+    const explainResult: ExplainResult = await explainAnalysis(result, { apiKey, model });
     log(`  Explain: ${formatCallCost(explainResult.cost)}`);
 
     // Run deep analysis
@@ -80,7 +81,7 @@ async function analyzeOne(
     const deepResult: DeepExplainResult = await deepAnalysis(
       result,
       processedProfile,
-      { apiKey },
+      { apiKey, model },
     );
     log(`  Deep: ${formatCallCost(deepResult.cost)}`);
 
@@ -98,7 +99,7 @@ async function analyzeOne(
       analysisResult: result,
       costs,
       analysisDurationMs: Math.round(elapsed),
-      model: "sonnet",
+      model,
       explainCapture: {
         debugInfo: explainResult.debugInfo,
         parsedOutput: explainResult.text,
@@ -440,6 +441,11 @@ async function generateDiffReport(
 }
 
 async function main(): Promise<void> {
+  // Parse --model argument
+  const modelArg = process.argv.find((a) => a.startsWith("--model="))?.split("=")[1]
+    ?? (process.argv.includes("--model") ? process.argv[process.argv.indexOf("--model") + 1] : undefined);
+  const model: ExplainModel = modelArg === "opus" ? "opus" : "sonnet";
+
   // Fail fast if no API key
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -459,7 +465,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  log(`Found ${profiles.length} profiles in exampledata/`);
+  log(`Found ${profiles.length} profiles (model: ${model})`);
 
   // Create timestamped run folder
   const timestamp = new Date()
@@ -477,7 +483,7 @@ async function main(): Promise<void> {
   let totalCost = 0;
 
   for (const profilePath of profiles) {
-    const cost = await analyzeOne(profilePath, runDir, apiKey);
+    const cost = await analyzeOne(profilePath, runDir, apiKey, model);
     totalCost += cost;
   }
 
