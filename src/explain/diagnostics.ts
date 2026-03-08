@@ -52,15 +52,13 @@ export function computeDiagnostics(
 ): ProfileDiagnostics {
   // 1. Cold cache score
   let metadataSelfTime = 0;
-  let totalSelfTime = 0;
   for (const node of profile.allNodes) {
     if (isIdleNode(node)) continue;
-    totalSelfTime += node.selfTime;
     if (isTableNode(node) && isMetadataTable(node.applicationDefinition.objectName)) {
       metadataSelfTime += node.selfTime;
     }
   }
-  const coldCacheScore = totalSelfTime > 0 ? metadataSelfTime / totalSelfTime : 0;
+  const coldCacheScore = profile.activeSelfTime > 0 ? metadataSelfTime / profile.activeSelfTime : 0;
   const coldCacheWarning = coldCacheScore > 0.4;
 
   // 2. Wall-clock gap ratio
@@ -128,6 +126,8 @@ export function computeDiagnostics(
     });
   }
   tableAccessMap.sort((a, b) => b.totalHitCount - a.totalHitCount);
+  // Cap to top 10 to avoid inflating token count
+  if (tableAccessMap.length > 10) tableAccessMap.length = 10;
 
   // 5. Health score note
   const { healthScore, patternCount } = result.summary;

@@ -102,6 +102,7 @@ describe("computeDiagnostics", () => {
       const profile = makeProfile({
         allNodes: [metadataNode, normalNode],
         totalSelfTime: 1000,
+        activeSelfTime: 1000,
       });
 
       const diag = computeDiagnostics(profile, makeResult());
