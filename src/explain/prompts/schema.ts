@@ -38,6 +38,7 @@ You MUST respond with valid JSON matching this schema exactly. Do not include an
 8. \`evidence\` must reference specific data from the profile (times, hit counts, call relationships).
 9. The \`narrative\` must be self-contained — a reader should understand the performance situation from the narrative alone without reading individual findings.
 10. Do NOT repeat findings that the rule-based pattern detectors have already identified. Focus on insights that require understanding call tree relationships, domain context, or source code semantics.
+11. If \`diagnostics.coldCacheWarning\` is true, your FIRST finding MUST address the cold cache situation. Do not bury it as a minor observation.
 `;
 
 export interface BuildDeepSystemPromptOptions {

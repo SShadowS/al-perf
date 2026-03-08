@@ -12,6 +12,7 @@ import type { ExplainModel } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
 import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 import { config } from "../config.js";
+import { computeDiagnostics, type ProfileDiagnostics } from "./diagnostics.js";
 
 export type CallTreeStrategy = "pruned" | "chains" | "adjacency";
 
@@ -28,6 +29,7 @@ export interface DeepPayload {
     lineEnd: number;
     source: string;
   }>;
+  diagnostics: ProfileDiagnostics;
 }
 
 export interface DeepExplainOptions {
@@ -80,11 +82,14 @@ export function buildDeepPayload(
       source: h.sourceSnippet!,
     }));
 
+  const diagnostics = computeDiagnostics(profile, result);
+
   return {
     analysis,
     callTree,
     callTreeStrategy: strategy,
     sourceSnippets: snippets.length > 0 ? snippets : undefined,
+    diagnostics,
   };
 }
 

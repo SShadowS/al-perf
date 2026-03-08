@@ -33,6 +33,7 @@ export interface TrimmedResult {
   patterns: AnalysisResult["patterns"];
   totalPatterns: number;
   appBreakdown: AnalysisResult["appBreakdown"];
+  tableBreakdown?: AnalysisResult["tableBreakdown"];
 }
 
 export function trimResultForPrompt(result: AnalysisResult): TrimmedResult {
@@ -44,6 +45,7 @@ export function trimResultForPrompt(result: AnalysisResult): TrimmedResult {
     patterns: result.patterns.slice(0, config.explain.trimmedPatterns),
     totalPatterns: result.patterns.length,
     appBreakdown: result.appBreakdown,
+    tableBreakdown: result.tableBreakdown,
   };
 }
 
