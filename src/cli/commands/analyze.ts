@@ -3,13 +3,19 @@ import { resolve } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
 import { explainAnalysis, type ExplainModel } from "../../explain/explainer.js";
+import type { ExplainResult } from "../../explain/explainer.js";
 import { deepAnalysis } from "../../explain/deep-analyzer.js";
+import type { DeepExplainResult } from "../../explain/deep-analyzer.js";
 import { formatCallCost } from "../../explain/api-cost.js";
+import type { ApiCallCost } from "../../explain/api-cost.js";
 import { findCompanionZip, extractCompanionZip } from "../../source/zip-extractor.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import type { SourceIndex } from "../../types/source-index.js";
 import type { ProcessedProfile } from "../../types/processed.js";
 import { withStatus } from "../status.js";
+import { initIdCounter, nextId } from "../../debug/ids.js";
+import { writeCaptureToDisk } from "../../debug/writer.js";
+import type { DebugCapture } from "../../debug/types.js";
 
 export function registerAnalyzeCommand(program: Command) {
   program
@@ -31,6 +37,7 @@ export function registerAnalyzeCommand(program: Command) {
     .option("--history-dir <dir>", "History store directory", ".al-perf-history")
     .option("--git-commit <hash>", "Git commit hash to associate with this analysis")
     .option("--label <label>", "Label for this analysis run (e.g., 'baseline', 'after-fix')")
+    .option("--debug", "Save debug capture (prompts, payloads, responses) to debug/ folder")
     .action(async (profilePath: string, opts: any) => {
       // --deep implies --explain
       if (opts.deep && !opts.explain) opts.explain = true;
@@ -72,6 +79,11 @@ export function registerAnalyzeCommand(program: Command) {
           onProcessedProfile: opts.deep ? (p: ProcessedProfile) => { processedProfile = p; } : undefined,
         }),
       );
+      const analyzeStart = Date.now();
+      let explainResult: ExplainResult | undefined;
+      let deepResult: DeepExplainResult | undefined;
+      const apiCosts: ApiCallCost[] = [];
+
       // Run LLM explanation if --explain is provided
       if (opts.explain) {
         const model = opts.model ?? "sonnet";
@@ -85,14 +97,15 @@ export function registerAnalyzeCommand(program: Command) {
         } else {
           try {
             const modelLabel = model === "opus" ? "Opus" : "Sonnet";
-            const explain = await withStatus(`Generating AI explanation (Claude ${modelLabel})...`, () =>
+            explainResult = await withStatus(`Generating AI explanation (Claude ${modelLabel})...`, () =>
               explainAnalysis(result, {
                 apiKey,
                 model: model as ExplainModel,
               }),
             );
-            result.explanation = explain.text;
-            console.error(`[api-cost] ${formatCallCost(explain.cost)}`);
+            result.explanation = explainResult.text;
+            apiCosts.push(explainResult.cost);
+            console.error(`[api-cost] ${formatCallCost(explainResult.cost)}`);
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --explain failed: ${message}`);
@@ -109,15 +122,16 @@ export function registerAnalyzeCommand(program: Command) {
           try {
             const model = opts.model as ExplainModel;
             const modelLabel = model === "opus" ? "Opus" : "Sonnet";
-            const deep = await withStatus(`Running deep AI analysis (Claude ${modelLabel})...`, () =>
+            deepResult = await withStatus(`Running deep AI analysis (Claude ${modelLabel})...`, () =>
               deepAnalysis(result, processedProfile!, {
                 apiKey,
                 model,
               }),
             );
-            result.aiFindings = deep.aiFindings;
-            result.aiNarrative = deep.aiNarrative;
-            console.error(`[api-cost] ${formatCallCost(deep.cost)}`);
+            result.aiFindings = deepResult.aiFindings;
+            result.aiNarrative = deepResult.aiNarrative;
+            apiCosts.push(deepResult.cost);
+            console.error(`[api-cost] ${formatCallCost(deepResult.cost)}`);
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --deep analysis failed: ${message}`);
@@ -132,6 +146,42 @@ export function registerAnalyzeCommand(program: Command) {
       }
 
       process.stdout.write(formatAnalysis(result, opts.format as OutputFormat) + "\n");
+
+      // Save debug capture if --debug is provided
+      if (opts.debug) {
+        const debugDir = resolve(process.cwd(), "debug");
+        await initIdCounter(debugDir);
+
+        const filePath = resolve(profilePath);
+        const profileBytes = new Uint8Array(await Bun.file(filePath).arrayBuffer());
+
+        const capture: DebugCapture = {
+          id: nextId(),
+          token: crypto.randomUUID(),
+          timestamp: new Date(),
+          profileData: profileBytes,
+          profileName: filePath.split(/[\\/]/).pop() || "profile.alcpuprofile",
+          analysisResult: result,
+          costs: apiCosts,
+          analysisDurationMs: Date.now() - analyzeStart,
+        };
+
+        if (explainResult) {
+          capture.explainCapture = {
+            debugInfo: explainResult.debugInfo,
+            parsedOutput: explainResult.text,
+          };
+        }
+        if (deepResult) {
+          capture.deepCapture = {
+            debugInfo: deepResult.debugInfo,
+            parsedOutput: { aiFindings: deepResult.aiFindings, aiNarrative: deepResult.aiNarrative },
+          };
+        }
+
+        const folder = await writeCaptureToDisk(capture, debugDir, "developer-debug");
+        console.error(`[debug] Capture saved to ${folder}`);
+      }
 
       // Clean up temp dir if we extracted from companion zip
       if (cleanup) await cleanup();
