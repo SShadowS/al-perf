@@ -43,7 +43,7 @@ export async function writeCaptureToDisk(
     id: capture.id,
     timestamp: capture.timestamp.toISOString(),
     mode,
-    model: "sonnet",
+    model: capture.model ?? "sonnet",
     costs: capture.costs,
     analysisDurationMs: capture.analysisDurationMs,
     ...(consent ?? {}),

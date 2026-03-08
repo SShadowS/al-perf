@@ -199,6 +199,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
       analysisResult: result,
       costs: apiCosts,
       analysisDurationMs: Date.now() - analyzeStart,
+      model: config.defaultModel,
     };
 
     if (explainResult) {
@@ -218,8 +219,9 @@ async function handleAnalyze(req: Request): Promise<Response> {
       writeCaptureToDisk(capture, DEBUG_DIR, "developer-debug").catch((err) =>
         console.error(`[debug] Failed to write capture: ${err}`),
       );
+    } else {
+      debugStore.add(capture);
     }
-    debugStore.add(capture);
 
     // Record successful analysis for stats
     recordAnalysis().catch(() => {});
@@ -395,6 +397,7 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
       analysisResult: result,
       costs: apiCosts,
       analysisDurationMs: Date.now() - batchStart,
+      model: config.defaultModel,
     };
 
     if (batchExplainResult) {
@@ -408,8 +411,9 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
       writeCaptureToDisk(capture, DEBUG_DIR, "developer-debug").catch((err) =>
         console.error(`[debug] Failed to write capture: ${err}`),
       );
+    } else {
+      debugStore.add(capture);
     }
-    debugStore.add(capture);
 
     // Record successful analysis for stats
     recordAnalysis().catch(() => {});

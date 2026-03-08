@@ -18,6 +18,7 @@ export interface DebugCapture {
   analysisResult?: object;
   costs: ApiCallCost[];
   analysisDurationMs: number;
+  model?: string;
 }
 
 export interface AiCallCapture {

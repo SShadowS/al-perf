@@ -67,6 +67,7 @@ export function registerAnalyzeCommand(program: Command) {
       }
 
       let processedProfile: ProcessedProfile | undefined;
+      const analyzeStart = Date.now();
 
       const result = await withStatus("Analyzing profile...", () =>
         analyzeProfile(profilePath, {
@@ -79,7 +80,6 @@ export function registerAnalyzeCommand(program: Command) {
           onProcessedProfile: opts.deep ? (p: ProcessedProfile) => { processedProfile = p; } : undefined,
         }),
       );
-      const analyzeStart = Date.now();
       let explainResult: ExplainResult | undefined;
       let deepResult: DeepExplainResult | undefined;
       const apiCosts: ApiCallCost[] = [];
@@ -175,7 +175,7 @@ export function registerAnalyzeCommand(program: Command) {
         if (deepResult) {
           capture.deepCapture = {
             debugInfo: deepResult.debugInfo,
-            parsedOutput: { aiFindings: deepResult.aiFindings, aiNarrative: deepResult.aiNarrative },
+            parsedOutput: { findings: deepResult.aiFindings, narrative: deepResult.aiNarrative },
           };
         }
 

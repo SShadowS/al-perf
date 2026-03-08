@@ -14,4 +14,4 @@ CLAUDE.md
 .worktrees/
 docs/roadmap.md
 presentation.md
-debug/
+/debug/
