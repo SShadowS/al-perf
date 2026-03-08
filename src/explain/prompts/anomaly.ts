@@ -36,4 +36,10 @@ The payload includes a \`diagnostics\` object with pre-computed signals. Use the
 - **\`transactionCount > 20\`**: High transaction density may indicate excessive implicit commit boundaries. Consider whether operations could be batched into fewer transactions.
 - **\`tableAccessMap\`**: Lists tables accessed by multiple distinct code paths. Use this to identify redundant data access — if the same table is read through 3+ different call paths, it's likely a consolidation opportunity.
 - **\`healthScoreNote\`**: If present, include this interpretation of the health score in your narrative to avoid misinterpretation.
+
+### Scale-Awareness
+Before assigning severity, consider the profile's total active time (\`meta.totalSelfTime\` minus \`meta.idleSelfTime\`):
+- **Under 2 seconds active time**: This is a fast operation. Findings should rarely be "critical" unless a single method dominates. Patterns that add 50ms to a 500ms operation are "info", not "warning".
+- **2-30 seconds**: Normal interactive range. Use standard severity calibration.
+- **Over 30 seconds**: Likely a batch/posting operation or a genuine problem. Critical findings are appropriate.
 `;
