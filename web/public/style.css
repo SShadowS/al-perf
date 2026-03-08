@@ -516,3 +516,81 @@ tr:nth-child(even) {
   background: var(--bg-card-hover);
   border-color: var(--accent-cyan);
 }
+
+/* Debug banner */
+.debug-banner {
+  background: #e65100;
+  color: white;
+  text-align: center;
+  padding: 8px 16px;
+  font-size: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+/* Consent card */
+.consent-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin: 16px 0;
+}
+
+.consent-card h3 {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+}
+
+.consent-card p {
+  margin: 0 0 12px 0;
+  opacity: 0.8;
+  font-size: 14px;
+}
+
+.consent-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Consent thanks badge */
+.consent-thanks {
+  background: #1b5e20;
+  color: #a5d6a7;
+  border-radius: 8px;
+  padding: 12px 20px;
+  margin: 16px 0;
+  font-size: 14px;
+}
+
+/* Buttons */
+.btn {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.btn-primary {
+  background: var(--accent-blue);
+  color: white;
+  border-color: var(--accent-blue);
+}
+
+.btn-primary:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.btn-secondary {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent-cyan);
+}

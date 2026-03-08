@@ -17,6 +17,9 @@
   <script src="app.js" defer></script>
 </head>
 <body>
+  <div id="debug-banner" class="debug-banner" style="display: none;">
+    <strong>Debug Mode</strong> — all requests are being recorded
+  </div>
   <main>
     <!-- Drop Zone -->
     <div id="dropzone">
@@ -50,6 +53,17 @@
         <div id="summary-section"></div>
         <div id="explanation-section"></div>
         <div id="ai-deep-section"></div>
+        <div id="consent-prompt" class="consent-card" style="display: none;">
+          <h3>Help us improve our analysis</h3>
+          <p>Allow us to save this request anonymously for 7 days to review and improve analysis quality.</p>
+          <div class="consent-actions">
+            <button id="consent-allow" class="btn btn-primary">Allow</button>
+            <button id="consent-dismiss" class="btn btn-secondary">Dismiss</button>
+          </div>
+        </div>
+        <div id="consent-thanks" class="consent-thanks" style="display: none;">
+          Saved for review — thank you!
+        </div>
         <div id="activity-breakdown-section"></div>
         <div id="app-breakdown-section"></div>
         <div id="table-breakdown-section"></div>

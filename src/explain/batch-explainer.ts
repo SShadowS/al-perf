@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { BatchAnalysisResult } from "../output/batch-types.js";
-import type { ExplainModel, ExplainOptions } from "./explainer.js";
+import type { ExplainModel, ExplainOptions, AiDebugInfo } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
 import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 import { config } from "../config.js";
@@ -68,6 +68,7 @@ export function trimBatchResultForPrompt(result: BatchAnalysisResult): TrimmedBa
 export interface BatchExplainResult {
   text: string;
   cost: ApiCallCost;
+  debugInfo: AiDebugInfo;
 }
 
 export async function explainBatchAnalysis(
@@ -103,5 +104,13 @@ export async function explainBatchAnalysis(
     response.usage.output_tokens,
   );
 
-  return { text, cost };
+  return {
+    text,
+    cost,
+    debugInfo: {
+      systemPrompt: BATCH_SYSTEM_PROMPT,
+      userPayload: trimmed,
+      rawResponse: response,
+    },
+  };
 }

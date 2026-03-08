@@ -1,14 +1,19 @@
 import type { Command } from "commander";
-import { resolve, extname } from "path";
+import { resolve, extname, basename } from "path";
 import { readdirSync, statSync, readFileSync } from "fs";
 import { analyzeBatch, type BatchOptions } from "../../core/batch-analyzer.js";
 import { formatBatch, type OutputFormat } from "../formatters/index.js";
 import type { ExplainModel } from "../../explain/explainer.js";
 import { formatCallCost } from "../../explain/api-cost.js";
+import type { ApiCallCost } from "../../explain/api-cost.js";
+import type { BatchExplainResult } from "../../explain/batch-explainer.js";
 import type { ProfileMetadata } from "../../types/batch.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import type { SourceIndex } from "../../types/source-index.js";
 import { withStatus } from "../status.js";
+import { initIdCounter, nextId } from "../../debug/ids.js";
+import { writeCaptureToDisk } from "../../debug/writer.js";
+import type { DebugCapture } from "../../debug/types.js";
 
 /**
  * Resolve a list of paths (files and directories) into a flat list of
@@ -56,6 +61,7 @@ export function registerBatchCommand(program: Command) {
     .option("--deep", "Enable deep AI analysis (not yet supported for batch; falls back to --explain)")
     .option("--model <model>", "Model for --explain: sonnet (default) or opus", "sonnet")
     .option("--api-key <key>", "Anthropic API key (visible in process listings; prefer ANTHROPIC_API_KEY env var)")
+    .option("--debug", "Save debug capture (prompts, payloads, responses) to debug/ folder")
     .action(async (paths: string[], opts: any) => {
       if (opts.deep) {
         console.error("Note: --deep is not yet supported for batch analysis. Using --explain instead.");
@@ -101,10 +107,15 @@ export function registerBatchCommand(program: Command) {
         sourceIndex,
       };
 
+      const batchStart = Date.now();
+
       const result = await withStatus(
         `Analyzing ${profilePaths.length} profiles...`,
         () => analyzeBatch(profilePaths, batchOptions),
       );
+
+      let batchExplainResult: BatchExplainResult | undefined;
+      const apiCosts: ApiCallCost[] = [];
 
       // Run LLM explanation if --explain is provided
       if (opts.explain) {
@@ -120,12 +131,13 @@ export function registerBatchCommand(program: Command) {
           try {
             const modelLabel = model === "opus" ? "Opus" : "Sonnet";
             const mod = await import("../../explain/batch-explainer.js");
-            const explain = await withStatus(
+            batchExplainResult = await withStatus(
               `Generating AI batch explanation (Claude ${modelLabel})...`,
               () => mod.explainBatchAnalysis(result, { apiKey, model: model as ExplainModel }),
             );
-            result.explanation = explain.text;
-            console.error(`[api-cost] ${formatCallCost(explain.cost)}`);
+            result.explanation = batchExplainResult.text;
+            apiCosts.push(batchExplainResult.cost);
+            console.error(`[api-cost] ${formatCallCost(batchExplainResult.cost)}`);
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Warning: --explain failed: ${message}`);
@@ -141,5 +153,41 @@ export function registerBatchCommand(program: Command) {
       }
 
       process.stdout.write(formatBatch(result, opts.format as OutputFormat) + "\n");
+
+      // Save debug capture if --debug is provided
+      if (opts.debug) {
+        const debugDir = resolve(process.cwd(), "debug");
+        await initIdCounter(debugDir);
+
+        const batchProfiles = await Promise.all(
+          profilePaths.map(async (p) => ({
+            name: basename(p),
+            data: new Uint8Array(await Bun.file(resolve(p)).arrayBuffer()),
+          })),
+        );
+
+        const capture: DebugCapture = {
+          id: nextId(),
+          token: crypto.randomUUID(),
+          timestamp: new Date(),
+          profileData: batchProfiles[0].data,
+          profileName: batchProfiles[0].name,
+          batchProfiles,
+          manifestJson: opts.manifest ? readFileSync(resolve(opts.manifest), "utf-8") : undefined,
+          analysisResult: result,
+          costs: apiCosts,
+          analysisDurationMs: Date.now() - batchStart,
+        };
+
+        if (batchExplainResult) {
+          capture.batchExplainCapture = {
+            debugInfo: batchExplainResult.debugInfo,
+            parsedOutput: batchExplainResult.text,
+          };
+        }
+
+        const folder = await writeCaptureToDisk(capture, debugDir, "developer-debug");
+        console.error(`[debug] Capture saved to ${folder}`);
+      }
     });
 }
