@@ -13,6 +13,13 @@ import { formatAnalysisHtml } from "../src/cli/formatters/html.js";
 import { formatBatchHtml } from "../src/cli/formatters/batch-html.js";
 import type { ProfileMetadata } from "../src/types/batch.js";
 import { config } from "../src/config.js";
+import { initIdCounter, nextId } from "../src/debug/ids.js";
+import { DebugStore } from "../src/debug/store.js";
+import { writeCaptureToDisk } from "../src/debug/writer.js";
+import type { DebugCapture } from "../src/debug/types.js";
+import type { ExplainResult } from "../src/explain/explainer.js";
+import type { DeepExplainResult } from "../src/explain/deep-analyzer.js";
+import type { BatchExplainResult } from "../src/explain/batch-explainer.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 const STATS_FILE = resolve(import.meta.dir, "stats.json");
@@ -21,6 +28,14 @@ const MAX_BODY_SIZE = 100 * 1024 * 1024; // 100MB
 const PORT = parseInt(process.env.PORT || "3010", 10);
 
 let recordNextBatch = false;
+
+const DEBUG_MODE = process.env.AL_PERF_DEBUG === "1";
+const DEBUG_DIR = resolve(import.meta.dir, "..", "debug");
+const CAPTURE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+
+const debugStore = new DebugStore(CAPTURE_EXPIRY_MS);
+await initIdCounter(DEBUG_DIR);
+const sweepInterval = setInterval(() => debugStore.sweep(), 5 * 60 * 1000);
 
 interface Stats {
   totalAnalyses: number;
@@ -96,6 +111,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
   let sourceCleanup: (() => Promise<void>) | undefined;
 
   try {
+    const analyzeStart = Date.now();
     const formData = await req.formData();
     const profileFile = formData.get("profile");
 
@@ -106,20 +122,25 @@ async function handleAnalyze(req: Request): Promise<Response> {
       );
     }
 
+    // Buffer uploaded file bytes before they get cleaned up
+    const profileBytes = new Uint8Array(await profileFile.arrayBuffer());
+
     // Write uploads to a per-request temp directory
     tempDir = await makeTempDir();
 
     const safeProfileName = basename(profileFile.name || "profile.alcpuprofile");
     const profilePath = join(tempDir, safeProfileName);
-    await Bun.write(profilePath, profileFile);
+    await Bun.write(profilePath, profileBytes);
 
     // Handle optional source zip
     let sourcePath: string | undefined;
+    let sourceZipBytes: Uint8Array | undefined;
     const sourceFile = formData.get("source");
     if (sourceFile && sourceFile instanceof File) {
+      sourceZipBytes = new Uint8Array(await sourceFile.arrayBuffer());
       const safeZipName = basename(sourceFile.name || "source.zip");
       const zipPath = join(tempDir, safeZipName);
-      await Bun.write(zipPath, sourceFile);
+      await Bun.write(zipPath, sourceZipBytes);
       const extracted = await extractCompanionZip(zipPath);
       sourcePath = extracted.extractDir;
       sourceCleanup = extracted.cleanup;
@@ -137,11 +158,14 @@ async function handleAnalyze(req: Request): Promise<Response> {
     // Always run AI explanation if API key is available
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiCosts: ApiCallCost[] = [];
+    let explainResult: ExplainResult | undefined;
+    let deepResult: DeepExplainResult | undefined;
+
     if (apiKey) {
       try {
-        const explain = await explainAnalysis(result, { apiKey, model: config.defaultModel });
-        result.explanation = explain.text;
-        apiCosts.push(explain.cost);
+        explainResult = await explainAnalysis(result, { apiKey, model: config.defaultModel });
+        result.explanation = explainResult.text;
+        apiCosts.push(explainResult.cost);
       } catch {
         // Non-fatal — analysis still returns without explanation
       }
@@ -149,10 +173,10 @@ async function handleAnalyze(req: Request): Promise<Response> {
       // Deep AI analysis (always attempted in web UI)
       if (processedProfile) {
         try {
-          const deep = await deepAnalysis(result, processedProfile, { apiKey, model: config.defaultModel });
-          result.aiFindings = deep.aiFindings;
-          result.aiNarrative = deep.aiNarrative;
-          apiCosts.push(deep.cost);
+          deepResult = await deepAnalysis(result, processedProfile, { apiKey, model: config.defaultModel });
+          result.aiFindings = deepResult.aiFindings;
+          result.aiNarrative = deepResult.aiNarrative;
+          apiCosts.push(deepResult.cost);
         } catch {
           // Non-fatal — analysis still returns without deep findings
         }
@@ -163,6 +187,39 @@ async function handleAnalyze(req: Request): Promise<Response> {
       const summary = summarizeCosts(apiCosts);
       console.log(`[api-cost] ${formatCostSummary(summary)}`);
     }
+
+    // Create debug capture
+    const capture: DebugCapture = {
+      id: nextId(),
+      token: crypto.randomUUID(),
+      timestamp: new Date(),
+      profileData: profileBytes,
+      profileName: safeProfileName,
+      sourceZipData: sourceZipBytes,
+      analysisResult: result,
+      costs: apiCosts,
+      analysisDurationMs: Date.now() - analyzeStart,
+    };
+
+    if (explainResult) {
+      capture.explainCapture = {
+        debugInfo: explainResult.debugInfo,
+        parsedOutput: explainResult.text,
+      };
+    }
+    if (deepResult) {
+      capture.deepCapture = {
+        debugInfo: deepResult.debugInfo,
+        parsedOutput: { findings: deepResult.aiFindings, narrative: deepResult.aiNarrative },
+      };
+    }
+
+    if (DEBUG_MODE) {
+      writeCaptureToDisk(capture, DEBUG_DIR, "developer-debug").catch((err) =>
+        console.error(`[debug] Failed to write capture: ${err}`),
+      );
+    }
+    debugStore.add(capture);
 
     // Record successful analysis for stats
     recordAnalysis().catch(() => {});
@@ -183,7 +240,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
         { status: 400 },
       );
     }
-    return Response.json(result);
+    return Response.json({ ...result, debugToken: capture.token });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[analyze error] ${message}`);
@@ -230,6 +287,7 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
   let sourceCleanup: (() => Promise<void>) | undefined;
 
   try {
+    const batchStart = Date.now();
     const formData = await req.formData();
     const profileFiles = formData.getAll("profiles[]");
 
@@ -240,15 +298,21 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
       );
     }
 
+    // Buffer all profile files as Uint8Array before cleanup
+    const bufferedProfiles: Array<{ name: string; data: Uint8Array }> = [];
+    for (let i = 0; i < profileFiles.length; i++) {
+      const file = profileFiles[i] as File;
+      const safeName = `${i}-${basename(file.name || `profile-${i}.alcpuprofile`)}`;
+      bufferedProfiles.push({ name: safeName, data: new Uint8Array(await file.arrayBuffer()) });
+    }
+
     // Write uploads to a per-request temp directory
     tempDir = await makeTempDir();
 
     const profilePaths: string[] = [];
-    for (let i = 0; i < profileFiles.length; i++) {
-      const file = profileFiles[i] as File;
-      const safeName = `${i}-${basename(file.name || `profile-${i}.alcpuprofile`)}`;
-      const filePath = join(tempDir, safeName);
-      await Bun.write(filePath, file);
+    for (const bp of bufferedProfiles) {
+      const filePath = join(tempDir, bp.name);
+      await Bun.write(filePath, bp.data);
       profilePaths.push(filePath);
     }
 
@@ -280,11 +344,13 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
 
     // Handle optional source zip
     let sourcePath: string | undefined;
+    let sourceZipBytes: Uint8Array | undefined;
     const sourceFile = formData.get("source");
     if (sourceFile && sourceFile instanceof File) {
+      sourceZipBytes = new Uint8Array(await sourceFile.arrayBuffer());
       const safeZipName = basename(sourceFile.name || "source.zip");
       const zipPath = join(tempDir, safeZipName);
-      await Bun.write(zipPath, sourceFile);
+      await Bun.write(zipPath, sourceZipBytes);
       const extracted = await extractCompanionZip(zipPath);
       sourcePath = extracted.extractDir;
       sourceCleanup = extracted.cleanup;
@@ -299,11 +365,13 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
     // Run AI explanation if API key is available
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiCosts: ApiCallCost[] = [];
+    let batchExplainResult: BatchExplainResult | undefined;
+
     if (apiKey) {
       try {
-        const explain = await explainBatchAnalysis(result, { apiKey, model: config.defaultModel });
-        result.explanation = explain.text;
-        apiCosts.push(explain.cost);
+        batchExplainResult = await explainBatchAnalysis(result, { apiKey, model: config.defaultModel });
+        result.explanation = batchExplainResult.text;
+        apiCosts.push(batchExplainResult.cost);
       } catch {
         // Non-fatal — analysis still returns without explanation
       }
@@ -313,6 +381,35 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
       const summary = summarizeCosts(apiCosts);
       console.log(`[api-cost] ${formatCostSummary(summary)}`);
     }
+
+    // Create debug capture
+    const capture: DebugCapture = {
+      id: nextId(),
+      token: crypto.randomUUID(),
+      timestamp: new Date(),
+      profileData: bufferedProfiles[0].data,
+      profileName: bufferedProfiles[0].name,
+      batchProfiles: bufferedProfiles,
+      manifestJson: manifestText,
+      sourceZipData: sourceZipBytes,
+      analysisResult: result,
+      costs: apiCosts,
+      analysisDurationMs: Date.now() - batchStart,
+    };
+
+    if (batchExplainResult) {
+      capture.batchExplainCapture = {
+        debugInfo: batchExplainResult.debugInfo,
+        parsedOutput: batchExplainResult.text,
+      };
+    }
+
+    if (DEBUG_MODE) {
+      writeCaptureToDisk(capture, DEBUG_DIR, "developer-debug").catch((err) =>
+        console.error(`[debug] Failed to write capture: ${err}`),
+      );
+    }
+    debugStore.add(capture);
 
     // Record successful analysis for stats
     recordAnalysis().catch(() => {});
@@ -333,7 +430,7 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
         { status: 400 },
       );
     }
-    return Response.json(result);
+    return Response.json({ ...result, debugToken: capture.token });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[analyze-batch error] ${message}`);
@@ -414,6 +511,40 @@ export const server = Bun.serve({
       return withSecurityHeaders(Response.json(stats));
     }
 
+    if (url.pathname === "/api/debug/save" && req.method === "POST") {
+      try {
+        const body = await req.json() as { debugToken?: string };
+        if (!body.debugToken) {
+          return withSecurityHeaders(Response.json({ error: "Missing debugToken" }, { status: 400 }));
+        }
+        const capture = debugStore.get(body.debugToken);
+        if (!capture) {
+          return withSecurityHeaders(Response.json({ error: "Capture not found or expired" }, { status: 404 }));
+        }
+        const reqIp = server.requestIP(req)?.address ?? "unknown";
+        const now = new Date();
+        const consent = {
+          consentedAt: now.toISOString(),
+          consentedBy: reqIp,
+          retentionDays: 7,
+          expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        };
+        const folder = await writeCaptureToDisk(capture, DEBUG_DIR, "user-consent", consent);
+        debugStore.remove(body.debugToken);
+        console.log(`[debug] Consent capture saved to ${folder}`);
+        return withSecurityHeaders(Response.json({ saved: true, id: capture.id }));
+      } catch {
+        return withSecurityHeaders(Response.json({ error: "Failed to save capture" }, { status: 500 }));
+      }
+    }
+
+    if (url.pathname === "/api/debug/status" && req.method === "GET") {
+      return withSecurityHeaders(Response.json({
+        debugMode: DEBUG_MODE,
+        pendingCaptures: debugStore.pendingCount,
+      }));
+    }
+
     // Static file serving
     if (req.method === "GET") {
       const staticResponse = await serveStatic(url.pathname);
@@ -426,3 +557,4 @@ export const server = Bun.serve({
 
 console.log(`AL Profile Analyzer web server running at http://localhost:${server.port}`);
 console.log(`AI explain: ${process.env.ANTHROPIC_API_KEY ? "enabled" : "disabled (set ANTHROPIC_API_KEY to enable)"}`);
+console.log(`Debug mode: ${DEBUG_MODE ? "enabled (saving all requests)" : "disabled (consent mode available)"}`);
