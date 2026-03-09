@@ -16,6 +16,74 @@ import { computeDiagnostics, type ProfileDiagnostics } from "./diagnostics.js";
 
 export type CallTreeStrategy = "pruned" | "chains" | "adjacency";
 
+export interface PayloadConfig {
+  callTreeTop: number;
+  includeDiagnostics: false | "lite" | "full";
+  includeTableBreakdown: boolean;
+  includeAst: boolean;
+  includeCallGraph: boolean;
+  includeSqlPatterns: boolean;
+}
+
+export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
+  baseline: {
+    callTreeTop: 10,
+    includeDiagnostics: false,
+    includeTableBreakdown: false,
+    includeAst: false,
+    includeCallGraph: false,
+    includeSqlPatterns: false,
+  },
+  "+diagnostics-lite": {
+    callTreeTop: 10,
+    includeDiagnostics: "lite",
+    includeTableBreakdown: false,
+    includeAst: false,
+    includeCallGraph: false,
+    includeSqlPatterns: false,
+  },
+  "+calltree15": {
+    callTreeTop: 15,
+    includeDiagnostics: false,
+    includeTableBreakdown: false,
+    includeAst: false,
+    includeCallGraph: false,
+    includeSqlPatterns: false,
+  },
+  "+ast": {
+    callTreeTop: 10,
+    includeDiagnostics: false,
+    includeTableBreakdown: false,
+    includeAst: true,
+    includeCallGraph: false,
+    includeSqlPatterns: false,
+  },
+  "+callgraph": {
+    callTreeTop: 10,
+    includeDiagnostics: false,
+    includeTableBreakdown: false,
+    includeAst: false,
+    includeCallGraph: true,
+    includeSqlPatterns: false,
+  },
+  "+sqlpatterns": {
+    callTreeTop: 10,
+    includeDiagnostics: false,
+    includeTableBreakdown: false,
+    includeAst: false,
+    includeCallGraph: false,
+    includeSqlPatterns: true,
+  },
+  current: {
+    callTreeTop: 15,
+    includeDiagnostics: "full",
+    includeTableBreakdown: true,
+    includeAst: false,
+    includeCallGraph: false,
+    includeSqlPatterns: false,
+  },
+};
+
 export interface DeepPayload {
   analysis: TrimmedResult;
   callTree: unknown;
@@ -29,13 +97,17 @@ export interface DeepPayload {
     lineEnd: number;
     source: string;
   }>;
-  diagnostics: ProfileDiagnostics;
+  diagnostics?: ProfileDiagnostics;
+  sqlPatterns?: unknown;
+  callGraph?: unknown;
+  astSummaries?: unknown;
 }
 
 export interface DeepExplainOptions {
   apiKey: string;
   model?: ExplainModel;
   strategy?: CallTreeStrategy;
+  payloadConfig?: PayloadConfig;
 }
 
 export interface DeepExplainResult {
@@ -49,8 +121,16 @@ export function buildDeepPayload(
   result: AnalysisResult,
   profile: ProcessedProfile,
   strategy: CallTreeStrategy,
+  payloadConfig?: PayloadConfig,
 ): DeepPayload {
   const analysis = trimResultForPrompt(result);
+
+  // Optionally strip tableBreakdown
+  if (payloadConfig && !payloadConfig.includeTableBreakdown) {
+    delete analysis.tableBreakdown;
+  }
+
+  const topMethods = payloadConfig?.callTreeTop ?? config.deep.adjacencyTopMethods;
 
   let callTree: unknown;
   switch (strategy) {
@@ -65,7 +145,7 @@ export function buildDeepPayload(
       callTree = serializeChainList(profile, { maxChains: config.deep.chainsMaxChains });
       break;
     case "adjacency":
-      callTree = serializeAdjacencySummary(profile, { topMethods: config.deep.adjacencyTopMethods });
+      callTree = serializeAdjacencySummary(profile, { topMethods });
       break;
   }
 
@@ -82,15 +162,39 @@ export function buildDeepPayload(
       source: h.sourceSnippet!,
     }));
 
-  const diagnostics = computeDiagnostics(profile, result);
+  // Diagnostics — controlled by payloadConfig
+  let diagnostics: ProfileDiagnostics | undefined;
+  if (!payloadConfig || payloadConfig.includeDiagnostics !== false) {
+    const full = computeDiagnostics(profile, result);
+    if (payloadConfig?.includeDiagnostics === "lite") {
+      diagnostics = {
+        coldCacheScore: full.coldCacheScore,
+        coldCacheWarning: full.coldCacheWarning,
+        wallClockGapRatio: full.wallClockGapRatio,
+        wallClockGapNote: full.wallClockGapNote,
+        // Omit heavy fields
+        transactionCount: 0,
+        tableAccessMap: [],
+        healthScoreNote: null,
+        scaleNote: null,
+      };
+    } else {
+      diagnostics = full;
+    }
+  }
 
-  return {
+  const payload: DeepPayload = {
     analysis,
     callTree,
     callTreeStrategy: strategy,
     sourceSnippets: snippets.length > 0 ? snippets : undefined,
-    diagnostics,
   };
+
+  if (diagnostics) {
+    payload.diagnostics = diagnostics;
+  }
+
+  return payload;
 }
 
 export async function deepAnalysis(
@@ -99,7 +203,7 @@ export async function deepAnalysis(
   options: DeepExplainOptions,
 ): Promise<DeepExplainResult> {
   const strategy = options.strategy ?? config.deep.strategy;
-  const payload = buildDeepPayload(result, profile, strategy);
+  const payload = buildDeepPayload(result, profile, strategy, options.payloadConfig);
 
   const hasSource = payload.sourceSnippets !== undefined;
   const systemPrompt = buildDeepSystemPrompt({ hasSource });
