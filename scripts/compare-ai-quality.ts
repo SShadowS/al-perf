@@ -4,6 +4,7 @@
  * Usage:
  *   bun run scripts/compare-ai-quality.ts                    # compare the two most recent runs
  *   bun run scripts/compare-ai-quality.ts <run-a> <run-b>    # compare specific runs by folder name
+ *   bun run scripts/compare-ai-quality.ts --aggregate --a run1,run2,run3 --b run4,run5,run6
  *
  * Requires: ANTHROPIC_API_KEY environment variable
  */
@@ -77,7 +78,238 @@ At the end, provide an overall verdict across all profiles.
 
 Be specific and cite finding titles. Don't be diplomatic — give a clear winner when there is one.`;
 
+const AGGREGATE_SYSTEM_PROMPT = `You are comparing two GROUPS of analyses (multiple runs each) of the same performance profiles.
+
+For each profile, evaluate both groups on:
+1. Average quality across runs (which group produces better findings on average)
+2. Consistency (which group has less variance between runs)
+3. Coverage, accuracy, actionability, severity calibration (1-10 scale)
+
+Be specific and cite finding titles. Give a clear winner per profile.
+
+At the end, include a JSON block with structured scores:
+\`\`\`json
+{
+  "profiles": [
+    { "name": "ProfileName", "groupA_avg": 7.5, "groupB_avg": 8.0, "winner": "B", "notes": "..." }
+  ],
+  "overall": { "a_wins": 1, "b_wins": 3, "draws": 1, "verdict": "B" }
+}
+\`\`\``;
+
+interface ParsedArgs {
+  aggregate: boolean;
+  aRuns: string[];
+  bRuns: string[];
+  positionalA?: string;
+  positionalB?: string;
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const args = argv.slice(2);
+  const result: ParsedArgs = { aggregate: false, aRuns: [], bRuns: [] };
+
+  let i = 0;
+  const positionals: string[] = [];
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--aggregate") {
+      result.aggregate = true;
+      i++;
+    } else if (arg === "--a" && i + 1 < args.length) {
+      result.aRuns = args[i + 1].split(",").map((s) => s.trim()).filter(Boolean);
+      i += 2;
+    } else if (arg === "--b" && i + 1 < args.length) {
+      result.bRuns = args[i + 1].split(",").map((s) => s.trim()).filter(Boolean);
+      i += 2;
+    } else {
+      positionals.push(arg);
+      i++;
+    }
+  }
+
+  if (!result.aggregate && positionals.length >= 2) {
+    result.positionalA = positionals[0];
+    result.positionalB = positionals[1];
+  }
+
+  return result;
+}
+
+async function discoverProfileNames(runDirs: string[]): Promise<string[]> {
+  const names = new Set<string>();
+  for (const dir of runDirs) {
+    const entries = await readdir(dir);
+    for (const e of entries) {
+      if (existsSync(resolve(dir, e, "meta.json"))) {
+        names.add(e);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+async function getAllRunDirs(): Promise<string[]> {
+  const entries = await readdir(RUNS_DIR);
+  const dirs: string[] = [];
+  for (const entry of entries) {
+    const s = await stat(resolve(RUNS_DIR, entry));
+    if (s.isDirectory()) dirs.push(entry);
+  }
+  dirs.sort();
+  return dirs;
+}
+
+function extractJsonBlock(text: string): unknown | null {
+  const match = text.match(/```json\s*([\s\S]*?)```/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1].trim());
+  } catch {
+    return null;
+  }
+}
+
+async function mainAggregate(args: ParsedArgs): Promise<void> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    log("ERROR: ANTHROPIC_API_KEY environment variable is not set");
+    process.exit(1);
+  }
+
+  if (args.aRuns.length === 0 || args.bRuns.length === 0) {
+    log("ERROR: --aggregate requires both --a and --b with comma-separated run names");
+    process.exit(1);
+  }
+
+  const allRuns = await getAllRunDirs();
+
+  // Validate all run names exist
+  for (const run of [...args.aRuns, ...args.bRuns]) {
+    if (!allRuns.includes(run)) {
+      log(`ERROR: Run "${run}" not found in ${RUNS_DIR}`);
+      process.exit(1);
+    }
+  }
+
+  const aRunDirs = args.aRuns.map((r) => resolve(RUNS_DIR, r));
+  const bRunDirs = args.bRuns.map((r) => resolve(RUNS_DIR, r));
+
+  // Discover all profile names across all runs
+  const profileNames = await discoverProfileNames([...aRunDirs, ...bRunDirs]);
+
+  // Detect model from first available run in each group
+  const firstAOutputs = await loadProfileOutputs(aRunDirs[0], profileNames[0]);
+  const firstBOutputs = await loadProfileOutputs(bRunDirs[0], profileNames[0]);
+  const modelA = getModelFromMeta(firstAOutputs?.meta);
+  const modelB = getModelFromMeta(firstBOutputs?.meta);
+
+  log(`Aggregate comparison:`);
+  log(`  Group A: ${args.aRuns.join(", ")} (model: ${modelA}, ${args.aRuns.length} runs)`);
+  log(`  Group B: ${args.bRuns.join(", ")} (model: ${modelB}, ${args.bRuns.length} runs)`);
+  log(`  Profiles: ${profileNames.length}`);
+
+  // Build the comparison payload
+  const sections: string[] = [];
+
+  for (const name of profileNames) {
+    let section = `## Profile: ${name}\n\n`;
+
+    section += `### Group A (${args.aRuns.length} runs)\n\n`;
+    for (let i = 0; i < args.aRuns.length; i++) {
+      const outputs = await loadProfileOutputs(aRunDirs[i], name);
+      section += `#### Run ${i + 1}: ${args.aRuns[i]}\n\n`;
+      if (outputs) {
+        section += `##### Explain Narrative\n${outputs.explainNarrative ?? "_not available_"}\n\n`;
+        section += `##### Deep Findings\n${outputs.deepFindings ?? "_not available_"}\n\n`;
+      } else {
+        section += "_Not available in this run_\n\n";
+      }
+    }
+
+    section += `### Group B (${args.bRuns.length} runs)\n\n`;
+    for (let i = 0; i < args.bRuns.length; i++) {
+      const outputs = await loadProfileOutputs(bRunDirs[i], name);
+      section += `#### Run ${i + 1}: ${args.bRuns[i]}\n\n`;
+      if (outputs) {
+        section += `##### Explain Narrative\n${outputs.explainNarrative ?? "_not available_"}\n\n`;
+        section += `##### Deep Findings\n${outputs.deepFindings ?? "_not available_"}\n\n`;
+      } else {
+        section += "_Not available in this run_\n\n";
+      }
+    }
+
+    sections.push(section);
+  }
+
+  const userPayload = sections.join("\n---\n\n");
+
+  log(`\nPayload size: ${(userPayload.length / 1024).toFixed(1)}KB`);
+  log("Sending to Claude for aggregate comparison...\n");
+
+  const client = new Anthropic({ apiKey });
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 8192,
+    system: AGGREGATE_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userPayload }],
+  });
+
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+
+  const cost = computeCallCost(
+    "compare-quality-aggregate",
+    "claude-sonnet-4-6",
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+  );
+
+  log(`Compare cost: ${formatCallCost(cost)}`);
+
+  // Build the report
+  const report = [
+    `# AI Quality Aggregate Comparison Report`,
+    ``,
+    `**Group A**: ${args.aRuns.map((r) => `\`${r}\``).join(", ")} (model: ${modelA})`,
+    `**Group B**: ${args.bRuns.map((r) => `\`${r}\``).join(", ")} (model: ${modelB})`,
+    `**Profiles compared**: ${profileNames.length}`,
+    `**Runs per group**: A=${args.aRuns.length}, B=${args.bRuns.length}`,
+    `**Comparison cost**: ${formatCallCost(cost)}`,
+    ``,
+    `---`,
+    ``,
+    text,
+  ].join("\n");
+
+  // Save to the LAST run folder in group B
+  const lastBRunDir = bRunDirs[bRunDirs.length - 1];
+  const reportPath = resolve(lastBRunDir, "comparison-report.md");
+  await writeFile(reportPath, report, "utf-8");
+  log(`\nReport saved to: ${reportPath}`);
+
+  // Extract and save JSON scores
+  const scores = extractJsonBlock(text);
+  if (scores) {
+    const scoresPath = resolve(lastBRunDir, "comparison-scores.json");
+    await writeFile(scoresPath, JSON.stringify(scores, null, 2), "utf-8");
+    log(`Scores saved to: ${scoresPath}`);
+  } else {
+    log("WARNING: Could not extract JSON scores block from response");
+  }
+
+  // Also print to stdout for immediate reading
+  process.stdout.write(report + "\n");
+}
+
 async function main(): Promise<void> {
+  const parsedArgs = parseArgs(process.argv);
+
+  if (parsedArgs.aggregate) {
+    return mainAggregate(parsedArgs);
+  }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     log("ERROR: ANTHROPIC_API_KEY environment variable is not set");
@@ -85,19 +317,13 @@ async function main(): Promise<void> {
   }
 
   // Determine which two runs to compare (filter to directories only)
-  const entries = await readdir(RUNS_DIR);
-  const allRuns: string[] = [];
-  for (const entry of entries) {
-    const s = await stat(resolve(RUNS_DIR, entry));
-    if (s.isDirectory()) allRuns.push(entry);
-  }
-  allRuns.sort();
+  const allRuns = await getAllRunDirs();
   let runA: string;
   let runB: string;
 
-  if (process.argv.length >= 4) {
-    runA = process.argv[2];
-    runB = process.argv[3];
+  if (parsedArgs.positionalA && parsedArgs.positionalB) {
+    runA = parsedArgs.positionalA;
+    runB = parsedArgs.positionalB;
     if (!allRuns.includes(runA)) {
       log(`ERROR: Run "${runA}" not found in ${RUNS_DIR}`);
       process.exit(1);
