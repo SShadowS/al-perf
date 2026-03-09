@@ -184,6 +184,7 @@ async function main(): Promise<void> {
   const configsArg = parseArg("configs");
   const numRuns = parseInt(parseArg("runs") ?? "3", 10);
   const opusRunsArg = parseArg("opus-runs");
+  const promptArg = parseArg("prompt");
 
   const allConfigs = configsArg
     ? configsArg.split(",").map((s) => s.trim()).filter(Boolean)
@@ -233,7 +234,9 @@ async function main(): Promise<void> {
     }
 
     log(`\n[${configName}] Running ${numRuns} Sonnet runs...`);
-    const runs = await runTestScript(["--config", configName, "--runs", String(numRuns)]);
+    const args = ["--config", configName, "--runs", String(numRuns)];
+    if (promptArg) args.push("--prompt", promptArg);
+    const runs = await runTestScript(args);
     progress.configRuns[configName] = runs;
     await saveProgress(progress);
     log(`  Runs: ${runs.join(", ")}`);

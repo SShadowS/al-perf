@@ -6,7 +6,7 @@ import { trimResultForPrompt, type TrimmedResult, type AiDebugInfo } from "./exp
 import { serializePrunedTree } from "./payloads/call-tree-pruned.js";
 import { serializeChainList } from "./payloads/call-tree-chains.js";
 import { serializeAdjacencySummary } from "./payloads/call-tree-adjacency.js";
-import { buildDeepSystemPrompt } from "./prompts/schema.js";
+import { buildDeepSystemPrompt, type PromptConfig } from "./prompts/schema.js";
 import { parseDeepResponse } from "./response-parser.js";
 import type { ExplainModel } from "./explainer.js";
 import { MODEL_IDS } from "./explainer.js";
@@ -111,12 +111,12 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
     includeSqlPatterns: true,
   },
   current: {
-    callTreeTop: 15,
-    includeDiagnostics: "full",
-    includeTableBreakdown: true,
-    includeAst: false,
-    includeCallGraph: false,
-    includeSqlPatterns: false,
+    callTreeTop: 10,
+    includeDiagnostics: false,
+    includeTableBreakdown: false,
+    includeAst: true,
+    includeCallGraph: true,
+    includeSqlPatterns: true,
   },
 };
 
@@ -144,6 +144,7 @@ export interface DeepExplainOptions {
   model?: ExplainModel;
   strategy?: CallTreeStrategy;
   payloadConfig?: PayloadConfig;
+  promptConfig?: PromptConfig;
 }
 
 export interface DeepExplainResult {
@@ -265,7 +266,7 @@ export async function deepAnalysis(
   const payload = buildDeepPayload(result, profile, strategy, options.payloadConfig);
 
   const hasSource = payload.sourceSnippets !== undefined;
-  const systemPrompt = buildDeepSystemPrompt({ hasSource });
+  const systemPrompt = buildDeepSystemPrompt({ hasSource, promptConfig: options.promptConfig });
 
   const client = new Anthropic({ apiKey: options.apiKey });
   const model = MODEL_IDS[options.model ?? config.defaultModel];

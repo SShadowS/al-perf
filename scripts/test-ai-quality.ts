@@ -16,6 +16,7 @@
 import { analyzeProfile } from "../src/core/analyzer.js";
 import { explainAnalysis, type ExplainResult, type ExplainModel } from "../src/explain/explainer.js";
 import { deepAnalysis, type DeepExplainResult, PAYLOAD_PRESETS, type PayloadConfig } from "../src/explain/deep-analyzer.js";
+import { PROMPT_PRESETS, type PromptConfig } from "../src/explain/prompts/schema.js";
 import { findCompanionZip, extractCompanionZip } from "../src/source/zip-extractor.js";
 import { writeCaptureToDisk } from "../src/debug/writer.js";
 import { initIdCounter, nextId } from "../src/debug/ids.js";
@@ -40,6 +41,7 @@ async function analyzeOne(
   apiKey: string,
   model: ExplainModel,
   payloadConfig?: PayloadConfig,
+  promptConfig?: PromptConfig,
 ): Promise<number> {
   const profileName = basename(profilePath);
   log(`\n--- ${profileName} ---`);
@@ -89,7 +91,7 @@ async function analyzeOne(
     const deepResult: DeepExplainResult = await deepAnalysis(
       result,
       processedProfile,
-      { apiKey, model, payloadConfig },
+      { apiKey, model, payloadConfig, promptConfig },
     );
     log(`  Deep: ${formatCallCost(deepResult.cost)}`);
 
@@ -467,13 +469,14 @@ async function runOnce(
   apiKey: string,
   model: ExplainModel,
   payloadConfig?: PayloadConfig,
+  promptConfig?: PromptConfig,
 ): Promise<number> {
   await mkdir(runDir, { recursive: true });
   await initIdCounter(runDir);
 
   // Run all profiles in parallel
   const costs = await Promise.all(
-    profiles.map((p) => analyzeOne(p, runDir, apiKey, model, payloadConfig)),
+    profiles.map((p) => analyzeOne(p, runDir, apiKey, model, payloadConfig, promptConfig)),
   );
   return costs.reduce((s, c) => s + c, 0);
 }
@@ -491,6 +494,17 @@ async function main(): Promise<void> {
     payloadConfig = PAYLOAD_PRESETS[configName];
     if (!payloadConfig) {
       log(`ERROR: Unknown config "${configName}". Available: ${Object.keys(PAYLOAD_PRESETS).join(", ")}`);
+      process.exit(1);
+    }
+  }
+
+  // Resolve prompt config
+  const promptName = parseArg("prompt");
+  let promptConfig: PromptConfig | undefined;
+  if (promptName !== undefined) {
+    promptConfig = PROMPT_PRESETS[promptName];
+    if (!promptConfig) {
+      log(`ERROR: Unknown prompt "${promptName}". Available: ${Object.keys(PROMPT_PRESETS).join(", ")}`);
       process.exit(1);
     }
   }
@@ -532,7 +546,7 @@ async function main(): Promise<void> {
     log(`\n=== Run ${run}/${numRuns} → ${basename(runDir)} ===`);
 
     const runStart = performance.now();
-    const cost = await runOnce(profiles, runDir, apiKey, model, payloadConfig);
+    const cost = await runOnce(profiles, runDir, apiKey, model, payloadConfig, promptConfig);
     const runElapsed = performance.now() - runStart;
 
     // Save config metadata
@@ -540,6 +554,8 @@ async function main(): Promise<void> {
       model,
       config: configName ?? null,
       payloadConfig: payloadConfig ?? null,
+      prompt: promptName ?? null,
+      promptConfig: promptConfig ?? null,
       timestamp,
       run,
       totalRuns: numRuns,
