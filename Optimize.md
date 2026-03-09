@@ -148,9 +148,68 @@ Findings that Sonnet consistently produces across multiple configs but Opus miss
 - Comparisons: 6 × ~$3 = ~$18
 - **Total sweep: ~$77** (within $100 budget)
 
+## Phase 2 Results (2026-03-09)
+
+Testing whether top Phase 1 data types stack when combined.
+
+### Results Matrix
+
+| Config | W/L/D | Avg (Opus/Sonnet) | Margin | Verdict |
+|--------|-------|-------------------|--------|---------|
+| +sql+cg | 5-0-0 | 7.5 / 8.3 | +0.8 | Sonnet |
+| +sql+cg+ct15 | 5-0-0 | 7.8 / 8.3 | +0.5 | Sonnet |
+| +sql+cg+ast | 5-0-0 | 7.8 / 8.6 | **+0.8** | Sonnet |
+| +kitchen | 5-0-0 | 7.9 / 8.6 | +0.7 | Sonnet |
+
+### Key Findings from Phase 2
+
+**Combinations stack — no diminishing returns.** All 4 combinations scored 5-0-0, matching or exceeding the individual components. The feared "payload bloat dilution" from v2-v5 does NOT apply to structured data (sql patterns, call graphs, AST summaries) — only to unstructured diagnostics blobs.
+
+**+sql+cg+ast is the winner** — ties for highest Sonnet avg (8.6) and largest margin (+0.8). Key unique findings across its 3 runs:
+- DCSetup.GET per-row caching opportunity (all 3 runs)
+- CDO 70x SQL amplification vs 14x AL amplification distinction
+- Overlapping double Sales Line query on Page 95 (OUTER APPLY + simple SELECT)
+- Entity Buffer update-per-field vs per-save
+- 26:1 scan-to-write ratio in AutoMatch
+- Sustainability extension JOIN elimination via SetLoadFields
+
+**+kitchen ties on avg but adds diagnostics overhead** — same 8.6 avg as +sql+cg+ast but adds diagnostics-lite for cold-cache calibration. Unique finding: Change Log on Reservation Entry driving DeleteReservEntries recursion. Worth considering if cold-cache severity calibration is important.
+
+**+sql+cg alone is solid but not best** — 8.3 avg matches individual +callgraph. The SQL patterns add unique Session357 findings (GetBaseUrl 11x, dimension caption DB hits, E-Document double-fire) but AST data adds more on top.
+
+**+sql+cg+ct15 doesn't improve over +sql+cg** — same 8.3 avg. The extra 5 call tree entries don't add value when SQL patterns and call graph already cover cross-method relationships.
+
+### Recommended Production Config
+
+**`+sql+cg+ast`** (sqlpatterns + callgraph + 10 call tree entries, no diagnostics):
+- Highest Sonnet avg (8.6) tied with +kitchen
+- Cleanest config (no diagnostics to maintain)
+- Broadest finding coverage across all profiles
+- No AST data available without source, so degrades gracefully to +sql+cg
+
+### All Results (Phase 1 + Phase 2)
+
+| Config | W/L/D | Avg (Opus/Sonnet) | Margin |
+|--------|-------|-------------------|--------|
+| baseline | 3-2-0 | 8.0 / 8.2 | +0.2 |
+| +diagnostics-lite | 4-1-0 | 7.9 / 8.1 | +0.2 |
+| +calltree15 | 4-1-0 | 8.3 / 8.5 | +0.2 |
+| +ast | 5-0-0 | 7.9 / 8.3 | +0.4 |
+| +callgraph | 5-0-0 | 7.8 / 8.3 | +0.5 |
+| +sqlpatterns | 5-0-0 | 7.9 / 8.7 | +0.8 |
+| +sql+cg | 5-0-0 | 7.5 / 8.3 | +0.8 |
+| +sql+cg+ct15 | 5-0-0 | 7.8 / 8.3 | +0.5 |
+| **+sql+cg+ast** | **5-0-0** | **7.8 / 8.6** | **+0.8** |
+| +kitchen | 5-0-0 | 7.9 / 8.6 | +0.7 |
+
+### Cost Summary (Phase 1 + Phase 2)
+
+- Phase 1: ~$77
+- Phase 2: 4 configs × 3 runs × ~$2.50 + 4 comparisons × ~$3 = ~$42
+- **Running total: ~$119** (within $200 budget)
+
 ## Next Steps
 
-1. **Create optimal combined config** — combine +sqlpatterns + +callgraph (the two 5-0-0 winners with highest margins). Test if the combination improves or if the extra data starts diluting attention again.
-2. **Test +sqlpatterns+callgraph+calltree15** — the three highest scorers combined, to see if more data stacks or diminishes.
-3. **Prompt Track B** — now that payload composition is optimized, try prompt adjustments on top of the best payload config.
-4. **Production integration** — update the `current` PAYLOAD_PRESET to use the winning config as default.
+1. **Update `current` preset** — set to `+sql+cg+ast` config as new production default
+2. **Track B: Prompt optimization** — now that payload is settled, test prompt variations on top of `+sql+cg+ast`
+3. **Sonnet vs Sonnet comparison** — compare `+sql+cg+ast` directly against `+sqlpatterns` (the Phase 1 solo winner) to confirm the combination truly adds value beyond individual components
