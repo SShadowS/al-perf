@@ -26,7 +26,7 @@ export const config = {
     /** Default call tree serialization strategy */
     strategy: "adjacency" as CallTreeStrategy,
     /** Top methods for adjacency summary */
-    adjacencyTopMethods: 15,
+    adjacencyTopMethods: 10,
     /** Max subtrees for pruned strategy */
     prunedMaxSubtrees: 5,
     /** Max depth for pruned strategy */
