@@ -208,8 +208,89 @@ Testing whether top Phase 1 data types stack when combined.
 - Phase 2: 4 configs × 3 runs × ~$2.50 + 4 comparisons × ~$3 = ~$42
 - **Running total: ~$119** (within $200 budget)
 
-## Next Steps
+## Track B: Prompt Optimization (2026-03-09)
 
-1. **Update `current` preset** — set to `+sql+cg+ast` config as new production default
-2. **Track B: Prompt optimization** — now that payload is settled, test prompt variations on top of `+sql+cg+ast`
-3. **Sonnet vs Sonnet comparison** — compare `+sql+cg+ast` directly against `+sqlpatterns` (the Phase 1 solo winner) to confirm the combination truly adds value beyond individual components
+Testing 5 prompt variants on top of the Phase 2 winning payload (`+sql+cg+ast`). All use the same 2 Opus baseline runs.
+
+### Prompt Variants
+
+| Variant | dataAwareHints | expandedFindings | crossExtensionFocus |
+|---------|---------------|-----------------|---------------------|
+| v1 (baseline) | - | - | - |
+| +datahints | yes | - | - |
+| +morefindings | - | yes (5-15) | - |
+| +crossext | - | - | yes |
+| +datahints+crossext | yes | - | yes |
+| +all | yes | yes (5-15) | yes |
+
+### Results Matrix
+
+| Prompt | W/L/D | Avg (Opus/Sonnet) | Margin | Verdict |
+|--------|-------|-------------------|--------|---------|
+| +datahints | 4-0-1 | 8.18 / 8.64 | +0.46 | Sonnet |
+| +morefindings | 4-1-0 | 8.06 / 8.50 | +0.44 | Sonnet |
+| +crossext | 4-1-0 | 7.86 / 8.38 | +0.52 | Sonnet |
+| +datahints+crossext | 3-2-0 | 7.92 / 8.42 | +0.50 | Sonnet |
+| **+all** | **5-0-0** | **8.47 / 9.05** | **+0.58** | **Sonnet** |
+
+### Key Findings from Track B
+
+**+all is the clear winner** — only prompt to achieve 5-0-0, highest Sonnet avg (9.05), and largest margin (+0.58). The three prompt additions stack positively when combined, even though individually they're moderate.
+
+**The "smaller prompt = better" finding from v2-v5 does NOT apply here.** The key difference: v2-v5 added *restrictive rules* (evidence grounding, severity caps, finding count limits). Track B additions are *expansive hints* (here's what the data sections mean, look for cross-extension issues, give more findings). Hints expand the search space; rules constrain it.
+
+**Individual prompt effects:**
+- **+datahints** (4-0-1, +0.46): Helps Sonnet use sqlPatterns/callGraph/astSummaries data more effectively. The payload data guide makes the structured data more accessible.
+- **+morefindings** (4-1-0, +0.44): Expanding from 3-10 to 5-15 findings doesn't dilute quality — Sonnet fills the extra slots with genuine findings, not padding. The one Opus win was on Session357 cold-cache severity calibration.
+- **+crossext** (4-1-0, +0.52): Enables consistent IsolatedStorage detection and Sustainability extension JOIN identification across profiles. The cross-extension lens provides a systematic detection framework.
+- **+datahints+crossext** (3-2-0, +0.50): Weaker than either individual component. Opus wins on CDC profile (severity miscalibration) and Session357 (cold-cache). Possible prompt interaction effect — cross-extension focus may cause over-emphasis on extension issues in small profiles.
+
+**Why +all works best despite +datahints+crossext being worse:**
+The expanded finding count (5-15) from +morefindings acts as a counterbalance — it gives Sonnet room to include both extension-focused and non-extension findings, preventing the narrowing effect seen in +datahints+crossext.
+
+**Unique findings enabled by +all prompt:**
+- InsertPurchDocMatch mid-iteration write (read/write separation architectural issue)
+- Sustainability extension JOIN with specific GUID identification and SetLoadFields code fix
+- Pagination volume analysis (1,532 continuation queries → 76,600+ rows)
+- Business Events 448 metadata hits as anomalous beyond cold cache
+- E-Document per-release check lacking feature guard
+
+### Cost Summary
+
+- Track B: 5 prompts × 3 runs × ~$2.80 + 5 comparisons × ~$0.33 = ~$43.65
+- **Running total: ~$163** (within $200 budget)
+
+## Final Optimal Configuration
+
+**Payload: `+sql+cg+ast`** (sqlpatterns + callgraph + AST summaries, 10 call tree entries, no diagnostics)
+**Prompt: `+all`** (dataAwareHints + expandedFindings + crossExtensionFocus)
+
+### Combined Performance
+
+| Metric | Phase 2 (+sql+cg+ast, v1 prompt) | Final (+sql+cg+ast, +all prompt) |
+|--------|----------------------------------|----------------------------------|
+| W/L/D vs Opus | 5-0-0 | 5-0-0 |
+| Sonnet avg | 8.6 | 9.05 |
+| Margin | +0.8 | +0.58* |
+
+*Lower margin due to Opus also scoring higher in the +all comparison (8.47 vs 7.8), likely because the comparison evaluator uses higher standards when both groups produce richer output.
+
+### All Results (Phase 1 + Phase 2 + Track B)
+
+| Config | Prompt | W/L/D | Avg (Opus/Sonnet) | Margin |
+|--------|--------|-------|-------------------|--------|
+| baseline | v1 | 3-2-0 | 8.0 / 8.2 | +0.2 |
+| +diagnostics-lite | v1 | 4-1-0 | 7.9 / 8.1 | +0.2 |
+| +calltree15 | v1 | 4-1-0 | 8.3 / 8.5 | +0.2 |
+| +ast | v1 | 5-0-0 | 7.9 / 8.3 | +0.4 |
+| +callgraph | v1 | 5-0-0 | 7.8 / 8.3 | +0.5 |
+| +sqlpatterns | v1 | 5-0-0 | 7.9 / 8.7 | +0.8 |
+| +sql+cg | v1 | 5-0-0 | 7.5 / 8.3 | +0.8 |
+| +sql+cg+ct15 | v1 | 5-0-0 | 7.8 / 8.3 | +0.5 |
+| +sql+cg+ast | v1 | 5-0-0 | 7.8 / 8.6 | +0.8 |
+| +kitchen | v1 | 5-0-0 | 7.9 / 8.6 | +0.7 |
+| +sql+cg+ast | +datahints | 4-0-1 | 8.18 / 8.64 | +0.46 |
+| +sql+cg+ast | +morefindings | 4-1-0 | 8.06 / 8.50 | +0.44 |
+| +sql+cg+ast | +crossext | 4-1-0 | 7.86 / 8.38 | +0.52 |
+| +sql+cg+ast | +datahints+crossext | 3-2-0 | 7.92 / 8.42 | +0.50 |
+| **+sql+cg+ast** | **+all** | **5-0-0** | **8.47 / 9.05** | **+0.58** |
