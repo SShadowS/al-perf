@@ -551,7 +551,7 @@ async function main(): Promise<void> {
 
   const overallElapsed = performance.now() - overallStart;
   log(`\n=== All runs complete: ${(overallElapsed / 1000).toFixed(1)}s ===`);
-  log(`Run folders: ${runDirs.map(basename).join(", ")}`);
+  log(`Run folders: ${runDirs.map((d) => basename(d)).join(", ")}`);
 
   // Generate diff report for the last run against previous (unless --no-diff)
   if (!noDiff) {
