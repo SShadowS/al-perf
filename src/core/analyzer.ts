@@ -27,6 +27,8 @@ export interface AnalyzeOptions {
   sourceIndex?: SourceIndex;
   /** Callback to access the ProcessedProfile (for deep AI analysis) */
   onProcessedProfile?: (profile: ProcessedProfile) => void;
+  /** Callback to access the SourceIndex (for deep AI analysis AST summaries) */
+  onSourceIndex?: (index: SourceIndex) => void;
 }
 
 export interface CompareOptions {
@@ -151,6 +153,7 @@ export async function analyzeProfile(
     if (!sourceIndex) {
       sourceIndex = await buildSourceIndex(options!.sourcePath!);
     }
+    options?.onSourceIndex?.(sourceIndex);
     const sourcePatterns = runSourceDetectors(methods, sourceIndex);
     patterns.push(...sourcePatterns);
     patterns.sort((a, b) => b.impact - a.impact);

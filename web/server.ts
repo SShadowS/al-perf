@@ -148,11 +148,13 @@ async function handleAnalyze(req: Request): Promise<Response> {
 
     // Run analysis
     let processedProfile: ProcessedProfile | undefined;
+    let sourceIndex: import("../src/types/source-index.js").SourceIndex | undefined;
     const result = await analyzeProfile(profilePath, {
       top: config.analysisTopN,
       includePatterns: true,
       sourcePath,
       onProcessedProfile: (p) => { processedProfile = p; },
+      onSourceIndex: (idx) => { sourceIndex = idx; },
     });
 
     // Always run AI explanation if API key is available
@@ -173,7 +175,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
       // Deep AI analysis (always attempted in web UI)
       if (processedProfile) {
         try {
-          deepResult = await deepAnalysis(result, processedProfile, { apiKey, model: config.defaultModel });
+          deepResult = await deepAnalysis(result, processedProfile, { apiKey, model: config.defaultModel, sourceIndex });
           result.aiFindings = deepResult.aiFindings;
           result.aiNarrative = deepResult.aiNarrative;
           apiCosts.push(deepResult.cost);

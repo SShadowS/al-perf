@@ -67,6 +67,7 @@ export function registerAnalyzeCommand(program: Command) {
       }
 
       let processedProfile: ProcessedProfile | undefined;
+      let resolvedSourceIndex: SourceIndex | undefined = sourceIndex;
       const analyzeStart = Date.now();
 
       const result = await withStatus("Analyzing profile...", () =>
@@ -78,6 +79,7 @@ export function registerAnalyzeCommand(program: Command) {
           sourcePath: sourcePath,
           sourceIndex,
           onProcessedProfile: opts.deep ? (p: ProcessedProfile) => { processedProfile = p; } : undefined,
+          onSourceIndex: opts.deep ? (idx: SourceIndex) => { resolvedSourceIndex = idx; } : undefined,
         }),
       );
       let explainResult: ExplainResult | undefined;
@@ -126,6 +128,7 @@ export function registerAnalyzeCommand(program: Command) {
               deepAnalysis(result, processedProfile!, {
                 apiKey,
                 model,
+                sourceIndex: resolvedSourceIndex,
               }),
             );
             result.aiFindings = deepResult.aiFindings;

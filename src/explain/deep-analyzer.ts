@@ -23,7 +23,6 @@ export type CallTreeStrategy = "pruned" | "chains" | "adjacency";
 export interface PayloadConfig {
   callTreeTop: number;
   includeDiagnostics: false | "lite" | "full";
-  includeTableBreakdown: boolean;
   includeAst: boolean;
   includeCallGraph: boolean;
   includeSqlPatterns: boolean;
@@ -33,7 +32,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   baseline: {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: false,
     includeSqlPatterns: false,
@@ -41,7 +40,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+diagnostics-lite": {
     callTreeTop: 10,
     includeDiagnostics: "lite",
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: false,
     includeSqlPatterns: false,
@@ -49,7 +48,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+calltree15": {
     callTreeTop: 15,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: false,
     includeSqlPatterns: false,
@@ -57,7 +56,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+ast": {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: true,
     includeCallGraph: false,
     includeSqlPatterns: false,
@@ -65,7 +64,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+callgraph": {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: true,
     includeSqlPatterns: false,
@@ -73,7 +72,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+sqlpatterns": {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: false,
     includeSqlPatterns: true,
@@ -81,7 +80,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+sql+cg": {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: true,
     includeSqlPatterns: true,
@@ -89,7 +88,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+sql+cg+ct15": {
     callTreeTop: 15,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: true,
     includeSqlPatterns: true,
@@ -97,7 +96,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+sql+cg+ast": {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: true,
     includeCallGraph: true,
     includeSqlPatterns: true,
@@ -105,7 +104,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   "+kitchen": {
     callTreeTop: 15,
     includeDiagnostics: "lite",
-    includeTableBreakdown: false,
+
     includeAst: false,
     includeCallGraph: true,
     includeSqlPatterns: true,
@@ -113,7 +112,7 @@ export const PAYLOAD_PRESETS: Record<string, PayloadConfig> = {
   current: {
     callTreeTop: 10,
     includeDiagnostics: false,
-    includeTableBreakdown: false,
+
     includeAst: true,
     includeCallGraph: true,
     includeSqlPatterns: true,
@@ -145,6 +144,7 @@ export interface DeepExplainOptions {
   strategy?: CallTreeStrategy;
   payloadConfig?: PayloadConfig;
   promptConfig?: PromptConfig;
+  sourceIndex?: SourceIndex;
 }
 
 export interface DeepExplainResult {
@@ -163,10 +163,8 @@ export function buildDeepPayload(
 ): DeepPayload {
   const analysis = trimResultForPrompt(result);
 
-  // Optionally strip tableBreakdown
-  if (payloadConfig && !payloadConfig.includeTableBreakdown) {
-    delete analysis.tableBreakdown;
-  }
+  // Always strip tableBreakdown from AI payload — adds noise without value
+  delete analysis.tableBreakdown;
 
   const topMethods = payloadConfig?.callTreeTop ?? config.deep.adjacencyTopMethods;
 
@@ -263,7 +261,8 @@ export async function deepAnalysis(
   options: DeepExplainOptions,
 ): Promise<DeepExplainResult> {
   const strategy = options.strategy ?? config.deep.strategy;
-  const payload = buildDeepPayload(result, profile, strategy, options.payloadConfig);
+  const payloadConfig = options.payloadConfig ?? PAYLOAD_PRESETS["current"];
+  const payload = buildDeepPayload(result, profile, strategy, payloadConfig, options.sourceIndex);
 
   const hasSource = payload.sourceSnippets !== undefined;
   const promptConfig = options.promptConfig ?? PROMPT_PRESETS["+all"];

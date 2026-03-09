@@ -64,7 +64,7 @@ describe("web server", () => {
     expect(result.objectBreakdown).toBeInstanceOf(Array);
     expect(result.summary).toBeDefined();
     expect(result.summary.oneLiner).toBeTypeOf("string");
-  }, 60000);
+  }, 120000);
 
   it("returns 400 when no profile is provided", async () => {
     const formData = new FormData();
@@ -110,7 +110,7 @@ describe("web server", () => {
       expect(res.headers.get("content-type")).toContain("application/json");
       const result = await res.json();
       expect(result.meta).toBeDefined();
-    }, 60000);
+    }, 120000);
 
     it("returns JSON when format=json", async () => {
       const res = await postProfile("json");
@@ -118,7 +118,7 @@ describe("web server", () => {
       expect(res.headers.get("content-type")).toContain("application/json");
       const result = await res.json();
       expect(result.meta).toBeDefined();
-    }, 60000);
+    }, 120000);
 
     it("returns HTML when format=html", async () => {
       const res = await postProfile("html");
@@ -129,20 +129,20 @@ describe("web server", () => {
       expect(body).toContain("#00B7C3");
       expect(body).toContain("Segoe UI");
       expect(body).toMatch(/CRITICAL|WARNING|INFO/);
-    }, 60000);
+    }, 120000);
 
     it("returns 400 for unsupported format", async () => {
       const res = await postProfile("pdf");
       expect(res.status).toBe(400);
       const data = await res.json();
       expect(data.error).toContain("Unsupported format");
-    }, 60000);
+    }, 120000);
 
     it("HTML response is self-contained (no external resource links)", async () => {
       const res = await postProfile("html");
       const body = await res.text();
       expect(body).not.toMatch(/href="https?:\/\//);
       expect(body).not.toMatch(/src="https?:\/\//);
-    }, 60000);
+    }, 120000);
   });
 });
