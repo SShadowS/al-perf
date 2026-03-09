@@ -2,13 +2,20 @@
  * test-ai-quality.ts — Run AI analysis (explain + deep) across all example profiles
  * and capture debug output for quality review.
  *
- * Usage: bun run scripts/test-ai-quality.ts
+ * Usage:
+ *   bun run scripts/test-ai-quality.ts                         # default config, 1 run
+ *   bun run scripts/test-ai-quality.ts --model opus            # use Opus model
+ *   bun run scripts/test-ai-quality.ts --config baseline       # use v1 baseline payload
+ *   bun run scripts/test-ai-quality.ts --runs 3                # 3 runs (for statistical confidence)
+ *   bun run scripts/test-ai-quality.ts --config baseline --runs 3 --no-diff
+ *
+ * Available configs: baseline, +diagnostics-lite, +calltree15, +ast, +callgraph, +sqlpatterns, current
  * Requires: ANTHROPIC_API_KEY environment variable
  */
 
 import { analyzeProfile } from "../src/core/analyzer.js";
 import { explainAnalysis, type ExplainResult, type ExplainModel } from "../src/explain/explainer.js";
-import { deepAnalysis, type DeepExplainResult } from "../src/explain/deep-analyzer.js";
+import { deepAnalysis, type DeepExplainResult, PAYLOAD_PRESETS, type PayloadConfig } from "../src/explain/deep-analyzer.js";
 import { findCompanionZip, extractCompanionZip } from "../src/source/zip-extractor.js";
 import { writeCaptureToDisk } from "../src/debug/writer.js";
 import { initIdCounter, nextId } from "../src/debug/ids.js";
@@ -32,6 +39,7 @@ async function analyzeOne(
   runDir: string,
   apiKey: string,
   model: ExplainModel,
+  payloadConfig?: PayloadConfig,
 ): Promise<number> {
   const profileName = basename(profilePath);
   log(`\n--- ${profileName} ---`);
@@ -81,7 +89,7 @@ async function analyzeOne(
     const deepResult: DeepExplainResult = await deepAnalysis(
       result,
       processedProfile,
-      { apiKey, model },
+      { apiKey, model, payloadConfig },
     );
     log(`  Deep: ${formatCallCost(deepResult.cost)}`);
 
@@ -445,11 +453,47 @@ async function generateDiffReport(
   return lines.join("\n");
 }
 
+function parseArg(name: string): string | undefined {
+  const eqForm = process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
+  if (eqForm !== undefined) return eqForm;
+  const idx = process.argv.indexOf(`--${name}`);
+  if (idx >= 0 && idx + 1 < process.argv.length) return process.argv[idx + 1];
+  return undefined;
+}
+
+async function runOnce(
+  profiles: string[],
+  runDir: string,
+  apiKey: string,
+  model: ExplainModel,
+  payloadConfig?: PayloadConfig,
+): Promise<number> {
+  await mkdir(runDir, { recursive: true });
+  await initIdCounter(runDir);
+
+  // Run all profiles in parallel
+  const costs = await Promise.all(
+    profiles.map((p) => analyzeOne(p, runDir, apiKey, model, payloadConfig)),
+  );
+  return costs.reduce((s, c) => s + c, 0);
+}
+
 async function main(): Promise<void> {
-  // Parse --model argument
-  const modelArg = process.argv.find((a) => a.startsWith("--model="))?.split("=")[1]
-    ?? (process.argv.includes("--model") ? process.argv[process.argv.indexOf("--model") + 1] : undefined);
-  const model: ExplainModel = modelArg === "opus" ? "opus" : "sonnet";
+  // Parse arguments
+  const model: ExplainModel = parseArg("model") === "opus" ? "opus" : "sonnet";
+  const configName = parseArg("config");
+  const numRuns = parseInt(parseArg("runs") ?? "1", 10);
+  const noDiff = process.argv.includes("--no-diff");
+
+  // Resolve payload config
+  let payloadConfig: PayloadConfig | undefined;
+  if (configName !== undefined) {
+    payloadConfig = PAYLOAD_PRESETS[configName];
+    if (!payloadConfig) {
+      log(`ERROR: Unknown config "${configName}". Available: ${Object.keys(PAYLOAD_PRESETS).join(", ")}`);
+      process.exit(1);
+    }
+  }
 
   // Fail fast if no API key
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -470,45 +514,59 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  log(`Found ${profiles.length} profiles (model: ${model})`);
-
-  // Create timestamped run folder
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/:/g, "-")
-    .replace(/\.\d+Z$/, "");
-  const runDir = resolve(EXAMPLE_DIR, "runs", timestamp);
-  await mkdir(runDir, { recursive: true });
-  log(`Run folder: ${runDir}`);
-
-  // Initialize ID counter from run folder
-  await initIdCounter(runDir);
+  const configLabel = configName ?? "default";
+  log(`Found ${profiles.length} profiles (model: ${model}, config: ${configLabel}, runs: ${numRuns})`);
 
   const overallStart = performance.now();
-  let totalCost = 0;
+  const runDirs: string[] = [];
 
-  for (const profilePath of profiles) {
-    const cost = await analyzeOne(profilePath, runDir, apiKey, model);
-    totalCost += cost;
+  for (let run = 1; run <= numRuns; run++) {
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/:/g, "-")
+      .replace(/\.\d+Z$/, "");
+    const runSuffix = numRuns > 1 ? `_run${run}` : "";
+    const runDir = resolve(EXAMPLE_DIR, "runs", timestamp + runSuffix);
+    runDirs.push(runDir);
+
+    log(`\n=== Run ${run}/${numRuns} → ${basename(runDir)} ===`);
+
+    const runStart = performance.now();
+    const cost = await runOnce(profiles, runDir, apiKey, model, payloadConfig);
+    const runElapsed = performance.now() - runStart;
+
+    // Save config metadata
+    const runConfig = {
+      model,
+      config: configName ?? null,
+      payloadConfig: payloadConfig ?? null,
+      timestamp,
+      run,
+      totalRuns: numRuns,
+    };
+    await fsWriteFile(resolve(runDir, "run-config.json"), JSON.stringify(runConfig, null, 2), "utf-8");
+
+    log(`\n  Run ${run} complete: ${(runElapsed / 1000).toFixed(1)}s, $${cost.toFixed(4)}`);
   }
 
   const overallElapsed = performance.now() - overallStart;
+  log(`\n=== All runs complete: ${(overallElapsed / 1000).toFixed(1)}s ===`);
+  log(`Run folders: ${runDirs.map(basename).join(", ")}`);
 
-  log("\n=== Summary ===");
-  log(`Profiles analyzed: ${profiles.length}`);
-  log(`Total time: ${(overallElapsed / 1000).toFixed(1)}s`);
-  log(`Total cost: $${totalCost.toFixed(4)}`);
-
-  // Generate diff report against previous run
-  const previousRunDir = await findPreviousRun(timestamp);
-  if (previousRunDir) {
-    log(`\nGenerating diff report against: ${basename(previousRunDir)}`);
-    const diffReport = await generateDiffReport(runDir, previousRunDir, profiles);
-    const diffPath = resolve(runDir, "diff-report.md");
-    await fsWriteFile(diffPath, diffReport, "utf-8");
-    log(`Diff report saved: ${diffPath}`);
-  } else {
-    log("\nNo previous run found — skipping diff report");
+  // Generate diff report for the last run against previous (unless --no-diff)
+  if (!noDiff) {
+    const lastRunDir = runDirs[runDirs.length - 1];
+    const lastRunName = basename(lastRunDir);
+    const previousRunDir = await findPreviousRun(lastRunName);
+    if (previousRunDir) {
+      log(`\nGenerating diff report against: ${basename(previousRunDir)}`);
+      const diffReport = await generateDiffReport(lastRunDir, previousRunDir, profiles);
+      const diffPath = resolve(lastRunDir, "diff-report.md");
+      await fsWriteFile(diffPath, diffReport, "utf-8");
+      log(`Diff report saved: ${diffPath}`);
+    } else {
+      log("\nNo previous run found — skipping diff report");
+    }
   }
 }
 
