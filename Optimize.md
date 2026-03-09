@@ -91,8 +91,66 @@ But these gains didn't outweigh the losses from payload bloat.
 | BC-Specific Optimization Patterns | ~500 chars | Negative — Sonnet already knows these | Removed in v4 |
 | Scale-awareness rules | ~400 chars | Low — scaleNote in diagnostics suffices | Removed in v4 |
 
+## Phase 1 Results (2026-03-09)
+
+Statistical A/B test: 2 Opus runs vs 3 Sonnet runs per config. Each run = 5 profiles analyzed in parallel. Aggregate comparison via blind AI evaluation.
+
+### Results Matrix
+
+| Config | W/L/D | Avg (Opus/Sonnet) | Verdict | Cost/run |
+|--------|-------|-------------------|---------|----------|
+| baseline | 3-2-0 | 8.0 / 8.2 | Sonnet | ~$2.50 |
+| +diagnostics-lite | 4-1-0 | 7.9 / 8.1 | Sonnet | ~$2.50 |
+| +calltree15 | 4-1-0 | 8.3 / 8.5 | Sonnet | ~$2.50 |
+| +ast | 5-0-0 | 7.9 / 8.3 | Sonnet | ~$2.50 |
+| +callgraph | 5-0-0 | 7.8 / 8.3 | Sonnet | ~$2.50 |
+| +sqlpatterns | 5-0-0 | 7.9 / 8.7 | **Sonnet** | ~$2.50 |
+
+### Key Findings from Phase 1
+
+**All configs beat Opus.** Even the lean baseline (v1 equivalent) wins 3-2-0. The three new data types all achieve 5-0-0.
+
+**+sqlpatterns is the standout** — highest Sonnet avg (8.7), largest margin (+0.8). SQL pattern data helps Sonnet identify:
+- Duplicate credit limit calculations across Base App and ISV extensions
+- Redundant SELECT vs OUTER APPLY fetch paths on the same table
+- Business Events GetBaseUrl 11x loop pattern
+- Sustainability extension JOIN elimination via SetLoadFields
+
+**+callgraph also strong** — 5-0-0 with +0.5 margin. Enables Sonnet to find:
+- Isolated Storage write abuse on every quantity validation
+- Duplicate Default Dimension queries across code paths
+- BeginTransaction overhead patterns
+
+**+ast provides good coverage** — 5-0-0 with +0.4. Helps identify:
+- Reservation Entry 6-path architectural fragmentation
+- ISV-contributed OUTER APPLY in subform subscribers
+- Notifications app reading all sales lines on navigation
+
+**+calltree15 improves cross-method analysis** — 4-1-0 with highest absolute scores (8.3/8.5). Mutual recursion between GetPurchasePrice2CRE and GetTotalCostwithIndirectCRE was only found with 15 call tree entries.
+
+**+diagnostics-lite is marginal** — 4-1-0 but lowest Sonnet avg (8.1). The lite diagnostics help with cold-cache severity calibration but don't add enough novel findings.
+
+**Opus weakness is consistent** — Opus (Group A) consistently misses the Isolated Storage anti-pattern in Bishops Core across all configs. Sonnet finds it in 4 of 6 configs. Opus also over-calibrates severity on cold-cache profiles.
+
+### Recurring Differentiators (Sonnet vs Opus)
+
+Findings that Sonnet consistently produces across multiple configs but Opus misses:
+1. **SetCITIsolatedStorage** — Isolated Storage write on every quantity validation (found in baseline, +ast, +callgraph, +sqlpatterns)
+2. **Duplicate credit limit calculation** — Base App vs ISV parallel SUM queries (found in +diagnostics-lite, +calltree15, +sqlpatterns)
+3. **Sales Line double-read** — SELECT + OUTER APPLY redundancy (found in +calltree15, +sqlpatterns)
+4. **Notifications full Sales Line scan** — per-card-navigation overhead (found in baseline, +ast)
+5. **Assembly Line fan-out** — 4 codeunits independently querying (found in +calltree15, +callgraph)
+
+### Cost Summary
+
+- Opus baseline: 2 runs × ~$6-8 each = ~$14
+- Sonnet configs: 6 configs × 3 runs × ~$2.50 = ~$45
+- Comparisons: 6 × ~$3 = ~$18
+- **Total sweep: ~$77** (within $100 budget)
+
 ## Next Steps
 
-1. **Try v6: v1 payload + v1 prompt** — remove diagnostics and tableBreakdown from payload, revert call tree to 10 entries. This should reproduce v1's 5-0 result and confirm the payload-is-the-problem hypothesis.
-2. **If confirmed**: selectively re-add only the highest-value diagnostics fields (coldCacheWarning, wallClockGapRatio) as a lightweight object, without tableBreakdown or tableAccessMap.
-3. **Long-term**: consider whether the comparison AI (also Claude) has systematic biases in evaluation. Multiple runs of the same version would establish variance bands.
+1. **Create optimal combined config** — combine +sqlpatterns + +callgraph (the two 5-0-0 winners with highest margins). Test if the combination improves or if the extra data starts diluting attention again.
+2. **Test +sqlpatterns+callgraph+calltree15** — the three highest scorers combined, to see if more data stacks or diminishes.
+3. **Prompt Track B** — now that payload composition is optimized, try prompt adjustments on top of the best payload config.
+4. **Production integration** — update the `current` PAYLOAD_PRESET to use the winning config as default.
