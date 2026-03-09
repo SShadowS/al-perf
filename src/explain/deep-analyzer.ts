@@ -13,6 +13,10 @@ import { MODEL_IDS } from "./explainer.js";
 import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 import { config } from "../config.js";
 import { computeDiagnostics, type ProfileDiagnostics } from "./diagnostics.js";
+import { extractSqlPatterns } from "./payloads/sql-patterns.js";
+import { extractCallGraph } from "./payloads/call-graph.js";
+import { extractAstSummaries } from "./payloads/ast-summary.js";
+import type { SourceIndex } from "../types/source-index.js";
 
 export type CallTreeStrategy = "pruned" | "chains" | "adjacency";
 
@@ -122,6 +126,7 @@ export function buildDeepPayload(
   profile: ProcessedProfile,
   strategy: CallTreeStrategy,
   payloadConfig?: PayloadConfig,
+  sourceIndex?: SourceIndex,
 ): DeepPayload {
   const analysis = trimResultForPrompt(result);
 
@@ -192,6 +197,28 @@ export function buildDeepPayload(
 
   if (diagnostics) {
     payload.diagnostics = diagnostics;
+  }
+
+  // Optional payload extensions controlled by PayloadConfig
+  if (payloadConfig?.includeSqlPatterns) {
+    const sqlPatterns = extractSqlPatterns(profile.allNodes);
+    if (sqlPatterns.length > 0) {
+      payload.sqlPatterns = sqlPatterns;
+    }
+  }
+
+  if (payloadConfig?.includeCallGraph) {
+    const callGraph = extractCallGraph(profile.allNodes, topMethods);
+    if (callGraph.nodes.length > 0) {
+      payload.callGraph = callGraph;
+    }
+  }
+
+  if (payloadConfig?.includeAst && sourceIndex) {
+    const astSummaries = extractAstSummaries(result.hotspots, sourceIndex);
+    if (astSummaries.length > 0) {
+      payload.astSummaries = astSummaries;
+    }
   }
 
   return payload;

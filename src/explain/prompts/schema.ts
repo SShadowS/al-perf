@@ -38,11 +38,6 @@ You MUST respond with valid JSON matching this schema exactly. Do not include an
 8. \`evidence\` must reference specific data from the profile (times, hit counts, call relationships).
 9. The \`narrative\` must be self-contained — a reader should understand the performance situation from the narrative alone without reading individual findings.
 10. Do NOT repeat findings that the rule-based pattern detectors have already identified. Focus on insights that require understanding call tree relationships, domain context, or source code semantics.
-11. If \`diagnostics.coldCacheWarning\` is true:
-    - Your FIRST finding MUST address the cold cache situation.
-    - Do NOT use "critical" severity for code-pattern findings — the profile is not representative of steady-state behavior.
-    - State clearly in the narrative that the developer should re-profile after cache warm-up before acting on any code-level findings.
-12. Ground your evidence in the payload data where possible. When you make inferences beyond the raw data (e.g., suggesting a configuration check, identifying a BC platform pattern, or reasoning about caching semantics), clearly mark these as inferences and explain your reasoning.
 `;
 
 export interface BuildDeepSystemPromptOptions {

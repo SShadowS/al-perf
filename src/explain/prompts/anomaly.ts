@@ -29,6 +29,4 @@ Different activity types have different acceptable performance profiles:
 - **Web Service / API**: Consistent response times matter. Flag high variance and any call exceeding SLA thresholds (typically 5-10 seconds).
 - **Scheduled tasks**: Total duration matters for scheduling windows. Flag if approaching or exceeding the scheduled interval.
 
-### Using the diagnostics Object
-The payload includes a \`diagnostics\` object with pre-computed signals (\`coldCacheWarning\`, \`wallClockGapRatio\`, \`transactionCount\`, \`tableAccessMap\`, \`healthScoreNote\`, \`scaleNote\`). Examine these signals and incorporate any relevant ones into your analysis. Note: core BC tables (Sales Line, Sales Header, Purchase Line, etc.) are *expected* to have many callers — a high caller count alone is not a problem.
 `;
