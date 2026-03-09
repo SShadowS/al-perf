@@ -40,10 +40,9 @@ You MUST respond with valid JSON matching this schema exactly. Do not include an
 10. Do NOT repeat findings that the rule-based pattern detectors have already identified. Focus on insights that require understanding call tree relationships, domain context, or source code semantics.
 11. If \`diagnostics.coldCacheWarning\` is true:
     - Your FIRST finding MUST address the cold cache situation.
-    - Limit total findings to 3-5. Most apparent "issues" are artifacts of the cold cache, not real code problems.
     - Do NOT use "critical" severity for code-pattern findings — the profile is not representative of steady-state behavior.
     - State clearly in the narrative that the developer should re-profile after cache warm-up before acting on any code-level findings.
-12. Every number you cite (hit counts, call site counts, timing values) MUST be directly traceable to the payload data. Do not estimate, extrapolate, or round up aggressively. If you cannot point to a specific field in the data that supports a number, do not use it.
+12. Ground your evidence in the payload data where possible. When you make inferences beyond the raw data (e.g., suggesting a configuration check, identifying a BC platform pattern, or reasoning about caching semantics), clearly mark these as inferences and explain your reasoning.
 `;
 
 export interface BuildDeepSystemPromptOptions {

@@ -30,16 +30,5 @@ Different activity types have different acceptable performance profiles:
 - **Scheduled tasks**: Total duration matters for scheduling windows. Flag if approaching or exceeding the scheduled interval.
 
 ### Using the diagnostics Object
-The payload includes a \`diagnostics\` object with pre-computed signals. Use these to guide your analysis:
-- **\`coldCacheWarning: true\`**: This profile is dominated by metadata cache loading. Make this the PRIMARY finding. State clearly that this is a transient infrastructure issue, not a code problem. Do not recommend code-level optimizations for metadata loading. The developer should re-profile after the cache is warm.
-- **\`wallClockGapRatio > 0.5\`**: Large gap between wall-clock and CPU time suggests SQL Server wait time, network I/O, or lock contention. Read \`wallClockGapNote\` and incorporate it. Suggest SQL Server Extended Events or wait statistics as a next diagnostic step.
-- **\`transactionCount > 20\`**: High transaction density may indicate excessive implicit commit boundaries. Consider whether operations could be batched into fewer transactions.
-- **\`tableAccessMap\`**: Lists tables accessed by multiple distinct code paths. Use this to identify redundant data access — if the same table is read through 3+ different call paths, it's likely a consolidation opportunity. **Important**: Core BC tables like Sales Line, Sales Header, Purchase Line, Purchase Header, Item, and Customer are *expected* to have many callers during normal document operations. A high caller count on these tables is NOT itself a problem — it reflects BC's architecture. Only flag redundant access when the same data is being read repeatedly with no caching or parameter passing between callers, and only when the cumulative cost is significant relative to the profile's total time.
-- **\`healthScoreNote\`**: If present, include this interpretation of the health score in your narrative to avoid misinterpretation.
-
-### Scale-Awareness
-Before assigning severity, consider the profile's total active time (\`meta.totalSelfTime\` minus \`meta.idleSelfTime\`):
-- **Under 2 seconds active time**: This is a fast operation. Findings should rarely be "critical" unless a single method dominates. Patterns that add 50ms to a 500ms operation are "info", not "warning".
-- **2-30 seconds**: Normal interactive range. Use standard severity calibration.
-- **Over 30 seconds**: Likely a batch/posting operation or a genuine problem. Critical findings are appropriate.
+The payload includes a \`diagnostics\` object with pre-computed signals (\`coldCacheWarning\`, \`wallClockGapRatio\`, \`transactionCount\`, \`tableAccessMap\`, \`healthScoreNote\`, \`scaleNote\`). Examine these signals and incorporate any relevant ones into your analysis. Note: core BC tables (Sales Line, Sales Header, Purchase Line, etc.) are *expected* to have many callers — a high caller count alone is not a problem.
 `;
