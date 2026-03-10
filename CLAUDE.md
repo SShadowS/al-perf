@@ -33,6 +33,8 @@ bun run web          # start the web server (port 3010)
 bun run src/cli/index.ts analyze profile.alcpuprofile --explain --deep  # deep AI analysis
 ```
 
+**Environment**: `ANTHROPIC_API_KEY` required for `--explain` and `--deep` features, and for web server AI analysis.
+
 ## Restarting the Web Server
 
 When asked to restart the server, first check if it was started as a background task in this session and use `TaskStop` to stop it. Only fall back to `netstat`/`taskkill` if there is no background task to stop.
@@ -41,14 +43,18 @@ When asked to restart the server, first check if it was started as a background 
 
 ```
 src/
-  core/       — Profile parsing and analysis (pure functions, no I/O)
-  source/     — tree-sitter-al integration for AL source code analysis
   cli/        — CLI commands (analyze, compare, hotspots, explain, source-map, analyze-source, mcp, gate, history, batch)
   cli/formatters/ — Output formatters (terminal, json, markdown, html) with section registry enforcement
+  config.ts   — Shared configuration constants
+  core/       — Profile parsing and analysis (pure functions, no I/O)
+  debug/      — Debug ID tracking and diagnostic output
   explain/    — LLM-powered analysis explanation (Anthropic API)
+  history/    — Performance history storage
   mcp/        — MCP server definition and tool wrappers
   output/     — Canonical output types shared across all interfaces
+  source/     — tree-sitter-al integration for AL source code analysis
   types/      — Shared TypeScript types (profile, source-index, analysis)
+web/        — Web server and UI (port 3010)
 examples/   — Example scripts (performance-review.ts, ci-gate.sh)
 test/       — Test suites + fixtures (bun:test)
 ```
@@ -122,7 +128,7 @@ The MCP server exposes the analyzer as tools for AI agents (e.g., Claude Code).
 }
 ```
 
-**Tools** (9):
+**Tools** (11):
 | Tool | Description |
 |------|-------------|
 | `analyze_profile` | Full analysis — hotspots, patterns, app/object/table breakdowns, summary |
@@ -130,8 +136,10 @@ The MCP server exposes the analyzer as tools for AI agents (e.g., Claude Code).
 | `get_hotspots` | Quick top-N hotspots (skips pattern detection) |
 | `compare_profiles` | Before/after comparison — regressions, improvements, pattern diff |
 | `explain_method` | Deep dive into one method — callers, callees, times |
+| `drilldown_method` | Drill down into a specific method's call tree and timing |
 | `analyze_source` | Static analysis of AL source files (no profile needed) |
 | `gate_check` | CI/CD quality gate — pass/fail verdict against pattern thresholds |
+| `visualize_flamegraph` | Generate flamegraph visualization of profile data |
 | `history_list` | List stored performance history entries |
 | `history_trend` | Show metric trends across stored history |
 
@@ -171,55 +179,13 @@ bun run src/cli/index.ts batch ./scheduled-profiles/ -f json|markdown|html|termi
 
 ### Web API
 
-```
-POST /api/analyze-batch
-Content-Type: multipart/form-data
-
-Fields:
-  manifest    (optional)  JSON string with ProfileMetadata[]
-  profiles[]  (required)  One or more .alcpuprofile files
-  source      (optional)  .zip of AL source files
-
-Query params:
-  ?format=html|json       (default: json)
-```
-
-The web UI auto-detects batch uploads when multiple profiles are dropped and renders the batch result view with drill-down.
+`POST /api/analyze-batch` — multipart/form-data with `profiles[]` (required), `manifest` (optional JSON), `source` (optional .zip). Query: `?format=html|json`. The web UI auto-detects batch uploads.
 
 ## Library API
 
-```typescript
-import { analyzeProfile, analyzeBatch, compareProfiles, createMcpServer } from "al-perf";
+Exported from `al-perf`: `analyzeProfile`, `analyzeBatch`, `compareProfiles`, `createMcpServer`, `SourceIndexCache`. See `src/index.ts` for full exports.
 
-// Analyze a single profile
-const result = await analyzeProfile("path/to/profile.alcpuprofile", {
-  top: 10,
-  includePatterns: true,
-  sourcePath: "path/to/al-source",
-});
-
-// Each pattern has an actionable suggestion
-for (const p of result.patterns) {
-  console.log(`[${p.severity}] ${p.title}: ${p.suggestion}`);
-}
-
-// Batch analysis of multiple profiles
-const batchResult = await analyzeBatch(
-  ["profile1.alcpuprofile", "profile2.alcpuprofile"],
-  { sourcePath: "path/to/al-source", top: 10 }
-);
-console.log(`Analyzed ${batchResult.meta.profileCount} profiles`);
-```
-
-## Source Index Caching
-
-When using `--source` with `--cache`, the source index is cached to `.al-profile-cache/` inside the source directory. The cache is hash-invalidated when any `.al` file changes (based on file paths + mtimes).
-
-```typescript
-import { SourceIndexCache } from "al-perf";
-const cache = new SourceIndexCache(".cache");
-const index = await cache.getOrBuild("path/to/al-source");
-```
+Source index caching: `--source` with `--cache` stores to `.al-profile-cache/` inside the source directory, hash-invalidated on `.al` file changes.
 
 ## AI-Powered Explanation
 
