@@ -2,8 +2,6 @@
 
 AL CPU Profile Analyzer — a CLI tool and MCP server for analyzing Business Central `.alcpuprofile` files. Combines profile data with source code analysis via `tree-sitter-al` to produce actionable performance insights for both humans and AI agents.
 
-The design plan is in `Initial Plan.md` at the repo root.
-
 ## Related Repositories
 
 - **al-perf-bc**: `U:\Git\al-perf-bc\` — Business Central companion app (AL extension). Adds an "Analyze" action to the Performance Profiler page that sends the profile to the al-perf web service for AI-powered analysis.

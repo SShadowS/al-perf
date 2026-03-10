@@ -14,4 +14,8 @@ CLAUDE.md
 .worktrees/
 docs/roadmap.md
 presentation.md
+Optimize.md
+Initial Plan.md
+.playwright-mcp/
+.serena/
 /debug/
