@@ -9,8 +9,11 @@ import { aggregateByMethod } from "../core/aggregator.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
 import { findCompanionZip, extractCompanionZip } from "../source/zip-extractor.js";
+import { deepAnalysis } from "../explain/deep-analyzer.js";
 import { HistoryStore } from "../history/store.js";
 import type { AnalysisResult } from "../output/types.js";
+import type { ProcessedProfile } from "../types/processed.js";
+import type { SourceIndex } from "../types/source-index.js";
 import type { ProfileMetadata } from "../types/batch.js";
 import pkg from "../../package.json";
 
@@ -53,12 +56,32 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
           }
         }
 
+        let processedProfile: ProcessedProfile | undefined;
+        let sourceIndex: SourceIndex | undefined;
+
         const result = await analyzeProfile(profilePath, {
           top,
           appFilter: appFilter?.split(",").map((s) => s.trim()),
           includePatterns: true,
           sourcePath: resolvedSourcePath,
+          onProcessedProfile: (p) => { processedProfile = p; },
+          onSourceIndex: (idx) => { sourceIndex = idx; },
         });
+
+        // Deep AI analysis (when API key is available)
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (apiKey && processedProfile) {
+          try {
+            const deepResult = await deepAnalysis(result, processedProfile, {
+              apiKey,
+              sourceIndex,
+            });
+            result.aiFindings = deepResult.aiFindings;
+            result.aiNarrative = deepResult.aiNarrative;
+          } catch {
+            // Non-fatal — analysis still returns without deep findings
+          }
+        }
 
         lastAnalysis = result;
         // Safe to cleanup before return: result is fully materialized in memory (no lazy refs to temp dir)

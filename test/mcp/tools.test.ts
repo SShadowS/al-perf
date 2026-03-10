@@ -25,25 +25,25 @@ describe("MCP Tool: analyze_profile", () => {
     const result = await client.callTool({
       name: "analyze_profile",
       arguments: { profilePath: "test/fixtures/sampling-minimal.alcpuprofile" },
-    });
+    }, undefined, { timeout: 120000 });
     expect(result.content).toBeDefined();
     const text = (result.content as Array<{ type: string; text: string }>)[0].text;
     const parsed = JSON.parse(text);
     expect(parsed.meta.profileType).toBe("sampling");
     expect(parsed.hotspots).toBeDefined();
     expect(parsed.patterns).toBeDefined();
-  });
+  }, 120000);
 
   test("respects top parameter", async () => {
     const { client } = await createTestClient();
     const result = await client.callTool({
       name: "analyze_profile",
       arguments: { profilePath: "test/fixtures/sampling-minimal.alcpuprofile", top: 2 },
-    });
+    }, undefined, { timeout: 120000 });
     const text = (result.content as Array<{ type: string; text: string }>)[0].text;
     const parsed = JSON.parse(text);
     expect(parsed.hotspots.length).toBeLessThanOrEqual(2);
-  });
+  }, 120000);
 
   test("returns error for non-existent file", async () => {
     const { client } = await createTestClient();
@@ -219,7 +219,7 @@ describe("MCP Resources", () => {
     await client.callTool({
       name: "analyze_profile",
       arguments: { profilePath: "test/fixtures/sampling-minimal.alcpuprofile" },
-    });
+    }, undefined, { timeout: 120000 });
 
     const result = await client.readResource({
       uri: "resource://al-profiler/last-analysis",
@@ -228,7 +228,7 @@ describe("MCP Resources", () => {
     const parsed = JSON.parse(text);
     expect(parsed).not.toBeNull();
     expect(parsed.meta.profileType).toBe("sampling");
-  });
+  }, 120000);
 });
 
 describe("MCP Tool: visualize_flamegraph", () => {
