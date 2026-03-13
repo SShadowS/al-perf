@@ -103,12 +103,18 @@ main {
     position: static;
     width: 100%;
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
     overflow-x: auto;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 1rem;
+  }
+  #sidebar .consent-card,
+  #sidebar .consent-thanks {
+    width: 100%;
+    margin-bottom: 0.5rem;
   }
   .sidebar-title {
     display: none;
@@ -529,39 +535,47 @@ tr:nth-child(even) {
   z-index: 1000;
 }
 
-/* Consent card */
+/* Consent card (in sidebar) */
 .consent-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 16px 20px;
-  margin: 16px 0;
+  padding: 12px;
+  margin-bottom: 1rem;
 }
 
-.consent-card h3 {
-  margin: 0 0 8px 0;
-  font-size: 16px;
+.consent-card-title {
+  margin: 0 0 6px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .consent-card p {
-  margin: 0 0 12px 0;
+  margin: 0 0 10px 0;
   opacity: 0.8;
-  font-size: 14px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .consent-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
-/* Consent thanks badge */
+.btn-sm {
+  padding: 0.3rem 0.6rem;
+  font-size: 12px;
+}
+
+/* Consent thanks badge (in sidebar) */
 .consent-thanks {
   background: #1b5e20;
   color: #a5d6a7;
   border-radius: 8px;
-  padding: 12px 20px;
-  margin: 16px 0;
-  font-size: 14px;
+  padding: 8px 12px;
+  margin-bottom: 1rem;
+  font-size: 12px;
 }
 
 /* Buttons */
