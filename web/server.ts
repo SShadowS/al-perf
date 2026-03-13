@@ -91,54 +91,54 @@ async function serveStatic(pathname: string): Promise<Response | null> {
   return null;
 }
 
-/**
- * Handle POST /api/analyze — accepts multipart/form-data with:
- *   - profile (required): .alcpuprofile file
- *   - source (optional): .zip of AL source files
- *
- * Returns AnalysisResult as JSON.
- */
-async function handleAnalyze(req: Request): Promise<Response> {
-  const contentType = req.headers.get("content-type") || "";
-  if (!contentType.startsWith("multipart/form-data")) {
-    return Response.json(
-      { error: "Content-Type must be multipart/form-data" },
-      { status: 400 },
-    );
-  }
+// ---------------------------------------------------------------------------
+// Shared analysis logic
+// ---------------------------------------------------------------------------
 
+type ProgressCallback = (step: string, message: string) => void;
+const noop: ProgressCallback = () => {};
+
+interface BufferedFile {
+  name: string;
+  data: Uint8Array;
+}
+
+interface AnalyzeInput {
+  profile: BufferedFile;
+  source?: BufferedFile;
+}
+
+interface AnalyzeOutput {
+  result: Record<string, unknown>;
+  debugToken: string;
+}
+
+/**
+ * Core single-profile analysis pipeline. Used by both streaming and sync handlers.
+ * Accepts pre-buffered file data so it is safe to call from within a ReadableStream.
+ */
+async function runAnalysis(
+  input: AnalyzeInput,
+  onProgress: ProgressCallback = noop,
+): Promise<AnalyzeOutput> {
+  const analyzeStart = Date.now();
   let tempDir: string | undefined;
   let sourceCleanup: (() => Promise<void>) | undefined;
 
   try {
-    const analyzeStart = Date.now();
-    const formData = await req.formData();
-    const profileFile = formData.get("profile");
-
-    if (!profileFile || !(profileFile instanceof File)) {
-      return Response.json(
-        { error: "Missing required 'profile' field (must be a file)" },
-        { status: 400 },
-      );
-    }
-
-    // Buffer uploaded file bytes before they get cleaned up
-    const profileBytes = new Uint8Array(await profileFile.arrayBuffer());
-
-    // Write uploads to a per-request temp directory
+    const profileBytes = input.profile.data;
     tempDir = await makeTempDir();
 
-    const safeProfileName = basename(profileFile.name || "profile.alcpuprofile");
+    const safeProfileName = basename(input.profile.name || "profile.alcpuprofile");
     const profilePath = join(tempDir, safeProfileName);
     await Bun.write(profilePath, profileBytes);
 
     // Handle optional source zip
     let sourcePath: string | undefined;
     let sourceZipBytes: Uint8Array | undefined;
-    const sourceFile = formData.get("source");
-    if (sourceFile && sourceFile instanceof File) {
-      sourceZipBytes = new Uint8Array(await sourceFile.arrayBuffer());
-      const safeZipName = basename(sourceFile.name || "source.zip");
+    if (input.source) {
+      sourceZipBytes = input.source.data;
+      const safeZipName = basename(input.source.name || "source.zip");
       const zipPath = join(tempDir, safeZipName);
       await Bun.write(zipPath, sourceZipBytes);
       const extracted = await extractCompanionZip(zipPath);
@@ -147,6 +147,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
     }
 
     // Run analysis
+    onProgress("analyzing", "Analyzing profile...");
     let processedProfile: ProcessedProfile | undefined;
     let sourceIndex: import("../src/types/source-index.js").SourceIndex | undefined;
     const result = await analyzeProfile(profilePath, {
@@ -157,13 +158,14 @@ async function handleAnalyze(req: Request): Promise<Response> {
       onSourceIndex: (idx) => { sourceIndex = idx; },
     });
 
-    // Always run AI explanation if API key is available
+    // AI explanation and deep analysis
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiCosts: ApiCallCost[] = [];
     let explainResult: ExplainResult | undefined;
     let deepResult: DeepExplainResult | undefined;
 
     if (apiKey) {
+      onProgress("explaining", "Generating AI explanation...");
       try {
         explainResult = await explainAnalysis(result, { apiKey, model: config.defaultModel });
         result.explanation = explainResult.text;
@@ -174,6 +176,7 @@ async function handleAnalyze(req: Request): Promise<Response> {
 
       // Deep AI analysis (always attempted in web UI)
       if (processedProfile) {
+        onProgress("deep-analysis", "Running deep AI analysis...");
         try {
           deepResult = await deepAnalysis(result, processedProfile, { apiKey, model: config.defaultModel, sourceIndex });
           result.aiFindings = deepResult.aiFindings;
@@ -225,90 +228,44 @@ async function handleAnalyze(req: Request): Promise<Response> {
       debugStore.add(capture);
     }
 
-    // Record successful analysis for stats
     recordAnalysis().catch(() => {});
 
-    // Branch on requested output format
-    const url = new URL(req.url);
-    const format = url.searchParams.get("format");
-
-    if (format === "html") {
-      const html = formatAnalysisHtml(result);
-      return new Response(html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
-    }
-    if (format && format !== "json") {
-      return Response.json(
-        { error: `Unsupported format '${format}'. Supported: json, html` },
-        { status: 400 },
-      );
-    }
-    return Response.json({ ...result, debugToken: capture.token });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[analyze error] ${message}`);
-    if (err instanceof Error && err.stack) console.error(err.stack);
-    return Response.json({ error: "Analysis failed. Please check the uploaded file." }, { status: 500 });
+    return { result, debugToken: capture.token };
   } finally {
-    // Clean up source extraction temp dir
     if (sourceCleanup) {
-      try {
-        await sourceCleanup();
-      } catch {
-        // best-effort cleanup
-      }
+      try { await sourceCleanup(); } catch { /* best-effort cleanup */ }
     }
-    // Clean up the per-request temp dir
     if (tempDir) {
-      try {
-        await rm(tempDir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup
-      }
+      try { await rm(tempDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
     }
   }
 }
 
-/**
- * Handle POST /api/analyze-batch — accepts multipart/form-data with:
- *   - profiles[] (required): multiple .alcpuprofile files
- *   - manifest (optional): JSON text with ProfileMetadata[]
- *   - source (optional): .zip of AL source files
- *
- * Returns BatchAnalysisResult as JSON or HTML.
- */
-async function handleAnalyzeBatch(req: Request): Promise<Response> {
-  const contentType = req.headers.get("content-type") || "";
-  if (!contentType.startsWith("multipart/form-data")) {
-    return Response.json(
-      { error: "Content-Type must be multipart/form-data" },
-      { status: 400 },
-    );
-  }
+interface BatchInput {
+  profiles: BufferedFile[];
+  source?: BufferedFile;
+  manifestText?: string;
+}
 
+interface BatchOutput {
+  result: Record<string, unknown>;
+  debugToken: string;
+}
+
+/**
+ * Core batch analysis pipeline. Used by both streaming and sync handlers.
+ * Accepts pre-buffered file data so it is safe to call from within a ReadableStream.
+ */
+async function runBatchAnalysis(
+  input: BatchInput,
+  onProgress: ProgressCallback = noop,
+): Promise<BatchOutput> {
+  const batchStart = Date.now();
   let tempDir: string | undefined;
   let sourceCleanup: (() => Promise<void>) | undefined;
 
   try {
-    const batchStart = Date.now();
-    const formData = await req.formData();
-    const profileFiles = formData.getAll("profiles[]");
-
-    if (!profileFiles.length || !profileFiles.every((f) => f instanceof File)) {
-      return Response.json(
-        { error: "Missing required 'profiles[]' field (must be one or more files)" },
-        { status: 400 },
-      );
-    }
-
-    // Buffer all profile files as Uint8Array before cleanup
-    const bufferedProfiles: Array<{ name: string; data: Uint8Array }> = [];
-    for (let i = 0; i < profileFiles.length; i++) {
-      const file = profileFiles[i] as File;
-      const safeName = `${i}-${basename(file.name || `profile-${i}.alcpuprofile`)}`;
-      bufferedProfiles.push({ name: safeName, data: new Uint8Array(await file.arrayBuffer()) });
-    }
+    const bufferedProfiles = input.profiles;
 
     // Write uploads to a per-request temp directory
     tempDir = await makeTempDir();
@@ -322,13 +279,8 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
 
     // Parse optional manifest
     let metadata: ProfileMetadata[] | undefined;
-    let manifestText: string | undefined;
-    const manifestField = formData.get("manifest");
-    if (manifestField) {
-      manifestText =
-        manifestField instanceof File
-          ? await manifestField.text()
-          : String(manifestField);
+    const manifestText = input.manifestText;
+    if (manifestText) {
       metadata = JSON.parse(manifestText) as ProfileMetadata[];
     }
 
@@ -349,10 +301,9 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
     // Handle optional source zip
     let sourcePath: string | undefined;
     let sourceZipBytes: Uint8Array | undefined;
-    const sourceFile = formData.get("source");
-    if (sourceFile && sourceFile instanceof File) {
-      sourceZipBytes = new Uint8Array(await sourceFile.arrayBuffer());
-      const safeZipName = basename(sourceFile.name || "source.zip");
+    if (input.source) {
+      sourceZipBytes = input.source.data;
+      const safeZipName = basename(input.source.name || "source.zip");
       const zipPath = join(tempDir, safeZipName);
       await Bun.write(zipPath, sourceZipBytes);
       const extracted = await extractCompanionZip(zipPath);
@@ -361,10 +312,8 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
     }
 
     // Run batch analysis
-    const result = await analyzeBatch(profilePaths, {
-      metadata,
-      sourcePath,
-    });
+    onProgress("analyzing", `Analyzing ${profilePaths.length} profiles...`);
+    const result = await analyzeBatch(profilePaths, { metadata, sourcePath });
 
     // Run AI explanation if API key is available
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -372,6 +321,7 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
     let batchExplainResult: BatchExplainResult | undefined;
 
     if (apiKey) {
+      onProgress("explaining", "Generating AI explanation...");
       try {
         batchExplainResult = await explainBatchAnalysis(result, { apiKey, model: config.defaultModel });
         result.explanation = batchExplainResult.text;
@@ -417,15 +367,131 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
       debugStore.add(capture);
     }
 
-    // Record successful analysis for stats
     recordAnalysis().catch(() => {});
 
-    // Branch on requested output format
-    const url = new URL(req.url);
-    const format = url.searchParams.get("format");
+    return { result, debugToken: capture.token };
+  } finally {
+    if (sourceCleanup) {
+      try { await sourceCleanup(); } catch { /* best-effort cleanup */ }
+    }
+    if (tempDir) {
+      try { await rm(tempDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SSE streaming helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap an async analysis function as an SSE stream with keepalive.
+ */
+function streamResponse(
+  run: (sendProgress: ProgressCallback) => Promise<Record<string, unknown>>,
+  errorLabel: string,
+): Response {
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      let closed = false;
+      function sendEvent(event: string, data: unknown) {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { closed = true; }
+      }
+      function sendKeepAlive() {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { closed = true; }
+      }
+      // Send keepalive every 5s to prevent Bun's idle timeout from closing the connection
+      const keepalive = setInterval(sendKeepAlive, 5_000);
+
+      try {
+        const data = await run((step, message) => sendEvent("progress", { step, message }));
+        sendEvent("done", data);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[${errorLabel}] ${message}`);
+        if (err instanceof Error && err.stack) console.error(err.stack);
+        sendEvent("error", { error: `${errorLabel}. Please check the uploaded file(s).` });
+      } finally {
+        clearInterval(keepalive);
+        if (!closed) {
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle POST /api/analyze — accepts multipart/form-data with:
+ *   - profile (required): .alcpuprofile file
+ *   - source (optional): .zip of AL source files
+ *
+ * Supports ?stream=1 for SSE streaming (survives Cloudflare 100s timeout).
+ */
+async function handleAnalyze(req: Request): Promise<Response> {
+  const contentType = req.headers.get("content-type") || "";
+  if (!contentType.startsWith("multipart/form-data")) {
+    return Response.json(
+      { error: "Content-Type must be multipart/form-data" },
+      { status: 400 },
+    );
+  }
+
+  const url = new URL(req.url);
+  const wantsStream = url.searchParams.get("stream") === "1";
+  const format = url.searchParams.get("format");
+
+  const formData = await req.formData();
+  const profileFile = formData.get("profile");
+
+  if (!profileFile || !(profileFile instanceof File)) {
+    return Response.json(
+      { error: "Missing required 'profile' field (must be a file)" },
+      { status: 400 },
+    );
+  }
+
+  // Buffer file data eagerly — File objects from formData may be invalidated
+  // after the handler returns (before the SSE stream callback runs).
+  const sourceFile = formData.get("source");
+  const input: AnalyzeInput = {
+    profile: { name: profileFile.name, data: new Uint8Array(await profileFile.arrayBuffer()) },
+    source: sourceFile instanceof File
+      ? { name: sourceFile.name, data: new Uint8Array(await sourceFile.arrayBuffer()) }
+      : undefined,
+  };
+
+  if (wantsStream) {
+    return streamResponse(
+      async (onProgress) => {
+        const { result, debugToken } = await runAnalysis(input, onProgress);
+        return { ...result, debugToken };
+      },
+      "Analysis failed",
+    );
+  }
+
+  // Non-streaming path
+  try {
+    const { result, debugToken } = await runAnalysis(input);
 
     if (format === "html") {
-      const html = formatBatchHtml(result);
+      const html = formatAnalysisHtml(result as Parameters<typeof formatAnalysisHtml>[0]);
       return new Response(html, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -436,29 +502,104 @@ async function handleAnalyzeBatch(req: Request): Promise<Response> {
         { status: 400 },
       );
     }
-    return Response.json({ ...result, debugToken: capture.token });
+    return Response.json({ ...result, debugToken });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[analyze error] ${message}`);
+    if (err instanceof Error && err.stack) console.error(err.stack);
+    return Response.json({ error: "Analysis failed. Please check the uploaded file." }, { status: 500 });
+  }
+}
+
+/**
+ * Handle POST /api/analyze-batch — accepts multipart/form-data with:
+ *   - profiles[] (required): multiple .alcpuprofile files
+ *   - manifest (optional): JSON text with ProfileMetadata[]
+ *   - source (optional): .zip of AL source files
+ *
+ * Supports ?stream=1 for SSE streaming (survives Cloudflare 100s timeout).
+ */
+async function handleAnalyzeBatch(req: Request): Promise<Response> {
+  const contentType = req.headers.get("content-type") || "";
+  if (!contentType.startsWith("multipart/form-data")) {
+    return Response.json(
+      { error: "Content-Type must be multipart/form-data" },
+      { status: 400 },
+    );
+  }
+
+  const url = new URL(req.url);
+  const wantsStream = url.searchParams.get("stream") === "1";
+  const format = url.searchParams.get("format");
+
+  const formData = await req.formData();
+  const profileFiles = formData.getAll("profiles[]");
+
+  if (!profileFiles.length || !profileFiles.every((f) => f instanceof File)) {
+    return Response.json(
+      { error: "Missing required 'profiles[]' field (must be one or more files)" },
+      { status: 400 },
+    );
+  }
+
+  // Buffer all file data eagerly — File objects from formData may be invalidated
+  // after the handler returns (before the SSE stream callback runs).
+  const bufferedProfiles: BufferedFile[] = [];
+  for (let i = 0; i < profileFiles.length; i++) {
+    const file = profileFiles[i] as File;
+    const safeName = `${i}-${basename(file.name || `profile-${i}.alcpuprofile`)}`;
+    bufferedProfiles.push({ name: safeName, data: new Uint8Array(await file.arrayBuffer()) });
+  }
+
+  const sourceFile = formData.get("source");
+  const manifestField = formData.get("manifest");
+  let manifestText: string | undefined;
+  if (manifestField) {
+    manifestText = manifestField instanceof File
+      ? await manifestField.text()
+      : String(manifestField);
+  }
+
+  const input: BatchInput = {
+    profiles: bufferedProfiles,
+    source: sourceFile instanceof File
+      ? { name: sourceFile.name, data: new Uint8Array(await sourceFile.arrayBuffer()) }
+      : undefined,
+    manifestText,
+  };
+
+  if (wantsStream) {
+    return streamResponse(
+      async (onProgress) => {
+        const { result, debugToken } = await runBatchAnalysis(input, onProgress);
+        return { ...result, debugToken };
+      },
+      "Batch analysis failed",
+    );
+  }
+
+  // Non-streaming path
+  try {
+    const { result, debugToken } = await runBatchAnalysis(input);
+
+    if (format === "html") {
+      const html = formatBatchHtml(result as Parameters<typeof formatBatchHtml>[0]);
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    if (format && format !== "json") {
+      return Response.json(
+        { error: `Unsupported format '${format}'. Supported: json, html` },
+        { status: 400 },
+      );
+    }
+    return Response.json({ ...result, debugToken });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[analyze-batch error] ${message}`);
     if (err instanceof Error && err.stack) console.error(err.stack);
     return Response.json({ error: "Batch analysis failed. Please check the uploaded files." }, { status: 500 });
-  } finally {
-    // Clean up source extraction temp dir
-    if (sourceCleanup) {
-      try {
-        await sourceCleanup();
-      } catch {
-        // best-effort cleanup
-      }
-    }
-    // Clean up the per-request temp dir
-    if (tempDir) {
-      try {
-        await rm(tempDir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup
-      }
-    }
   }
 }
 
@@ -478,6 +619,7 @@ export const server = Bun.serve({
   hostname: "0.0.0.0",
   port: PORT,
   maxRequestBodySize: MAX_BODY_SIZE,
+  idleTimeout: 255, // max Bun allows; SSE streams need long-lived connections
   async fetch(req) {
     const start = Date.now();
     const ip = server.requestIP(req)?.address ?? "unknown";

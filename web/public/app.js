@@ -33,6 +33,64 @@ function showConsentIfApplicable(data) {
 }
 
 /**
+ * POST with SSE streaming. Sends formData, reads SSE events from the response.
+ * Calls onProgress(step, message) for progress events.
+ * Returns the parsed data from the "done" event.
+ * Throws on error events or network failures.
+ */
+async function fetchWithStream(url, formData, onProgress) {
+  const response = await fetch(url, { method: "POST", body: formData });
+
+  if (!response.ok) {
+    let message = "Request failed";
+    try {
+      const errorData = await response.json();
+      if (errorData.error) message = errorData.error;
+    } catch { /* ignore */ }
+    throw new Error(message);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events from buffer
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop(); // keep incomplete chunk
+
+    for (const part of parts) {
+      if (!part.trim() || part.startsWith(":")) continue; // skip keepalives/comments
+
+      let eventType = "message";
+      let data = "";
+      for (const line of part.split("\n")) {
+        if (line.startsWith("event: ")) eventType = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+
+      if (eventType === "progress") {
+        const parsed = JSON.parse(data);
+        if (onProgress) onProgress(parsed.step, parsed.message);
+      } else if (eventType === "done") {
+        result = JSON.parse(data);
+      } else if (eventType === "error") {
+        const parsed = JSON.parse(data);
+        throw new Error(parsed.error || "Analysis failed");
+      }
+    }
+  }
+
+  if (!result) throw new Error("Stream ended without result");
+  return result;
+}
+
+/**
  * Switch between views: dropzone, loading, results, error.
  * Hides all views and shows only the specified one.
  * Also toggles the "New Analysis" button visibility.
@@ -1076,28 +1134,13 @@ async function handleSingleUpload(profileFile, sourceFile) {
     timerEl.textContent = elapsed + "s elapsed";
   }, 1000);
 
+  const statusEl = document.getElementById("loading-status");
+
   try {
-    const response = await fetch("/api/analyze", {
-      method: "POST",
-      body: formData,
+    const data = await fetchWithStream("/api/analyze?stream=1", formData, (step, message) => {
+      if (statusEl) statusEl.textContent = message;
     });
 
-    if (!response.ok) {
-      let message = "Analysis failed";
-      try {
-        const errorData = await response.json();
-        if (errorData.error) {
-          message = errorData.error;
-        }
-      } catch {
-        // Could not parse error JSON — use generic message
-      }
-      document.getElementById("error-message").textContent = message;
-      showView("error");
-      return;
-    }
-
-    const data = await response.json();
     renderResults(data);
     showConsentIfApplicable(data);
     showView("results");
@@ -1107,6 +1150,7 @@ async function handleSingleUpload(profileFile, sourceFile) {
     showView("error");
   } finally {
     clearInterval(timerInterval);
+    if (statusEl) statusEl.textContent = "Analyzing profile...";
   }
 }
 
@@ -1131,28 +1175,13 @@ async function handleBatchUpload(profileFiles, sourceFile) {
     formData.append("source", sourceFile);
   }
 
+  const statusEl = document.getElementById("loading-status");
+
   try {
-    const response = await fetch("/api/analyze-batch", {
-      method: "POST",
-      body: formData,
+    const data = await fetchWithStream("/api/analyze-batch?stream=1", formData, (step, message) => {
+      if (statusEl) statusEl.textContent = message;
     });
 
-    if (!response.ok) {
-      let message = "Batch analysis failed";
-      try {
-        const errorData = await response.json();
-        if (errorData.error) {
-          message = errorData.error;
-        }
-      } catch {
-        // Could not parse error JSON — use generic message
-      }
-      document.getElementById("error-message").textContent = message;
-      showView("error");
-      return;
-    }
-
-    const data = await response.json();
     renderBatchResults(data);
     showConsentIfApplicable(data);
     showView("results");
@@ -1162,6 +1191,7 @@ async function handleBatchUpload(profileFiles, sourceFile) {
     showView("error");
   } finally {
     clearInterval(timerInterval);
+    if (statusEl) statusEl.textContent = "Analyzing profile...";
   }
 }
 

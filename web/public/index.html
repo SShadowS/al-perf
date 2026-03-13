@@ -32,14 +32,14 @@
       </div>
       <div class="primary-text">Drop .alcpuprofile file(s) here</div>
       <div class="secondary-text">Drop multiple profiles for batch analysis. Add a companion .zip for source-correlated insights.</div>
-      <div class="version-tag">v2.0.1</div>
+      <div class="version-tag">v2.1.0</div>
       <input type="file" id="file-input" multiple hidden accept=".alcpuprofile,.zip">
     </div>
 
     <!-- Loading State -->
     <div id="loading" class="hidden">
       <div class="spinner"></div>
-      <div>Analyzing profile...</div>
+      <div id="loading-status">Analyzing profile...</div>
       <div class="secondary-text" style="margin-top: 0.5rem">Deep analysis takes around 2 minutes, occasionally longer for larger profiles</div>
       <div id="elapsed-timer"></div>
     </div>
