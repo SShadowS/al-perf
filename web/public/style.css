@@ -185,6 +185,13 @@ main {
   margin-top: 0.5rem;
 }
 
+.version-tag {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
 /* Stats line */
 #stats {
   text-align: center;
