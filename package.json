@@ -1,6 +1,6 @@
 {
   "name": "al-perf",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "CLI tool and MCP server for analyzing Business Central .alcpuprofile files",
   "type": "module",
   "main": "src/index.ts",
