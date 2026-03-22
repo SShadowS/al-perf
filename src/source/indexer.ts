@@ -649,21 +649,23 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
               }
             }
           }
-        } else if (child.type === "table_relation_property") {
-          // Extract target table from table_relation_expression -> simple_table_relation
-          for (const relChild of child.namedChildren) {
-            if (relChild.type === "table_relation_expression") {
-              for (const expr of relChild.namedChildren) {
-                if (expr.type === "simple_table_relation") {
-                  const tableRef = expr.namedChildren.find(c =>
-                    c.type === "identifier" || c.type === "quoted_identifier"
-                  );
-                  if (tableRef) {
-                    tableRelationTarget = stripQuotes(tableRef.text);
-                  }
-                }
+        } else if (isPropertyNamed(child, "TableRelation")) {
+          const value = child.childForFieldName("value");
+          if (value) {
+            function findTableRef(n: SyntaxNode): string | undefined {
+              if (n.type === "simple_table_relation") {
+                const ref = n.namedChildren.find(c =>
+                  c.type === "identifier" || c.type === "quoted_identifier"
+                );
+                return ref ? stripQuotes(ref.text) : undefined;
               }
+              for (const ch of n.namedChildren) {
+                const found = findTableRef(ch);
+                if (found) return found;
+              }
+              return undefined;
             }
+            tableRelationTarget = findTableRef(value);
           }
         }
       }
@@ -699,11 +701,8 @@ function extractTableKeys(declNode: SyntaxNode): TableKeyInfo[] {
 
   function walk(node: SyntaxNode) {
     if (node.type === "key_declaration") {
-      const nameNode = node.namedChildren.find(c => c.type === "name");
-      const keyFieldList = node.namedChildren.find(c => c.type === "key_field_list");
-      const clusteredProp = node.namedChildren.find(c => c.type === "clustered_property");
-
-      const name = nameNode ? nameNode.text : "";
+      const name = node.childForFieldName("name")?.text ?? "";
+      const keyFieldList = node.namedChildren.find(c => c.type === "field_list");
       const fields: string[] = [];
       if (keyFieldList) {
         for (const child of keyFieldList.namedChildren) {
@@ -716,18 +715,16 @@ function extractTableKeys(declNode: SyntaxNode): TableKeyInfo[] {
       }
 
       let clustered = false;
-      if (clusteredProp) {
-        const boolNode = clusteredProp.namedChildren.find(c => c.type === "boolean");
-        clustered = boolNode?.text.toLowerCase() === "true";
+      for (const child of node.namedChildren) {
+        if (isPropertyNamed(child, "Clustered")) {
+          const value = child.childForFieldName("value")?.text;
+          clustered = value?.toLowerCase() === "true";
+          break;
+        }
       }
 
       if (name) {
-        keys.push({
-          name,
-          fields,
-          clustered,
-          line: node.startPosition.row + 1,
-        });
+        keys.push({ name, fields, clustered, line: node.startPosition.row + 1 });
       }
       return;
     }
