@@ -603,42 +603,42 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
         } else if (isPropertyNamed(child, "CalcFormula")) {
           const value = child.childForFieldName("value");
           if (value) {
-            for (const formulaChild of value.namedChildren) {
-              if (formulaChild.type === "aggregate_formula") {
-                const funcNode = formulaChild.namedChildren.find(c => c.type === "aggregate_function");
-                const funcName = funcNode?.text?.toLowerCase();
-                if (funcName && funcName in CALC_FORMULA_FUNC_MAP) {
-                  calcFormulaType = CALC_FORMULA_FUNC_MAP[funcName];
-                }
-                for (const refChild of formulaChild.namedChildren) {
-                  if (refChild.type === "calc_field_reference") {
-                    const tableNode = refChild.namedChildren.find(c =>
-                      c.type === "identifier" || c.type === "quoted_identifier"
-                    );
-                    if (tableNode) {
-                      calcFormulaTable = stripQuotes(tableNode.text);
-                    }
+            // In V2, the value field IS the formula node directly (aggregate_formula or lookup_formula)
+            const formulaNode = value.type === "aggregate_formula" || value.type === "lookup_formula"
+              ? value
+              : value.namedChildren.find(c => c.type === "aggregate_formula" || c.type === "lookup_formula");
+            if (formulaNode?.type === "aggregate_formula") {
+              const funcNode = formulaNode.namedChildren.find(c => c.type === "aggregate_function");
+              const funcName = funcNode?.text?.toLowerCase();
+              if (funcName && funcName in CALC_FORMULA_FUNC_MAP) {
+                calcFormulaType = CALC_FORMULA_FUNC_MAP[funcName];
+              }
+              for (const refChild of formulaNode.namedChildren) {
+                if (refChild.type === "calc_field_reference") {
+                  const tableNode = refChild.namedChildren.find(c =>
+                    c.type === "identifier" || c.type === "quoted_identifier"
+                  );
+                  if (tableNode) {
+                    calcFormulaTable = stripQuotes(tableNode.text);
                   }
                 }
-                break;
-              } else if (formulaChild.type === "lookup_formula") {
-                calcFormulaType = "Lookup";
-                for (const refChild of formulaChild.namedChildren) {
-                  if (refChild.type === "calc_field_reference") {
-                    const tableNode = refChild.namedChildren.find(c =>
-                      c.type === "identifier" || c.type === "quoted_identifier"
-                    );
-                    if (tableNode) {
-                      calcFormulaTable = stripQuotes(tableNode.text);
-                    }
-                  } else if (refChild.type === "member_expression") {
-                    const obj = refChild.childForFieldName("object") ?? refChild.namedChildren[0];
-                    if (obj) {
-                      calcFormulaTable = stripQuotes(obj.text);
-                    }
+              }
+            } else if (formulaNode?.type === "lookup_formula") {
+              calcFormulaType = "Lookup";
+              for (const refChild of formulaNode.namedChildren) {
+                if (refChild.type === "calc_field_reference") {
+                  const tableNode = refChild.namedChildren.find(c =>
+                    c.type === "identifier" || c.type === "quoted_identifier"
+                  );
+                  if (tableNode) {
+                    calcFormulaTable = stripQuotes(tableNode.text);
+                  }
+                } else if (refChild.type === "member_expression") {
+                  const obj = refChild.childForFieldName("object") ?? refChild.namedChildren[0];
+                  if (obj) {
+                    calcFormulaTable = stripQuotes(obj.text);
                   }
                 }
-                break;
               }
             }
           }
