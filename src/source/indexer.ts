@@ -231,12 +231,6 @@ function extractObjectName(decl: SyntaxNode): string {
 function extractProcedureName(proc: SyntaxNode): string {
   const nameNode = proc.childForFieldName("name");
   if (nameNode) {
-    // The name field contains a `name` node with an identifier child
-    for (const child of nameNode.namedChildren) {
-      if (child.type === "identifier") {
-        return child.text;
-      }
-    }
     return nameNode.text;
   }
   return "";
@@ -469,16 +463,15 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 
       const nameNode = varDecl.namedChildren.find(c => c.type === "identifier");
       const typeSpecNode = varDecl.namedChildren.find(c => c.type === "type_specification");
-      const tempNode = varDecl.namedChildren.find(c => c.type === "temporary");
 
       if (!nameNode || !typeSpecNode) continue;
 
       const name = nameNode.text;
       const typeStr = typeSpecNode.text;
-      const isTemporary = tempNode !== undefined;
 
       // Check if Record type
       const recordTypeNode = typeSpecNode.namedChildren.find(c => c.type === "record_type");
+      const isTemporary = recordTypeNode?.namedChildren.some(c => c.type === "temporary_keyword") ?? false;
       const isRecord = recordTypeNode !== undefined;
 
       let tableName: string | undefined;
