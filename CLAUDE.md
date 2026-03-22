@@ -13,7 +13,7 @@ AL CPU Profile Analyzer — a CLI tool and MCP server for analyzing Business Cen
 - **Runtime**: Bun
 - **Language**: TypeScript
 - **CLI framework**: `commander`
-- **tree-sitter**: `web-tree-sitter` + `tree-sitter-al.wasm` (WASM for portability)
+- **tree-sitter**: `web-tree-sitter` + `tree-sitter-al.wasm` V2 (WASM for portability, auto-downloaded from GitHub release)
 - **MCP server**: `@modelcontextprotocol/sdk` (stdio transport)
 - **Terminal output**: `chalk` + `cli-table3`
 - **LLM integration**: `@anthropic-ai/sdk` (optional, for `--explain`)
@@ -69,7 +69,8 @@ test/       — Test suites + fixtures (bun:test)
 - Output format (terminal/json/markdown) is a presentation concern, not an analysis concern
 - **Formatter parity**: Enforced at compile time via `SectionRenderers<T>` in `src/output/sections.ts` (single-profile) and `BatchSectionRenderers<T>` in `src/output/batch-sections.ts` (batch). Every formatter must implement a renderer for every section type — TypeScript errors if one is missing. `SECTION_ORDER` / `BATCH_SECTION_ORDER` define the canonical render order.
 - Source correlation is always optional — the tool must work without source files
-- Profile-only pattern detectors work on any `.alcpuprofile`; source-correlated patterns require tree-sitter-al + `.al` files
+- Profile-only pattern detectors work on any `.alcpuprofile`; source-correlated patterns require tree-sitter-al V2 + `.al` files
+- The V2 grammar uses generic `property` nodes with name fields instead of V1's specific nodes (`calc_formula_property`, `table_relation_property`, etc.). See `docs/v2-migration-guide.md` for the full mapping. The `isPropertyNamed()` helper in `indexer.ts` handles these checks.
 - MCP tools are thin wrappers around the same core functions the CLI uses
 - `--format auto` detects TTY vs pipe to choose human vs machine output
 
@@ -101,7 +102,7 @@ type PatternDetector = (profile: ProcessedProfile, sourceIndex?: SourceIndex) =>
 Three categories (18 detectors):
 - **Profile-only** (7): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, recursive-call, event-chain
 - **Source-correlated** (5): calcfields-in-loop (with CalcFormula severity graduation), modify-in-loop, record-op-in-loop, missing-setloadfields, incomplete-setloadfields
-- **Source-only** (6): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, commit-error-in-loop, unindexed-filter
+- **Source-only** (6): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, dangerous-call-in-loop, unindexed-filter
 
 ## Testing Conventions
 
