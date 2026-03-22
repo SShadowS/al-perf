@@ -576,14 +576,13 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
   return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, variables: [], fieldAccesses, nestingDepth };
 }
 
-const CALC_FORMULA_TYPE_MAP: Record<string, TableFieldInfo["calcFormulaType"]> = {
-  sum_formula: "Sum",
-  lookup_formula: "Lookup",
-  count_formula: "Count",
-  average_formula: "Average",
-  min_formula: "Min",
-  max_formula: "Max",
-  exist_formula: "Exist",
+const CALC_FORMULA_FUNC_MAP: Record<string, TableFieldInfo["calcFormulaType"]> = {
+  sum: "Sum",
+  count: "Count",
+  average: "Average",
+  min: "Min",
+  max: "Max",
+  exist: "Exist",
 };
 
 /**
@@ -608,30 +607,46 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
           name = stripQuotes(child.text);
         } else if (child.type === "type_specification") {
           dataType = child.text;
-        } else if (child.type === "calc_formula_property") {
-          // Find the formula type child
-          for (const formulaChild of child.namedChildren) {
-            if (formulaChild.type in CALC_FORMULA_TYPE_MAP) {
-              calcFormulaType = CALC_FORMULA_TYPE_MAP[formulaChild.type];
-              // Extract referenced table from calc_field_ref or table_reference
-              for (const refChild of formulaChild.namedChildren) {
-                if (refChild.type === "calc_field_ref") {
-                  // "Sales Line".Amount -> extract "Sales Line"
-                  const parts = refChild.text.split(".");
-                  if (parts.length > 0) {
-                    calcFormulaTable = stripQuotes(parts[0]);
-                  }
-                } else if (refChild.type === "table_reference") {
-                  calcFormulaTable = stripQuotes(refChild.text);
-                } else if (refChild.type === "member_expression") {
-                  // Lookup: Customer.Name -> extract "Customer"
-                  const obj = refChild.childForFieldName("object") ?? refChild.namedChildren[0];
-                  if (obj) {
-                    calcFormulaTable = stripQuotes(obj.text);
+        } else if (isPropertyNamed(child, "CalcFormula")) {
+          const value = child.childForFieldName("value");
+          if (value) {
+            for (const formulaChild of value.namedChildren) {
+              if (formulaChild.type === "aggregate_formula") {
+                const funcNode = formulaChild.namedChildren.find(c => c.type === "aggregate_function");
+                const funcName = funcNode?.text?.toLowerCase();
+                if (funcName && funcName in CALC_FORMULA_FUNC_MAP) {
+                  calcFormulaType = CALC_FORMULA_FUNC_MAP[funcName];
+                }
+                for (const refChild of formulaChild.namedChildren) {
+                  if (refChild.type === "calc_field_reference") {
+                    const tableNode = refChild.namedChildren.find(c =>
+                      c.type === "identifier" || c.type === "quoted_identifier"
+                    );
+                    if (tableNode) {
+                      calcFormulaTable = stripQuotes(tableNode.text);
+                    }
                   }
                 }
+                break;
+              } else if (formulaChild.type === "lookup_formula") {
+                calcFormulaType = "Lookup";
+                for (const refChild of formulaChild.namedChildren) {
+                  if (refChild.type === "calc_field_reference") {
+                    const tableNode = refChild.namedChildren.find(c =>
+                      c.type === "identifier" || c.type === "quoted_identifier"
+                    );
+                    if (tableNode) {
+                      calcFormulaTable = stripQuotes(tableNode.text);
+                    }
+                  } else if (refChild.type === "member_expression") {
+                    const obj = refChild.childForFieldName("object") ?? refChild.namedChildren[0];
+                    if (obj) {
+                      calcFormulaTable = stripQuotes(obj.text);
+                    }
+                  }
+                }
+                break;
               }
-              break;
             }
           }
         } else if (child.type === "table_relation_property") {
