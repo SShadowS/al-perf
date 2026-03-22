@@ -173,6 +173,16 @@ function stripQuotes(text: string): string {
 }
 
 /**
+ * V2 grammar helper: check if a node is a generic `property` with a specific name.
+ * Many V1-specific property nodes (calc_formula_property, table_relation_property,
+ * clustered_property) became generic `property` nodes in V2.
+ */
+function isPropertyNamed(node: SyntaxNode, name: string): boolean {
+  return node.type === "property"
+    && node.childForFieldName("name")?.text?.toLowerCase() === name.toLowerCase();
+}
+
+/**
  * Find the object declaration node in the source file root.
  */
 function findObjectDeclaration(
