@@ -243,29 +243,13 @@ function extractProcedureName(proc: SyntaxNode): string {
 }
 
 /**
- * Extract trigger name from a named_trigger or trigger_declaration node.
- * For named_trigger, the name is embedded as a keyword in the grammar text.
- * For trigger_declaration, it may have a name field.
+ * Extract trigger name from a trigger_declaration node.
  */
 function extractTriggerName(trigger: SyntaxNode): string {
-  // Try field-based access first (trigger_declaration)
   const nameNode = trigger.childForFieldName("name");
   if (nameNode) {
     return stripQuotes(nameNode.text);
   }
-
-  // For named_trigger, extract from text: "trigger OnInsert()" -> "OnInsert"
-  const firstLine = trigger.text.split("\n")[0];
-  const match = firstLine.match(/trigger\s+(\w+)/i);
-  if (match) {
-    return match[1];
-  }
-
-  // For onrun_trigger
-  if (trigger.type === "onrun_trigger") {
-    return "OnRun";
-  }
-
   return "";
 }
 
@@ -801,10 +785,7 @@ export async function indexALFile(
           features,
           isEventSubscriber: checkEventSubscriber(sourceLines, child.startPosition.row),
         });
-      } else if (
-        child.type === "named_trigger" ||
-        child.type === "trigger_declaration"
-      ) {
+      } else if (child.type === "trigger_declaration") {
         const name = extractTriggerName(child);
         const codeBlock = findCodeBlock(child);
         const features = extractFeatures(codeBlock);
@@ -812,21 +793,6 @@ export async function indexALFile(
 
         triggers.push({
           name,
-          objectType,
-          objectName,
-          objectId,
-          file: relativePath,
-          lineStart: child.startPosition.row + 1,
-          lineEnd: child.endPosition.row + 1,
-          features,
-        });
-      } else if (child.type === "onrun_trigger") {
-        const codeBlock = findCodeBlock(child);
-        const features = extractFeatures(codeBlock);
-        features.variables = extractVariables(child);
-
-        triggers.push({
-          name: "OnRun",
           objectType,
           objectName,
           objectId,
