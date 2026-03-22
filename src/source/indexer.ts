@@ -380,7 +380,7 @@ function collectRecordOps(
       if (funcNode) {
         if (funcNode.type === "member_expression") {
           const objNode = funcNode.childForFieldName("object") ?? funcNode.namedChildren[0];
-          const propNode = funcNode.childForFieldName("property") ?? funcNode.namedChildren[1];
+          const propNode = funcNode.childForFieldName("member") ?? funcNode.namedChildren[1];
           if (propNode) {
             const methodName = stripQuotes(propNode.text);
             if (RECORD_OPS.has(methodName.toLowerCase())) {
@@ -388,22 +388,6 @@ function collectRecordOps(
                 node: n,
                 methodName,
                 recordVariable: objNode ? objNode.text : "",
-                fieldArgument: extractFieldArgument(n, methodName),
-                allFieldArguments: extractAllFieldArguments(n, methodName),
-              });
-            }
-          }
-        } else if (funcNode.type === "field_access") {
-          // Rec."Field Name"() style
-          const recordNode = funcNode.childForFieldName("record") ?? funcNode.namedChildren[0];
-          const fieldNode = funcNode.childForFieldName("field") ?? funcNode.namedChildren[1];
-          if (fieldNode) {
-            const methodName = stripQuotes(fieldNode.text);
-            if (RECORD_OPS.has(methodName.toLowerCase())) {
-              ops.push({
-                node: n,
-                methodName,
-                recordVariable: recordNode ? recordNode.text : "",
                 fieldArgument: extractFieldArgument(n, methodName),
                 allFieldArguments: extractAllFieldArguments(n, methodName),
               });
@@ -458,28 +442,16 @@ function collectDangerousCalls(
 }
 
 /**
- * Collect field access nodes: Rec."Field Name" (field_access) or Rec.Field (member_expression not in call).
+ * Collect field access nodes: Rec.Field or Rec."Field Name" (member_expression not in call).
  */
 function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
   const accesses: FieldAccessInfo[] = [];
 
   function walk(n: SyntaxNode) {
-    if (n.type === "field_access") {
-      // Rec."Field Name" style
-      const recordNode = n.namedChildren[0];
-      const fieldNode = n.namedChildren[1];
-      if (recordNode && fieldNode) {
-        accesses.push({
-          recordVariable: recordNode.text,
-          fieldName: stripQuotes(fieldNode.text),
-          line: n.startPosition.row + 1,
-          column: n.startPosition.column,
-        });
-      }
-    } else if (n.type === "member_expression" && n.parent?.type !== "call_expression") {
+    if (n.type === "member_expression" && n.parent?.type !== "call_expression") {
       // Rec.Field style, but NOT when it's the function part of a call
-      const objNode = n.namedChildren[0];
-      const propNode = n.namedChildren[1];
+      const objNode = n.childForFieldName("object") ?? n.namedChildren[0];
+      const propNode = n.childForFieldName("member") ?? n.namedChildren[1];
       if (objNode && propNode) {
         accesses.push({
           recordVariable: objNode.text,
