@@ -569,6 +569,8 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
   return { loops, recordOps, recordOpsInLoops, dangerousCallsInLoops, variables: [], fieldAccesses, nestingDepth };
 }
 
+/** Map from aggregate function name (lowercase) to CalcFormulaType.
+ * Lookup is excluded — it has its own `lookup_formula` node type in V2. */
 const CALC_FORMULA_FUNC_MAP: Record<string, TableFieldInfo["calcFormulaType"]> = {
   sum: "Sum",
   count: "Count",
@@ -577,6 +579,24 @@ const CALC_FORMULA_FUNC_MAP: Record<string, TableFieldInfo["calcFormulaType"]> =
   max: "Max",
   exist: "Exist",
 };
+
+/**
+ * Recursively search a TableRelation value subtree for the first simple_table_relation
+ * and extract the target table name from it.
+ */
+function findTableRelationTarget(node: SyntaxNode): string | undefined {
+  if (node.type === "simple_table_relation") {
+    const ref = node.namedChildren.find(c =>
+      c.type === "identifier" || c.type === "quoted_identifier"
+    );
+    return ref ? stripQuotes(ref.text) : undefined;
+  }
+  for (const child of node.namedChildren) {
+    const found = findTableRelationTarget(child);
+    if (found) return found;
+  }
+  return undefined;
+}
 
 /**
  * Extract table field declarations from a table declaration node.
@@ -645,20 +665,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
         } else if (isPropertyNamed(child, "TableRelation")) {
           const value = child.childForFieldName("value");
           if (value) {
-            function findTableRef(n: SyntaxNode): string | undefined {
-              if (n.type === "simple_table_relation") {
-                const ref = n.namedChildren.find(c =>
-                  c.type === "identifier" || c.type === "quoted_identifier"
-                );
-                return ref ? stripQuotes(ref.text) : undefined;
-              }
-              for (const ch of n.namedChildren) {
-                const found = findTableRef(ch);
-                if (found) return found;
-              }
-              return undefined;
-            }
-            tableRelationTarget = findTableRef(value);
+            tableRelationTarget = findTableRelationTarget(value);
           }
         }
       }
