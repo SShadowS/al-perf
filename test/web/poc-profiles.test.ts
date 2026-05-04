@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
+import { generateKeyPairSync } from "crypto";
 import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
@@ -19,13 +20,17 @@ afterAll(() => {
 const VALID_GUID = "550e8400-e29b-41d4-a716-446655440000";
 
 async function setupAndIngest() {
+	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+	const jwk = publicKey.export({ format: "jwk" }) as { n: string; e: string };
+	const publicXml = `<RSAKeyValue><Modulus>${Buffer.from(jwk.n, "base64url").toString("base64")}</Modulus><Exponent>${Buffer.from(jwk.e, "base64url").toString("base64")}</Exponent></RSAKeyValue>`;
+
 	await fetch(`${BASE}/api/tenants/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
 			tenantCode: "poc",
 			sharedSecret: "test-secret-1234",
-			publicKeyXml: "<RSAKeyValue>x</RSAKeyValue>",
+			publicKeyXml: publicXml,
 		}),
 	});
 
@@ -52,21 +57,29 @@ async function setupAndIngest() {
 }
 
 describe("GET /api/profiles/{activityId} (POC v0 plaintext)", () => {
-	it("returns the original profile bytes", async () => {
+	it("returns ciphertext bundle + plaintext manifest", async () => {
 		await setupAndIngest();
 		const res = await fetch(`${BASE}/api/profiles/${VALID_GUID}?tenant=poc`, {
 			headers: { "Authorization": "Bearer test-secret-1234" },
 		});
 		expect(res.status).toBe(200);
-		expect(res.headers.get("content-type")).toBe("application/octet-stream");
-		const blob = await res.arrayBuffer();
-		expect(blob.byteLength).toBeGreaterThan(0);
+		expect(res.headers.get("content-type")).toBe("application/json");
+		const body = await res.json();
+		expect(body.keyVersion).toBe(1);
+		expect(typeof body.manifest).toBe("string"); // base64
+		expect(typeof body.wrapped).toBe("string");  // base64
+		expect(body.blob && body.blob.iv && body.blob.tag && body.blob.ciphertext).toBeTruthy();
+		expect(body.result && body.result.iv && body.result.tag && body.result.ciphertext).toBeTruthy();
+		expect(body.metrics).toBeTruthy();
 	});
 
 	it("returns 404 for unknown activityId", async () => {
-		const res = await fetch(`${BASE}/api/profiles/00000000-0000-0000-0000-000000000000?tenant=poc`, {
-			headers: { "Authorization": "Bearer test-secret-1234" },
-		});
+		const res = await fetch(
+			`${BASE}/api/profiles/00000000-0000-0000-0000-000000000000?tenant=poc`,
+			{
+				headers: { Authorization: "Bearer test-secret-1234" },
+			},
+		);
 		expect(res.status).toBe(404);
 	});
 
@@ -77,7 +90,7 @@ describe("GET /api/profiles/{activityId} (POC v0 plaintext)", () => {
 
 	it("rejects bad activityId", async () => {
 		const res = await fetch(`${BASE}/api/profiles/not-a-guid?tenant=poc`, {
-			headers: { "Authorization": "Bearer test-secret-1234" },
+			headers: { Authorization: "Bearer test-secret-1234" },
 		});
 		expect(res.status).toBe(400);
 	});
