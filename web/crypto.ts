@@ -65,8 +65,8 @@ export function encryptBundle(
 	const ciphertextBlob = aesCbc256Encrypt(kEnc, iv1, plaintextBlob);
 	const ciphertextResult = aesCbc256Encrypt(kEnc, iv2, plaintextResult);
 
-	const tagBlob = hmacSha256(kMac, Buffer.concat([iv1, manifestHash, ciphertextBlob]));
-	const tagResult = hmacSha256(kMac, Buffer.concat([iv2, manifestHash, ciphertextResult]));
+	const tagBlob = hmacSha256Text(kMac, Buffer.concat([iv1, manifestHash, ciphertextBlob]).toString("base64"));
+	const tagResult = hmacSha256Text(kMac, Buffer.concat([iv2, manifestHash, ciphertextResult]).toString("base64"));
 
 	const pubKey = createPublicKey({ key: jwk, format: "jwk" });
 	const wrapped = publicEncrypt(
@@ -97,6 +97,10 @@ function aesCbc256Decrypt(key: Buffer, iv: Buffer, ciphertext: Buffer): Buffer {
 
 function hmacSha256(key: Buffer, data: Buffer): Buffer {
 	return createHmac("sha256", key).update(data).digest();
+}
+
+function hmacSha256Text(key: Buffer, text: string): Buffer {
+	return createHmac("sha256", key).update(text, "utf8").digest();
 }
 
 /**
@@ -135,7 +139,7 @@ export function decryptBundleForTest(
 }
 
 function verifyTag(kMac: Buffer, part: BundlePart, manifestHash: Buffer): void {
-	const expected = hmacSha256(kMac, Buffer.concat([part.iv, manifestHash, part.ciphertext]));
+	const expected = hmacSha256Text(kMac, Buffer.concat([part.iv, manifestHash, part.ciphertext]).toString("base64"));
 	if (expected.byteLength !== part.tag.byteLength) {
 		throw new Error("tag length mismatch");
 	}
