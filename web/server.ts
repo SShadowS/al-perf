@@ -671,6 +671,13 @@ export const server = Bun.serve({
       return withSecurityHeaders(await handleIngest(req, dataDir));
     }
 
+    const profileMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)$/);
+    if (profileMatch && req.method === "GET") {
+      const { handleGetProfile } = await import("./handlers/profiles.ts");
+      const dataDir = process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
+      return withSecurityHeaders(await handleGetProfile(req, url, dataDir, profileMatch[1]));
+    }
+
     if (url.pathname === "/api/debug/save" && req.method === "POST") {
       try {
         const body = await req.json() as { debugToken?: string };
