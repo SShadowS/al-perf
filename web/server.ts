@@ -659,6 +659,12 @@ export const server = Bun.serve({
       return withSecurityHeaders(Response.json(stats));
     }
 
+    if (url.pathname === "/api/tenants/register" && req.method === "POST") {
+      const { handleTenantRegister } = await import("./handlers/tenants.ts");
+      const dataDir = process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
+      return withSecurityHeaders(await handleTenantRegister(req, dataDir));
+    }
+
     if (url.pathname === "/api/debug/save" && req.method === "POST") {
       try {
         const body = await req.json() as { debugToken?: string };
