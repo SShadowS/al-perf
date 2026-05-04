@@ -19,3 +19,6 @@ Initial Plan.md
 .playwright-mcp/
 .serena/
 /debug/
+private/
+.superpowers/
+web/data/
