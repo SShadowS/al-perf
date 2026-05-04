@@ -178,6 +178,23 @@ bun run build        # Generate .d.ts declarations
 bun run web          # Start the web server
 ```
 
+## POC Continuous Monitoring (auto-ship)
+
+POC endpoints for the auto-ship pipeline (see [docs/superpowers/specs/2026-04-13-continuous-monitoring-design.md](docs/superpowers/specs/2026-04-13-continuous-monitoring-design.md) and the POC scope spec).
+
+Run with:
+
+```bash
+AL_PERF_POC_SECRET="<shared bearer secret>" PORT=3010 bun run web/server.ts
+```
+
+Endpoints:
+- `POST /api/tenants/register` — register a tenant (POC: shared-secret-in-body).
+- `POST /api/ingest` — encrypted ingest from al-perf-bc.
+- `GET /api/profiles/{activityId}?tenant=<code>` — return ciphertext bundle + manifest sidecar.
+
+POC limitations: v0/v1 only — single tenant, plaintext bearer auth, no rotation, no idempotency record persistence. See `docs/superpowers/specs/2026-04-13-poc-scope.md`.
+
 ## License
 
 [GNU GPLv3](LICENSE)
