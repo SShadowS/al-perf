@@ -1,12 +1,14 @@
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { analyzeProfile } from "../../src/core/analyzer.ts";
+import { encryptBundle, xmlRsaToJwk, type RsaJwk } from "../crypto.ts";
 import { isValidActivityId, isValidTenantCode, normalizeActivityId, resolveStoragePath } from "../storage.ts";
 import { checkBearerToken, loadPocSecret } from "../poc-secret.ts";
 
+const KEY_VERSION_POC = "1";
+
 export async function handleIngest(req: Request, dataDir: string): Promise<Response> {
 	const auth = req.headers.get("authorization");
-	const expected = loadPocSecret();
-	if (!checkBearerToken(auth, expected)) {
+	if (!checkBearerToken(auth, loadPocSecret())) {
 		return jsonResponse(401, { error: "unauthorized" });
 	}
 
@@ -21,10 +23,20 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	}
 	const activityId = normalizeActivityId(activityIdRaw);
 
-	// Verify tenant exists (was registered)
 	const tenantFile = resolveStoragePath(dataDir, "tenants", `${tenantCode}.json`);
 	if (!existsSync(tenantFile)) {
 		return jsonResponse(404, { error: "tenant_not_registered" });
+	}
+
+	const tenantRecord = JSON.parse(readFileSync(tenantFile, "utf8")) as { publicKeyXml?: string };
+	if (!tenantRecord.publicKeyXml) {
+		return jsonResponse(409, { error: "tenant_missing_public_key" });
+	}
+	let jwk: RsaJwk;
+	try {
+		jwk = xmlRsaToJwk(tenantRecord.publicKeyXml);
+	} catch (err) {
+		return jsonResponse(409, { error: "tenant_public_key_invalid", detail: String(err) });
 	}
 
 	let formData: FormData;
@@ -50,7 +62,6 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 		return jsonResponse(400, { error: "manifest_not_json" });
 	}
 
-	// Persist manifest + profile bytes first so analyzeProfile can read profile.bin from disk.
 	const profileDir = resolveStoragePath(
 		dataDir,
 		"storage",
@@ -60,30 +71,42 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	);
 	mkdirSync(profileDir, { recursive: true });
 
-	const profilePath = resolveStoragePath(profileDir, "profile.bin");
-	writeFileSync(resolveStoragePath(profileDir, "manifest.json"), manifestBytes);
-	writeFileSync(profilePath, profileBytes);
+	// Write profile.bin to disk so analyzeProfile can read it as a filePath, then delete after.
+	const tempProfilePath = resolveStoragePath(profileDir, "profile.bin");
+	writeFileSync(tempProfilePath, profileBytes);
 
-	// Inline analysis (POC v0 — synchronous; analyzeProfile takes a file path).
 	let analysisResult: unknown;
 	try {
-		analysisResult = await analyzeProfile(profilePath);
+		analysisResult = await analyzeProfile(tempProfilePath);
 	} catch (err) {
+		try { unlinkSync(tempProfilePath); } catch {}
 		return jsonResponse(500, { error: "analyze_failed", detail: String(err) });
 	}
 
-	writeFileSync(
-		resolveStoragePath(profileDir, "result.json"),
-		JSON.stringify(analysisResult, null, 2),
-	);
+	const resultBytes = Buffer.from(JSON.stringify(analysisResult), "utf8");
 
-	const metrics = extractMetrics(manifest, analysisResult, profileBytes.byteLength);
+	const bundle = encryptBundle(profileBytes, resultBytes, manifestBytes, jwk);
+
+	writeFileSync(resolveStoragePath(profileDir, "manifest.json"), manifestBytes);
 	writeFileSync(
 		resolveStoragePath(profileDir, "metrics.json"),
-		JSON.stringify(metrics, null, 2),
+		JSON.stringify(extractMetrics(manifest, analysisResult, profileBytes.byteLength), null, 2),
 	);
+	writeFileSync(resolveStoragePath(profileDir, "wrapped.bin"), bundle.wrapped);
+	writeFileSync(
+		resolveStoragePath(profileDir, "blob.enc"),
+		Buffer.concat([bundle.blob.iv, bundle.blob.tag, bundle.blob.ciphertext]),
+	);
+	writeFileSync(
+		resolveStoragePath(profileDir, "result.enc"),
+		Buffer.concat([bundle.result.iv, bundle.result.tag, bundle.result.ciphertext]),
+	);
+	writeFileSync(resolveStoragePath(profileDir, "keyversion.txt"), KEY_VERSION_POC);
 
-	return jsonResponse(202, { id: activityId, status: "stored" });
+	// Delete temp plaintext profile.bin (v1 invariant: only ciphertext at rest).
+	try { unlinkSync(tempProfilePath); } catch {}
+
+	return jsonResponse(202, { id: activityId, status: "stored", keyVersion: Number(KEY_VERSION_POC) });
 }
 
 function extractMetrics(

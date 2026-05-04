@@ -2,11 +2,12 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { generateKeyPairSync } from "crypto";
 
 const TEST_DATA = mkdtempSync(join(tmpdir(), "alperf-poc-ingest-"));
 process.env.AL_PERF_DATA_DIR = TEST_DATA;
 process.env.AL_PERF_POC_SECRET = "test-secret-1234";
-process.env.PORT ??= "3999";   // see Task A3 — Bun caches the server module across files; share the port
+process.env.PORT ??= "3999"; // see Task A3 — Bun caches the server module across files; share the port
 
 const { server } = await import("../../web/server.ts");
 const BASE = `http://localhost:${server.port}`;
@@ -16,19 +17,25 @@ afterAll(() => {
 });
 
 async function registerPoc() {
+	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+	const jwk = publicKey.export({ format: "jwk" }) as { n: string; e: string };
+	const publicXml = `<RSAKeyValue><Modulus>${Buffer.from(jwk.n, "base64url").toString("base64")}</Modulus><Exponent>${Buffer.from(jwk.e, "base64url").toString("base64")}</Exponent></RSAKeyValue>`;
 	await fetch(`${BASE}/api/tenants/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
 			tenantCode: "poc",
 			sharedSecret: "test-secret-1234",
-			publicKeyXml: "<RSAKeyValue><Modulus>x</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>",
+			publicKeyXml: publicXml,
 		}),
 	});
 }
 
 function loadFixture(): Buffer {
-	const profilePath = resolve(import.meta.dir, "../fixtures/instrumentation-minimal.alcpuprofile");
+	const profilePath = resolve(
+		import.meta.dir,
+		"../fixtures/instrumentation-minimal.alcpuprofile",
+	);
 	return Buffer.from(readFileSync(profilePath));
 }
 
@@ -55,8 +62,18 @@ function buildManifest(activityId = VALID_GUID) {
 
 function buildFormData(activityId = VALID_GUID): FormData {
 	const fd = new FormData();
-	fd.append("manifest", new Blob([JSON.stringify(buildManifest(activityId))], { type: "application/json" }), "manifest.json");
-	fd.append("profile", new Blob([loadFixture()], { type: "application/octet-stream" }), "profile.alcpuprofile");
+	fd.append(
+		"manifest",
+		new Blob([JSON.stringify(buildManifest(activityId))], {
+			type: "application/json",
+		}),
+		"manifest.json",
+	);
+	fd.append(
+		"profile",
+		new Blob([loadFixture()], { type: "application/octet-stream" }),
+		"profile.alcpuprofile",
+	);
 	return fd;
 }
 
@@ -67,7 +84,7 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
-				"Authorization": "Bearer test-secret-1234",
+				Authorization: "Bearer test-secret-1234",
 				"X-Tenant-Id": "poc",
 				"X-Idempotency-Key": VALID_GUID,
 			},
@@ -79,11 +96,19 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		expect(body.status).toBe("stored");
 
 		// Verify on-disk artifacts (v0: plaintext)
-		const profileDir = join(TEST_DATA, "storage", "poc", "profiles", VALID_GUID);
+		const profileDir = join(
+			TEST_DATA,
+			"storage",
+			"poc",
+			"profiles",
+			VALID_GUID,
+		);
 		expect(existsSync(join(profileDir, "manifest.json"))).toBe(true);
 		expect(existsSync(join(profileDir, "metrics.json"))).toBe(true);
-		expect(existsSync(join(profileDir, "profile.bin"))).toBe(true);
-		expect(existsSync(join(profileDir, "result.json"))).toBe(true);
+		expect(existsSync(join(profileDir, "wrapped.bin"))).toBe(true);
+		expect(existsSync(join(profileDir, "blob.enc"))).toBe(true);
+		expect(existsSync(join(profileDir, "result.enc"))).toBe(true);
+		expect(existsSync(join(profileDir, "keyversion.txt"))).toBe(true);
 	});
 
 	it("rejects missing bearer", async () => {
@@ -99,7 +124,7 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
-				"Authorization": "Bearer test-secret-1234",
+				Authorization: "Bearer test-secret-1234",
 				"X-Tenant-Id": "poc",
 				"X-Idempotency-Key": "not-a-guid",
 			},
@@ -112,7 +137,7 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
-				"Authorization": "Bearer test-secret-1234",
+				Authorization: "Bearer test-secret-1234",
 				"X-Tenant-Id": "unknown",
 				"X-Idempotency-Key": VALID_GUID,
 			},
