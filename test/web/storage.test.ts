@@ -1,15 +1,24 @@
 import { describe, expect, it } from "bun:test";
 import { resolve as resolvePath } from "path";
-import { isValidActivityId, isValidTenantCode, resolveStoragePath } from "../../web/storage.ts";
+import {
+	isValidActivityId,
+	isValidTenantCode,
+	normalizeTenantCode,
+	resolveStoragePath,
+} from "../../web/storage.ts";
 
 describe("storage helpers", () => {
 	describe("isValidActivityId", () => {
 		it("accepts a v4 GUID", () => {
-			expect(isValidActivityId("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+			expect(isValidActivityId("550e8400-e29b-41d4-a716-446655440000")).toBe(
+				true,
+			);
 		});
 
 		it("accepts uppercase GUID and treats lowercase form as canonical", () => {
-			expect(isValidActivityId("550E8400-E29B-41D4-A716-446655440000")).toBe(true);
+			expect(isValidActivityId("550E8400-E29B-41D4-A716-446655440000")).toBe(
+				true,
+			);
 		});
 
 		it("rejects path traversal attempts", () => {
@@ -26,17 +35,19 @@ describe("storage helpers", () => {
 	});
 
 	describe("isValidTenantCode", () => {
-		it("accepts lowercase alphanumeric with dashes", () => {
+		it("accepts alphanumeric with dashes (any case)", () => {
 			expect(isValidTenantCode("poc")).toBe(true);
+			expect(isValidTenantCode("POC")).toBe(true);
 			expect(isValidTenantCode("acme-prod")).toBe(true);
+			expect(isValidTenantCode("ACME-PROD")).toBe(true);
 			expect(isValidTenantCode("a")).toBe(true);
 		});
 
-		it("rejects path traversal and uppercase", () => {
+		it("rejects path traversal and other invalid chars", () => {
 			expect(isValidTenantCode("../etc")).toBe(false);
-			expect(isValidTenantCode("Acme")).toBe(false);
 			expect(isValidTenantCode("acme/prod")).toBe(false);
 			expect(isValidTenantCode("")).toBe(false);
+			expect(isValidTenantCode("acme_prod")).toBe(false);
 		});
 
 		it("enforces 40-char max", () => {
@@ -45,10 +56,23 @@ describe("storage helpers", () => {
 		});
 	});
 
+	describe("normalizeTenantCode", () => {
+		it("lowercases", () => {
+			expect(normalizeTenantCode("POC")).toBe("poc");
+			expect(normalizeTenantCode("Acme-Prod")).toBe("acme-prod");
+			expect(normalizeTenantCode("poc")).toBe("poc");
+		});
+	});
+
 	describe("resolveStoragePath", () => {
 		it("resolves under base directory", () => {
 			const base = resolvePath("/tmp/al-perf");
-			const result = resolveStoragePath(base, "poc", "profiles", "550e8400-e29b-41d4-a716-446655440000");
+			const result = resolveStoragePath(
+				base,
+				"poc",
+				"profiles",
+				"550e8400-e29b-41d4-a716-446655440000",
+			);
 			expect(result.startsWith(base)).toBe(true);
 		});
 

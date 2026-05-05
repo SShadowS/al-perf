@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "fs";
-import { isValidActivityId, isValidTenantCode, normalizeActivityId, resolveStoragePath } from "../storage.ts";
 import { checkBearerToken, loadPocSecret } from "../poc-secret.ts";
+import {
+	isValidActivityId,
+	isValidTenantCode,
+	normalizeActivityId,
+	normalizeTenantCode,
+	resolveStoragePath,
+} from "../storage.ts";
 
 export async function handleGetProfile(
 	req: Request,
@@ -18,10 +24,11 @@ export async function handleGetProfile(
 	}
 	const activityId = normalizeActivityId(activityIdRaw);
 
-	const tenantCode = url.searchParams.get("tenant") ?? "";
-	if (!isValidTenantCode(tenantCode)) {
+	const tenantCodeRaw = url.searchParams.get("tenant") ?? "";
+	if (!isValidTenantCode(tenantCodeRaw)) {
 		return jsonResponse(400, { error: "invalid_tenant" });
 	}
+	const tenantCode = normalizeTenantCode(tenantCodeRaw);
 
 	const profileDir = resolveStoragePath(
 		dataDir,
@@ -37,10 +44,19 @@ export async function handleGetProfile(
 
 	const wrapped = readFileSync(wrappedFile);
 	const blobBytes = readFileSync(resolveStoragePath(profileDir, "blob.enc"));
-	const resultBytes = readFileSync(resolveStoragePath(profileDir, "result.enc"));
-	const manifestBytes = readFileSync(resolveStoragePath(profileDir, "manifest.json"));
-	const metricsBytes = readFileSync(resolveStoragePath(profileDir, "metrics.json"));
-	const keyVersionStr = readFileSync(resolveStoragePath(profileDir, "keyversion.txt"), "utf8").trim();
+	const resultBytes = readFileSync(
+		resolveStoragePath(profileDir, "result.enc"),
+	);
+	const manifestBytes = readFileSync(
+		resolveStoragePath(profileDir, "manifest.json"),
+	);
+	const metricsBytes = readFileSync(
+		resolveStoragePath(profileDir, "metrics.json"),
+	);
+	const keyVersionStr = readFileSync(
+		resolveStoragePath(profileDir, "keyversion.txt"),
+		"utf8",
+	).trim();
 
 	const body = {
 		keyVersion: Number(keyVersionStr),
@@ -54,7 +70,11 @@ export async function handleGetProfile(
 	return jsonResponse(200, body);
 }
 
-function splitBundlePartBase64(file: Buffer): { iv: string; tag: string; ciphertext: string } {
+function splitBundlePartBase64(file: Buffer): {
+	iv: string;
+	tag: string;
+	ciphertext: string;
+} {
 	return {
 		iv: file.subarray(0, 16).toString("base64"),
 		tag: file.subarray(16, 48).toString("base64"),

@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { isValidTenantCode, resolveStoragePath } from "../storage.ts";
 import { loadPocSecret } from "../poc-secret.ts";
+import {
+	isValidTenantCode,
+	normalizeTenantCode,
+	resolveStoragePath,
+} from "../storage.ts";
 
 interface RegisterRequest {
 	tenantCode?: string;
@@ -9,10 +13,13 @@ interface RegisterRequest {
 	tenantTag?: string;
 }
 
-export async function handleTenantRegister(req: Request, dataDir: string): Promise<Response> {
+export async function handleTenantRegister(
+	req: Request,
+	dataDir: string,
+): Promise<Response> {
 	let body: RegisterRequest;
 	try {
-		body = await req.json() as RegisterRequest;
+		body = (await req.json()) as RegisterRequest;
 	} catch {
 		return new Response(JSON.stringify({ error: "invalid_json" }), {
 			status: 400,
@@ -20,14 +27,15 @@ export async function handleTenantRegister(req: Request, dataDir: string): Promi
 		});
 	}
 
-	const { tenantCode, sharedSecret, publicKeyXml } = body;
+	const { tenantCode: tenantCodeRaw, sharedSecret, publicKeyXml } = body;
 
-	if (!tenantCode || !isValidTenantCode(tenantCode)) {
+	if (!tenantCodeRaw || !isValidTenantCode(tenantCodeRaw)) {
 		return new Response(JSON.stringify({ error: "invalid_tenant_code" }), {
 			status: 400,
 			headers: { "Content-Type": "application/json" },
 		});
 	}
+	const tenantCode = normalizeTenantCode(tenantCodeRaw);
 
 	const expected = loadPocSecret();
 	if (sharedSecret !== expected) {
@@ -37,7 +45,11 @@ export async function handleTenantRegister(req: Request, dataDir: string): Promi
 		});
 	}
 
-	if (!publicKeyXml || typeof publicKeyXml !== "string" || publicKeyXml.length < 10) {
+	if (
+		!publicKeyXml ||
+		typeof publicKeyXml !== "string" ||
+		publicKeyXml.length < 10
+	) {
 		return new Response(JSON.stringify({ error: "invalid_public_key" }), {
 			status: 400,
 			headers: { "Content-Type": "application/json" },
@@ -46,13 +58,20 @@ export async function handleTenantRegister(req: Request, dataDir: string): Promi
 
 	const tenantsDir = resolveStoragePath(dataDir, "tenants");
 	mkdirSync(tenantsDir, { recursive: true });
-	const tenantFile = resolveStoragePath(dataDir, "tenants", `${tenantCode}.json`);
+	const tenantFile = resolveStoragePath(
+		dataDir,
+		"tenants",
+		`${tenantCode}.json`,
+	);
 
 	if (existsSync(tenantFile)) {
-		return new Response(JSON.stringify({ error: "tenant_already_registered" }), {
-			status: 409,
-			headers: { "Content-Type": "application/json" },
-		});
+		return new Response(
+			JSON.stringify({ error: "tenant_already_registered" }),
+			{
+				status: 409,
+				headers: { "Content-Type": "application/json" },
+			},
+		);
 	}
 
 	const record = {
@@ -63,8 +82,11 @@ export async function handleTenantRegister(req: Request, dataDir: string): Promi
 	};
 	writeFileSync(tenantFile, JSON.stringify(record, null, 2));
 
-	return new Response(JSON.stringify({ tenantCode, registeredAt: record.registeredAt }), {
-		status: 201,
-		headers: { "Content-Type": "application/json" },
-	});
+	return new Response(
+		JSON.stringify({ tenantCode, registeredAt: record.registeredAt }),
+		{
+			status: 201,
+			headers: { "Content-Type": "application/json" },
+		},
+	);
 }

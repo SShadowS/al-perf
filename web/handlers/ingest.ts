@@ -1,21 +1,37 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	unlinkSync,
+	writeFileSync,
+} from "fs";
 import { analyzeProfile } from "../../src/core/analyzer.ts";
-import { encryptBundle, xmlRsaToJwk, type RsaJwk } from "../crypto.ts";
-import { isValidActivityId, isValidTenantCode, normalizeActivityId, resolveStoragePath } from "../storage.ts";
+import { encryptBundle, type RsaJwk, xmlRsaToJwk } from "../crypto.ts";
 import { checkBearerToken, loadPocSecret } from "../poc-secret.ts";
+import {
+	isValidActivityId,
+	isValidTenantCode,
+	normalizeActivityId,
+	normalizeTenantCode,
+	resolveStoragePath,
+} from "../storage.ts";
 
 const KEY_VERSION_POC = "1";
 
-export async function handleIngest(req: Request, dataDir: string): Promise<Response> {
+export async function handleIngest(
+	req: Request,
+	dataDir: string,
+): Promise<Response> {
 	const auth = req.headers.get("authorization");
 	if (!checkBearerToken(auth, loadPocSecret())) {
 		return jsonResponse(401, { error: "unauthorized" });
 	}
 
-	const tenantCode = req.headers.get("x-tenant-id");
-	if (!tenantCode || !isValidTenantCode(tenantCode)) {
+	const tenantCodeRaw = req.headers.get("x-tenant-id");
+	if (!tenantCodeRaw || !isValidTenantCode(tenantCodeRaw)) {
 		return jsonResponse(400, { error: "invalid_tenant_id" });
 	}
+	const tenantCode = normalizeTenantCode(tenantCodeRaw);
 
 	const activityIdRaw = req.headers.get("x-idempotency-key");
 	if (!activityIdRaw || !isValidActivityId(activityIdRaw)) {
@@ -23,12 +39,18 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	}
 	const activityId = normalizeActivityId(activityIdRaw);
 
-	const tenantFile = resolveStoragePath(dataDir, "tenants", `${tenantCode}.json`);
+	const tenantFile = resolveStoragePath(
+		dataDir,
+		"tenants",
+		`${tenantCode}.json`,
+	);
 	if (!existsSync(tenantFile)) {
 		return jsonResponse(404, { error: "tenant_not_registered" });
 	}
 
-	const tenantRecord = JSON.parse(readFileSync(tenantFile, "utf8")) as { publicKeyXml?: string };
+	const tenantRecord = JSON.parse(readFileSync(tenantFile, "utf8")) as {
+		publicKeyXml?: string;
+	};
 	if (!tenantRecord.publicKeyXml) {
 		return jsonResponse(409, { error: "tenant_missing_public_key" });
 	}
@@ -36,7 +58,10 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	try {
 		jwk = xmlRsaToJwk(tenantRecord.publicKeyXml);
 	} catch (err) {
-		return jsonResponse(409, { error: "tenant_public_key_invalid", detail: String(err) });
+		return jsonResponse(409, {
+			error: "tenant_public_key_invalid",
+			detail: String(err),
+		});
 	}
 
 	let formData: FormData;
@@ -57,7 +82,10 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 
 	let manifest: Record<string, unknown>;
 	try {
-		manifest = JSON.parse(manifestBytes.toString("utf8")) as Record<string, unknown>;
+		manifest = JSON.parse(manifestBytes.toString("utf8")) as Record<
+			string,
+			unknown
+		>;
 	} catch {
 		return jsonResponse(400, { error: "manifest_not_json" });
 	}
@@ -79,7 +107,9 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	try {
 		analysisResult = await analyzeProfile(tempProfilePath);
 	} catch (err) {
-		try { unlinkSync(tempProfilePath); } catch {}
+		try {
+			unlinkSync(tempProfilePath);
+		} catch {}
 		return jsonResponse(500, { error: "analyze_failed", detail: String(err) });
 	}
 
@@ -90,7 +120,11 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	writeFileSync(resolveStoragePath(profileDir, "manifest.json"), manifestBytes);
 	writeFileSync(
 		resolveStoragePath(profileDir, "metrics.json"),
-		JSON.stringify(extractMetrics(manifest, analysisResult, profileBytes.byteLength), null, 2),
+		JSON.stringify(
+			extractMetrics(manifest, analysisResult, profileBytes.byteLength),
+			null,
+			2,
+		),
 	);
 	writeFileSync(resolveStoragePath(profileDir, "wrapped.bin"), bundle.wrapped);
 	writeFileSync(
@@ -99,14 +133,27 @@ export async function handleIngest(req: Request, dataDir: string): Promise<Respo
 	);
 	writeFileSync(
 		resolveStoragePath(profileDir, "result.enc"),
-		Buffer.concat([bundle.result.iv, bundle.result.tag, bundle.result.ciphertext]),
+		Buffer.concat([
+			bundle.result.iv,
+			bundle.result.tag,
+			bundle.result.ciphertext,
+		]),
 	);
-	writeFileSync(resolveStoragePath(profileDir, "keyversion.txt"), KEY_VERSION_POC);
+	writeFileSync(
+		resolveStoragePath(profileDir, "keyversion.txt"),
+		KEY_VERSION_POC,
+	);
 
 	// Delete temp plaintext profile.bin (v1 invariant: only ciphertext at rest).
-	try { unlinkSync(tempProfilePath); } catch {}
+	try {
+		unlinkSync(tempProfilePath);
+	} catch {}
 
-	return jsonResponse(202, { id: activityId, status: "stored", keyVersion: Number(KEY_VERSION_POC) });
+	return jsonResponse(202, {
+		id: activityId,
+		status: "stored",
+		keyVersion: Number(KEY_VERSION_POC),
+	});
 }
 
 function extractMetrics(
