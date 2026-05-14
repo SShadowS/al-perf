@@ -1,45 +1,46 @@
 import { marked } from "marked";
-import type { AnalysisResult } from "../../output/types.js";
-import type { SectionRenderers } from "../../output/sections.js";
-import { SECTION_ORDER } from "../../output/sections.js";
-import type { MethodBreakdown } from "../../types/aggregated.js";
 import { formatTime } from "../../core/analyzer.js";
 import { truncateFunctionName } from "../../core/display-utils.js";
+import type { SectionRenderers } from "../../output/sections.js";
+import { SECTION_ORDER } from "../../output/sections.js";
+import type { AnalysisResult } from "../../output/types.js";
+import type { MethodBreakdown } from "../../types/aggregated.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
  */
 function escapeHtml(str: string | undefined | null): string {
-  if (!str) return "";
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+	if (!str) return "";
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
 }
 
 /**
  * Map severity to BC-themed color.
  */
 function severityColor(severity: "critical" | "warning" | "info"): string {
-  switch (severity) {
-    case "critical":
-      return "#EB6965";
-    case "warning":
-      return "#9F9700";
-    case "info":
-      return "#505C6D";
-  }
+	switch (severity) {
+		case "critical":
+			return "#EB6965";
+		case "warning":
+			return "#9F9700";
+		case "info":
+			return "#505C6D";
+	}
 }
 
 function renderSummary(result: AnalysisResult): string {
-  const pc = result.summary.patternCount;
-  const source = result.meta.sourceAvailable ? "source available" : "no source";
-  const samplingRow = result.meta.samplingInterval !== undefined
-    ? `<tr><td>Sampling Interval</td><td>${formatTime(result.meta.samplingInterval)}</td></tr>`
-    : "";
+	const pc = result.summary.patternCount;
+	const source = result.meta.sourceAvailable ? "source available" : "no source";
+	const samplingRow =
+		result.meta.samplingInterval !== undefined
+			? `<tr><td>Sampling Interval</td><td>${formatTime(result.meta.samplingInterval)}</td></tr>`
+			: "";
 
-  return `<p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
+	return `<p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
   <div class="badges">
     <span class="badge" style="background:#EB6965">${pc.critical} Critical</span>
     <span class="badge" style="background:#9F9700">${pc.warning} Warning</span>
@@ -54,9 +55,12 @@ function renderSummary(result: AnalysisResult): string {
       <tr><td>Max Depth</td><td>${result.meta.maxDepth}</td></tr>
       <tr><td>Source</td><td>${source}</td></tr>
       ${samplingRow}
-      ${result.meta.builtinSelfTime !== undefined && result.meta.builtinSelfTime > 0
-        ? `<tr><td>Built-in Overhead</td><td>${formatTime(result.meta.builtinSelfTime)}</td></tr>`
-        : ""}
+      ${
+				result.meta.builtinSelfTime !== undefined &&
+				result.meta.builtinSelfTime > 0
+					? `<tr><td>Built-in Overhead</td><td>${formatTime(result.meta.builtinSelfTime)}</td></tr>`
+					: ""
+			}
       <tr><td>Confidence</td><td>${result.meta.confidenceScore}/100</td></tr>
       <tr><td>Health</td><td>${result.summary.healthScore}/100</td></tr>
     </table>
@@ -64,24 +68,27 @@ function renderSummary(result: AnalysisResult): string {
 }
 
 function renderHotspots(result: AnalysisResult): string {
-  if (result.hotspots.length === 0) return "";
+	if (result.hotspots.length === 0) return "";
 
-  const rows = result.hotspots
-    .map((h: MethodBreakdown, i: number) => {
-      const gapStr = h.gapTime && h.gapTime > 0
-        ? ` <span style="color:#9F9700">+${formatTime(h.gapTime)} wait</span>`
-        : "";
-      const objectStr = h.sourceLocation
-        ? `${escapeHtml(h.objectType)} ${h.objectId}<br><span style="color:#505C6D;font-size:0.85em">${escapeHtml(h.sourceLocation.filePath)}:${h.sourceLocation.lineStart}</span>`
-        : `${escapeHtml(h.objectType)} ${h.objectId} (${escapeHtml(h.objectName)})`;
-      const calledByStr = h.calledBy.length > 0
-        ? escapeHtml(h.calledBy.slice(0, 3).join(", "))
-        : "\u2014";
-      const displayName = truncateFunctionName(h.functionName);
-      const nameHtml = displayName !== h.functionName
-        ? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
-        : `<strong>${escapeHtml(h.functionName)}</strong>`;
-      return `<tr>
+	const rows = result.hotspots
+		.map((h: MethodBreakdown, i: number) => {
+			const gapStr =
+				h.gapTime && h.gapTime > 0
+					? ` <span style="color:#9F9700">+${formatTime(h.gapTime)} wait</span>`
+					: "";
+			const objectStr = h.sourceLocation
+				? `${escapeHtml(h.objectType)} ${h.objectId}<br><span style="color:#505C6D;font-size:0.85em">${escapeHtml(h.sourceLocation.filePath)}:${h.sourceLocation.lineStart}</span>`
+				: `${escapeHtml(h.objectType)} ${h.objectId} (${escapeHtml(h.objectName)})`;
+			const calledByStr =
+				h.calledBy.length > 0
+					? escapeHtml(h.calledBy.slice(0, 3).join(", "))
+					: "\u2014";
+			const displayName = truncateFunctionName(h.functionName);
+			const nameHtml =
+				displayName !== h.functionName
+					? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
+					: `<strong>${escapeHtml(h.functionName)}</strong>`;
+			return `<tr>
         <td>${i + 1}</td>
         <td>${nameHtml}</td>
         <td>${objectStr}</td>
@@ -91,10 +98,10 @@ function renderHotspots(result: AnalysisResult): string {
         <td>${h.hitCount}</td>
         <td style="font-size:0.85em">${calledByStr}</td>
       </tr>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Top Hotspots</h2>
     <table>
       <thead>
@@ -108,30 +115,32 @@ function renderHotspots(result: AnalysisResult): string {
 }
 
 function renderCriticalPath(result: AnalysisResult): string {
-  if (!result.criticalPath || result.criticalPath.length <= 1) return "";
+	if (!result.criticalPath || result.criticalPath.length <= 1) return "";
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Critical Path</h2>
     <div style="font-family:monospace;font-size:0.95em">
-      ${result.criticalPath.map(step => {
-        const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
-        const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
-        return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
-      }).join("\n")}
+      ${result.criticalPath
+				.map((step) => {
+					const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
+					const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
+					return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
+				})
+				.join("\n")}
     </div>
   </div>`;
 }
 
 function renderPatterns(result: AnalysisResult): string {
-  if (result.patterns.length === 0) return "";
+	if (result.patterns.length === 0) return "";
 
-  const patternsHtml = result.patterns
-    .map((p) => {
-      const color = severityColor(p.severity);
-      const suggestion = p.suggestion
-        ? `<p class="suggestion"><strong>Suggestion:</strong> ${escapeHtml(p.suggestion)}</p>`
-        : "";
-      return `<div class="pattern">
+	const patternsHtml = result.patterns
+		.map((p) => {
+			const color = severityColor(p.severity);
+			const suggestion = p.suggestion
+				? `<p class="suggestion"><strong>Suggestion:</strong> ${escapeHtml(p.suggestion)}</p>`
+				: "";
+			return `<div class="pattern">
         <div class="pattern-header">
           <span class="severity-badge" style="background:${color}">${p.severity.toUpperCase()}</span>
           <span class="pattern-title">${escapeHtml(p.title)}</span>
@@ -140,32 +149,32 @@ function renderPatterns(result: AnalysisResult): string {
         <p class="impact"><strong>Impact:</strong> ${formatTime(p.impact)}</p>
         ${suggestion}
       </div>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Detected Patterns</h2>
     ${patternsHtml}
   </div>`;
 }
 
 function renderAppBreakdown(result: AnalysisResult): string {
-  if (result.appBreakdown.length === 0) return "";
+	if (result.appBreakdown.length === 0) return "";
 
-  const rows = result.appBreakdown
-    .map((app) => {
-      const pct = app.selfTimePercent.toFixed(1);
-      const barWidth = Math.round(app.selfTimePercent);
-      return `<tr>
+	const rows = result.appBreakdown
+		.map((app) => {
+			const pct = app.selfTimePercent.toFixed(1);
+			const barWidth = Math.round(app.selfTimePercent);
+			return `<tr>
         <td>${escapeHtml(app.appName)}</td>
         <td>${formatTime(app.selfTime)}</td>
         <td>${pct}%</td>
         <td><div class="bar" style="width:${barWidth}%"></div></td>
       </tr>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>App Breakdown</h2>
     <table>
       <thead>
@@ -179,13 +188,15 @@ function renderAppBreakdown(result: AnalysisResult): string {
 }
 
 function renderTableBreakdown(result: AnalysisResult): string {
-  if (!result.tableBreakdown || result.tableBreakdown.length === 0) return "";
+	if (!result.tableBreakdown || result.tableBreakdown.length === 0) return "";
 
-  const rows = result.tableBreakdown.map(t => {
-    const topOp = t.operationBreakdown.length > 0
-      ? `${escapeHtml(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
-      : "\u2014";
-    return `<tr>
+	const rows = result.tableBreakdown
+		.map((t) => {
+			const topOp =
+				t.operationBreakdown.length > 0
+					? `${escapeHtml(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
+					: "\u2014";
+			return `<tr>
             <td>${escapeHtml(t.tableName)}</td>
             <td>${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%)</td>
             <td>${topOp}</td>
@@ -193,9 +204,10 @@ function renderTableBreakdown(result: AnalysisResult): string {
             <td>${t.hasSetLoadFields ? "Yes" : "No"}</td>
             <td>${t.hasFilters ? "Yes" : "No"}</td>
           </tr>`;
-  }).join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Table Breakdown</h2>
     <table>
       <thead>
@@ -209,29 +221,34 @@ function renderTableBreakdown(result: AnalysisResult): string {
 }
 
 function renderObjectBreakdown(result: AnalysisResult): string {
-  if (result.objectBreakdown.length === 0) return "";
+	if (result.objectBreakdown.length === 0) return "";
 
-  const rows = result.objectBreakdown.map(obj => {
-    const headerRow = `<tr style="font-weight:600">
+	const rows = result.objectBreakdown
+		.map((obj) => {
+			const headerRow = `<tr style="font-weight:600">
             <td>${escapeHtml(obj.objectType)} ${escapeHtml(obj.objectName)}</td>
             <td>${obj.objectId}</td>
             <td>${escapeHtml(obj.appName)}</td>
             <td>${formatTime(obj.selfTime)} (${obj.selfTimePercent.toFixed(1)}%)</td>
             <td>${obj.methodCount}</td>
           </tr>`;
-    const methodRows = obj.methods.map(m =>
-      `<tr>
+			const methodRows = obj.methods
+				.map(
+					(m) =>
+						`<tr>
               <td style="padding-left:24px;color:#505C6D">${escapeHtml(m.functionName)}</td>
               <td></td>
               <td></td>
               <td style="color:#505C6D">${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)</td>
               <td style="color:#505C6D">${m.hitCount} hits</td>
-            </tr>`
-    ).join("\n");
-    return headerRow + "\n" + methodRows;
-  }).join("\n");
+            </tr>`,
+				)
+				.join("\n");
+			return headerRow + "\n" + methodRows;
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Object Breakdown</h2>
     <table>
       <thead>
@@ -245,32 +262,36 @@ function renderObjectBreakdown(result: AnalysisResult): string {
 }
 
 function renderExplanation(result: AnalysisResult): string {
-  if (!result.explanation) return "";
+	if (!result.explanation) return "";
 
-  const explanationHtml = marked.parse(result.explanation.replace(/<[^>]*>/g, ""));
-  return `<div class="section explanation">${explanationHtml}</div>`;
+	const explanationHtml = marked.parse(
+		result.explanation.replace(/<[^>]*>/g, ""),
+	);
+	return `<div class="section explanation">${explanationHtml}</div>`;
 }
 
 function renderAiNarrative(result: AnalysisResult): string {
-  if (!result.aiNarrative) return "";
+	if (!result.aiNarrative) return "";
 
-  const narrativeHtml = marked.parse(result.aiNarrative.replace(/<[^>]*>/g, ""));
-  return `<div class="section explanation">
+	const narrativeHtml = marked.parse(
+		result.aiNarrative.replace(/<[^>]*>/g, ""),
+	);
+	return `<div class="section explanation">
     <h2>AI Narrative</h2>
     ${narrativeHtml}
   </div>`;
 }
 
 function renderAiFindings(result: AnalysisResult): string {
-  if (!result.aiFindings || result.aiFindings.length === 0) return "";
+	if (!result.aiFindings || result.aiFindings.length === 0) return "";
 
-  const findingsHtml = result.aiFindings
-    .map((f) => {
-      const color = severityColor(f.severity);
-      const codeFixHtml = f.codeFix
-        ? `<pre><code class="language-al">${escapeHtml(f.codeFix)}</code></pre>`
-        : "";
-      return `<div class="pattern">
+	const findingsHtml = result.aiFindings
+		.map((f) => {
+			const color = severityColor(f.severity);
+			const codeFixHtml = f.codeFix
+				? `<pre><code class="language-al">${escapeHtml(f.codeFix)}</code></pre>`
+				: "";
+			return `<div class="pattern">
         <div class="pattern-header">
           <span class="severity-badge" style="background:${color}">${f.severity.toUpperCase()}</span>
           <span class="pattern-title">${escapeHtml(f.title)}</span>
@@ -282,38 +303,39 @@ function renderAiFindings(result: AnalysisResult): string {
         <p class="impact"><strong>Evidence:</strong> ${escapeHtml(f.evidence)}</p>
         ${codeFixHtml}
       </div>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>AI Findings</h2>
     ${findingsHtml}
   </div>`;
 }
 
 const htmlSections: SectionRenderers<string> = {
-  summary: renderSummary,
-  hotspots: renderHotspots,
-  criticalPath: renderCriticalPath,
-  patterns: renderPatterns,
-  appBreakdown: renderAppBreakdown,
-  tableBreakdown: renderTableBreakdown,
-  objectBreakdown: renderObjectBreakdown,
-  explanation: renderExplanation,
-  aiNarrative: renderAiNarrative,
-  aiFindings: renderAiFindings,
+	summary: renderSummary,
+	hotspots: renderHotspots,
+	criticalPath: renderCriticalPath,
+	patterns: renderPatterns,
+	appBreakdown: renderAppBreakdown,
+	tableBreakdown: renderTableBreakdown,
+	objectBreakdown: renderObjectBreakdown,
+	explanation: renderExplanation,
+	aiNarrative: renderAiNarrative,
+	aiFindings: renderAiFindings,
 };
 
 /**
  * Format a single analysis result as a self-contained BC-themed HTML page.
  */
 export function formatAnalysisHtml(result: AnalysisResult): string {
-  const sectionHtml = SECTION_ORDER
-    .map(section => htmlSections[section](result))
-    .filter(html => html !== "")
-    .join("\n\n  ");
+	const sectionHtml = SECTION_ORDER.map((section) =>
+		htmlSections[section](result),
+	)
+		.filter((html) => html !== "")
+		.join("\n\n  ");
 
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">

@@ -1,45 +1,50 @@
-import type { RawCallFrame, RawDeclaringApplication, RawApplicationDefinition, RawPositionTick } from "./profile.js";
+import type {
+	RawApplicationDefinition,
+	RawCallFrame,
+	RawDeclaringApplication,
+	RawPositionTick,
+} from "./profile.js";
 
 export interface ProcessedNode {
-  id: number;
-  callFrame: RawCallFrame;
-  applicationDefinition: RawApplicationDefinition;
-  declaringApplication?: RawDeclaringApplication;
-  hitCount: number;
-  children: ProcessedNode[];
-  parent?: ProcessedNode;
-  depth: number;
+	id: number;
+	callFrame: RawCallFrame;
+	applicationDefinition: RawApplicationDefinition;
+	declaringApplication?: RawDeclaringApplication;
+	hitCount: number;
+	children: ProcessedNode[];
+	parent?: ProcessedNode;
+	depth: number;
 
-  // Calculated times (microseconds)
-  selfTime: number;
-  totalTime: number;
+	// Calculated times (microseconds)
+	selfTime: number;
+	totalTime: number;
 
-  // As percentages of profile total
-  selfTimePercent: number;
-  totalTimePercent: number;
+	// As percentages of profile total
+	selfTimePercent: number;
+	totalTimePercent: number;
 
-  // Built-in code classification
-  isBuiltinCodeUnitCall?: boolean;
+	// Built-in code classification
+	isBuiltinCodeUnitCall?: boolean;
 
-  // Instrumentation extras
-  positionTicks?: RawPositionTick[];
-  nodeStartTime?: number;
-  nodeEndTime?: number;
+	// Instrumentation extras
+	positionTicks?: RawPositionTick[];
+	nodeStartTime?: number;
+	nodeEndTime?: number;
 }
 
 export interface ProcessedProfile {
-  type: "sampling" | "instrumentation";
-  roots: ProcessedNode[];
-  allNodes: ProcessedNode[];
-  nodeMap: Map<number, ProcessedNode>;
-  totalDuration: number;
-  totalSelfTime: number;
-  activeSelfTime: number;  // totalSelfTime minus IdleTime nodes
-  idleSelfTime: number;    // selfTime sum of IdleTime nodes only
-  maxDepth: number;
-  samplingInterval?: number;
+	type: "sampling" | "instrumentation";
+	roots: ProcessedNode[];
+	allNodes: ProcessedNode[];
+	nodeMap: Map<number, ProcessedNode>;
+	totalDuration: number;
+	totalSelfTime: number;
+	activeSelfTime: number; // totalSelfTime minus IdleTime nodes
+	idleSelfTime: number; // selfTime sum of IdleTime nodes only
+	maxDepth: number;
+	samplingInterval?: number;
 
-  nodeCount: number;
-  startTime: number;
-  endTime: number;
+	nodeCount: number;
+	startTime: number;
+	endTime: number;
 }

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AnalysisResult } from "../output/types.js";
-import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 import { config } from "../config.js";
+import type { AnalysisResult } from "../output/types.js";
+import { type ApiCallCost, computeCallCost } from "./api-cost.js";
 
 export const SYSTEM_PROMPT = `You are a Business Central AL performance expert. You are given the JSON output of a profile analysis. Write a concise, actionable summary covering:
 
@@ -26,93 +26,93 @@ If the profile is dominated by infrastructure concerns (metadata loading, JIT, p
 Keep it under 500 words. Use markdown formatting. No preamble — start directly with the analysis.`;
 
 export interface TrimmedResult {
-  meta: AnalysisResult["meta"];
-  summary: AnalysisResult["summary"];
-  hotspots: AnalysisResult["hotspots"];
-  totalHotspots: number;
-  patterns: AnalysisResult["patterns"];
-  totalPatterns: number;
-  appBreakdown: AnalysisResult["appBreakdown"];
-  tableBreakdown?: AnalysisResult["tableBreakdown"];
+	meta: AnalysisResult["meta"];
+	summary: AnalysisResult["summary"];
+	hotspots: AnalysisResult["hotspots"];
+	totalHotspots: number;
+	patterns: AnalysisResult["patterns"];
+	totalPatterns: number;
+	appBreakdown: AnalysisResult["appBreakdown"];
+	tableBreakdown?: AnalysisResult["tableBreakdown"];
 }
 
 export function trimResultForPrompt(result: AnalysisResult): TrimmedResult {
-  return {
-    meta: result.meta,
-    summary: result.summary,
-    hotspots: result.hotspots.slice(0, config.explain.trimmedHotspots),
-    totalHotspots: result.hotspots.length,
-    patterns: result.patterns.slice(0, config.explain.trimmedPatterns),
-    totalPatterns: result.patterns.length,
-    appBreakdown: result.appBreakdown,
-    tableBreakdown: result.tableBreakdown,
-  };
+	return {
+		meta: result.meta,
+		summary: result.summary,
+		hotspots: result.hotspots.slice(0, config.explain.trimmedHotspots),
+		totalHotspots: result.hotspots.length,
+		patterns: result.patterns.slice(0, config.explain.trimmedPatterns),
+		totalPatterns: result.patterns.length,
+		appBreakdown: result.appBreakdown,
+		tableBreakdown: result.tableBreakdown,
+	};
 }
 
 export type ExplainModel = "sonnet" | "opus";
 
 export const MODEL_IDS: Record<ExplainModel, string> = {
-  sonnet: "claude-sonnet-4-6",
-  opus: "claude-opus-4-6",
+	sonnet: "claude-sonnet-4-6",
+	opus: "claude-opus-4-6",
 };
 
 export interface ExplainOptions {
-  apiKey: string;
-  model?: ExplainModel;
+	apiKey: string;
+	model?: ExplainModel;
 }
 
 export interface AiDebugInfo {
-  systemPrompt: string;
-  userPayload: object;
-  rawResponse: object;
+	systemPrompt: string;
+	userPayload: object;
+	rawResponse: object;
 }
 
 export interface ExplainResult {
-  text: string;
-  cost: ApiCallCost;
-  debugInfo: AiDebugInfo;
+	text: string;
+	cost: ApiCallCost;
+	debugInfo: AiDebugInfo;
 }
 
 export async function explainAnalysis(
-  result: AnalysisResult,
-  options: ExplainOptions,
+	result: AnalysisResult,
+	options: ExplainOptions,
 ): Promise<ExplainResult> {
-  const client = new Anthropic({ apiKey: options.apiKey });
-  const trimmed = trimResultForPrompt(result);
-  const model = MODEL_IDS[options.model ?? config.defaultModel];
+	const client = new Anthropic({ apiKey: options.apiKey });
+	const trimmed = trimResultForPrompt(result);
+	const model = MODEL_IDS[options.model ?? config.defaultModel];
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: config.explain.maxTokens,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify(trimmed, null, 2),
-      },
-    ],
-  });
+	const response = await client.messages.create({
+		model,
+		max_tokens: config.explain.maxTokens,
+		system: SYSTEM_PROMPT,
+		messages: [
+			{
+				role: "user",
+				content: JSON.stringify(trimmed, null, 2),
+			},
+		],
+	});
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  let text = textBlock?.text ?? "";
-  if (response.stop_reason === "max_tokens") {
-    text += "\n\n*(Response truncated)*";
-  }
+	const textBlock = response.content.find((b) => b.type === "text");
+	let text = textBlock?.text ?? "";
+	if (response.stop_reason === "max_tokens") {
+		text += "\n\n*(Response truncated)*";
+	}
 
-  const cost = computeCallCost(
-    "explain",
-    model,
-    response.usage.input_tokens,
-    response.usage.output_tokens,
-  );
+	const cost = computeCallCost(
+		"explain",
+		model,
+		response.usage.input_tokens,
+		response.usage.output_tokens,
+	);
 
-  return {
-    text,
-    cost,
-    debugInfo: {
-      systemPrompt: SYSTEM_PROMPT,
-      userPayload: trimmed,
-      rawResponse: response,
-    },
-  };
+	return {
+		text,
+		cost,
+		debugInfo: {
+			systemPrompt: SYSTEM_PROMPT,
+			userPayload: trimmed,
+			rawResponse: response,
+		},
+	};
 }

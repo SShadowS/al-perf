@@ -1,63 +1,63 @@
-import { basename } from "path";
 import { marked } from "marked";
-import type { BatchAnalysisResult } from "../../output/batch-types.js";
-import type { BatchSectionRenderers } from "../../output/batch-sections.js";
-import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
+import { basename } from "path";
 import { formatTime } from "../../core/analyzer.js";
 import { truncateFunctionName } from "../../core/display-utils.js";
+import type { BatchSectionRenderers } from "../../output/batch-sections.js";
+import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
+import type { BatchAnalysisResult } from "../../output/batch-types.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
  */
 function escapeHtml(str: string | undefined | null): string {
-  if (!str) return "";
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+	if (!str) return "";
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
 }
 
 /**
  * Map severity to BC-themed color.
  */
 function severityColor(severity: "critical" | "warning" | "info"): string {
-  switch (severity) {
-    case "critical":
-      return "#EB6965";
-    case "warning":
-      return "#9F9700";
-    case "info":
-      return "#505C6D";
-  }
+	switch (severity) {
+		case "critical":
+			return "#EB6965";
+		case "warning":
+			return "#9F9700";
+		case "info":
+			return "#505C6D";
+	}
 }
 
 /**
  * Color for health score based on value.
  */
 function healthColor(score: number): string {
-  if (score >= 80) return "#4CAF50";
-  if (score >= 50) return "#9F9700";
-  return "#EB6965";
+	if (score >= 80) return "#4CAF50";
+	if (score >= 50) return "#9F9700";
+	return "#EB6965";
 }
 
 function renderBatchSummary(result: BatchAnalysisResult): string {
-  const pc = result.summary.totalPatternCount;
-  const healthCol = healthColor(result.summary.overallHealthScore);
+	const pc = result.summary.totalPatternCount;
+	const healthCol = healthColor(result.summary.overallHealthScore);
 
-  const timeRangeRow = result.meta.timeRange
-    ? `<tr><td>Time Range</td><td>${escapeHtml(result.meta.timeRange.start)} &mdash; ${escapeHtml(result.meta.timeRange.end)}</td></tr>`
-    : "";
+	const timeRangeRow = result.meta.timeRange
+		? `<tr><td>Time Range</td><td>${escapeHtml(result.meta.timeRange.start)} &mdash; ${escapeHtml(result.meta.timeRange.end)}</td></tr>`
+		: "";
 
-  const worstRow = result.summary.worstProfile
-    ? `<tr><td>Worst Profile</td><td><span style="color:#EB6965">${escapeHtml(result.summary.worstProfile.description)}</span> (health ${result.summary.worstProfile.healthScore}/100)</td></tr>`
-    : "";
+	const worstRow = result.summary.worstProfile
+		? `<tr><td>Worst Profile</td><td><span style="color:#EB6965">${escapeHtml(result.summary.worstProfile.description)}</span> (health ${result.summary.worstProfile.healthScore}/100)</td></tr>`
+		: "";
 
-  const sourceRow = result.meta.sourceAvailable
-    ? `<tr><td>Source</td><td>source available</td></tr>`
-    : `<tr><td>Source</td><td>no source</td></tr>`;
+	const sourceRow = result.meta.sourceAvailable
+		? `<tr><td>Source</td><td>source available</td></tr>`
+		: `<tr><td>Source</td><td>no source</td></tr>`;
 
-  return `<p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
+	return `<p class="summary-text">${escapeHtml(result.summary.oneLiner)}</p>
   <div class="badges">
     <span class="badge" style="background:${healthCol}">${result.summary.overallHealthScore}/100 Health</span>
     <span class="badge" style="background:#EB6965">${pc.critical} Critical</span>
@@ -78,44 +78,57 @@ function renderBatchSummary(result: BatchAnalysisResult): string {
 }
 
 function renderBatchExplanation(result: BatchAnalysisResult): string {
-  if (!result.explanation) return "";
+	if (!result.explanation) return "";
 
-  const explanationHtml = marked.parse(result.explanation.replace(/<[^>]*>/g, ""));
-  return `<div class="section explanation">
+	const explanationHtml = marked.parse(
+		result.explanation.replace(/<[^>]*>/g, ""),
+	);
+	return `<div class="section explanation">
     <h2>AI Analysis</h2>
     <div class="explanation-content">${explanationHtml}</div>
   </div>`;
 }
 
 function renderActivityBreakdown(result: BatchAnalysisResult): string {
-  if (result.activityBreakdown.length === 0) return "";
+	if (result.activityBreakdown.length === 0) return "";
 
-  const rows = result.activityBreakdown
-    .map((activity) => {
-      const label = activity.metadata?.activityDescription ?? basename(activity.profilePath);
-      const activityType = activity.metadata?.activityType ?? "\u2014";
-      const healthCol = healthColor(activity.healthScore);
+	const rows = result.activityBreakdown
+		.map((activity) => {
+			const label =
+				activity.metadata?.activityDescription ??
+				basename(activity.profilePath);
+			const activityType = activity.metadata?.activityType ?? "\u2014";
+			const healthCol = healthColor(activity.healthScore);
 
-      const patternParts: string[] = [];
-      if (activity.patternCount.critical > 0)
-        patternParts.push(`<span class="severity-badge" style="background:#EB6965">${activity.patternCount.critical}C</span>`);
-      if (activity.patternCount.warning > 0)
-        patternParts.push(`<span class="severity-badge" style="background:#9F9700">${activity.patternCount.warning}W</span>`);
-      if (activity.patternCount.info > 0)
-        patternParts.push(`<span class="severity-badge" style="background:#505C6D">${activity.patternCount.info}I</span>`);
-      const patternsStr = patternParts.length > 0 ? patternParts.join(" ") : `<span style="color:#4CAF50">\u2014</span>`;
+			const patternParts: string[] = [];
+			if (activity.patternCount.critical > 0)
+				patternParts.push(
+					`<span class="severity-badge" style="background:#EB6965">${activity.patternCount.critical}C</span>`,
+				);
+			if (activity.patternCount.warning > 0)
+				patternParts.push(
+					`<span class="severity-badge" style="background:#9F9700">${activity.patternCount.warning}W</span>`,
+				);
+			if (activity.patternCount.info > 0)
+				patternParts.push(
+					`<span class="severity-badge" style="background:#505C6D">${activity.patternCount.info}I</span>`,
+				);
+			const patternsStr =
+				patternParts.length > 0
+					? patternParts.join(" ")
+					: `<span style="color:#4CAF50">\u2014</span>`;
 
-      const topHotspotStr = activity.topHotspot
-        ? `<strong>Top hotspot:</strong> ${escapeHtml(activity.topHotspot.functionName)} (${escapeHtml(activity.topHotspot.objectName)}) &mdash; ${activity.topHotspot.selfTimePercent.toFixed(1)}% self time`
-        : "No hotspots";
+			const topHotspotStr = activity.topHotspot
+				? `<strong>Top hotspot:</strong> ${escapeHtml(activity.topHotspot.functionName)} (${escapeHtml(activity.topHotspot.objectName)}) &mdash; ${activity.topHotspot.selfTimePercent.toFixed(1)}% self time`
+				: "No hotspots";
 
-      const metaDetails = activity.metadata
-        ? `<p><strong>User:</strong> ${escapeHtml(activity.metadata.userName)} &bull;
+			const metaDetails = activity.metadata
+				? `<p><strong>User:</strong> ${escapeHtml(activity.metadata.userName)} &bull;
               <strong>SQL calls:</strong> ${activity.metadata.sqlCallCount} (${formatTime(activity.metadata.sqlCallDuration)}) &bull;
               <strong>HTTP calls:</strong> ${activity.metadata.httpCallCount} (${formatTime(activity.metadata.httpCallDuration)})</p>`
-        : "";
+				: "";
 
-      return `<tr>
+			return `<tr>
         <td colspan="5" style="padding:0;border:none">
           <details>
             <summary class="activity-summary">
@@ -133,10 +146,10 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
           </details>
         </td>
       </tr>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Activity Breakdown</h2>
     <table class="activity-table">
       <thead>
@@ -150,29 +163,29 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
 }
 
 function renderRecurringPatterns(result: BatchAnalysisResult): string {
-  if (result.recurringPatterns.length === 0) return "";
+	if (result.recurringPatterns.length === 0) return "";
 
-  const grouped: Record<string, typeof result.recurringPatterns> = {
-    critical: [],
-    warning: [],
-    info: [],
-  };
+	const grouped: Record<string, typeof result.recurringPatterns> = {
+		critical: [],
+		warning: [],
+		info: [],
+	};
 
-  for (const p of result.recurringPatterns) {
-    grouped[p.severity].push(p);
-  }
+	for (const p of result.recurringPatterns) {
+		grouped[p.severity].push(p);
+	}
 
-  const sections: string[] = [];
+	const sections: string[] = [];
 
-  for (const severity of ["critical", "warning", "info"] as const) {
-    const patterns = grouped[severity];
-    if (patterns.length === 0) continue;
+	for (const severity of ["critical", "warning", "info"] as const) {
+		const patterns = grouped[severity];
+		if (patterns.length === 0) continue;
 
-    const color = severityColor(severity);
-    const cards = patterns
-      .map((p) => {
-        const barWidth = Math.round(p.recurrencePercent);
-        return `<div class="pattern">
+		const color = severityColor(severity);
+		const cards = patterns
+			.map((p) => {
+				const barWidth = Math.round(p.recurrencePercent);
+				return `<div class="pattern">
           <div class="pattern-header">
             <span class="severity-badge" style="background:${color}">${severity.toUpperCase()}</span>
             <span class="pattern-title">${escapeHtml(p.title)}</span>
@@ -183,33 +196,36 @@ function renderRecurringPatterns(result: BatchAnalysisResult): string {
             <span class="recurrence-label">${p.recurrencePercent}%</span>
           </div>
         </div>`;
-      })
-      .join("\n");
+			})
+			.join("\n");
 
-    sections.push(cards);
-  }
+		sections.push(cards);
+	}
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Recurring Patterns</h2>
     ${sections.join("\n")}
   </div>`;
 }
 
 function renderCumulativeHotspots(result: BatchAnalysisResult): string {
-  if (result.cumulativeHotspots.length === 0) return "";
+	if (result.cumulativeHotspots.length === 0) return "";
 
-  const maxTime = result.cumulativeHotspots.length > 0
-    ? result.cumulativeHotspots[0].cumulativeSelfTime
-    : 1;
+	const maxTime =
+		result.cumulativeHotspots.length > 0
+			? result.cumulativeHotspots[0].cumulativeSelfTime
+			: 1;
 
-  const rows = result.cumulativeHotspots
-    .map((h) => {
-      const barWidth = maxTime > 0 ? Math.round((h.cumulativeSelfTime / maxTime) * 100) : 0;
-      const displayName = truncateFunctionName(h.functionName);
-      const nameHtml = displayName !== h.functionName
-        ? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
-        : `<strong>${escapeHtml(h.functionName)}</strong>`;
-      return `<tr>
+	const rows = result.cumulativeHotspots
+		.map((h) => {
+			const barWidth =
+				maxTime > 0 ? Math.round((h.cumulativeSelfTime / maxTime) * 100) : 0;
+			const displayName = truncateFunctionName(h.functionName);
+			const nameHtml =
+				displayName !== h.functionName
+					? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
+					: `<strong>${escapeHtml(h.functionName)}</strong>`;
+			return `<tr>
         <td>${nameHtml}</td>
         <td>${escapeHtml(h.objectType)} ${h.objectId} (${escapeHtml(h.objectName)})</td>
         <td>
@@ -221,10 +237,10 @@ function renderCumulativeHotspots(result: BatchAnalysisResult): string {
         <td>${h.profileCount}/${result.meta.profileCount}</td>
         <td>${formatTime(h.avgSelfTime)}</td>
       </tr>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>Cumulative Hotspots</h2>
     <table>
       <thead>
@@ -238,22 +254,22 @@ function renderCumulativeHotspots(result: BatchAnalysisResult): string {
 }
 
 function renderAppBreakdown(result: BatchAnalysisResult): string {
-  if (result.appBreakdown.length === 0) return "";
+	if (result.appBreakdown.length === 0) return "";
 
-  const rows = result.appBreakdown
-    .map((app) => {
-      const pct = app.selfTimePercent.toFixed(1);
-      const barWidth = Math.round(app.selfTimePercent);
-      return `<tr>
+	const rows = result.appBreakdown
+		.map((app) => {
+			const pct = app.selfTimePercent.toFixed(1);
+			const barWidth = Math.round(app.selfTimePercent);
+			return `<tr>
         <td>${escapeHtml(app.appName)}</td>
         <td>${formatTime(app.selfTime)}</td>
         <td>${pct}%</td>
         <td><div class="bar" style="width:${barWidth}%"></div></td>
       </tr>`;
-    })
-    .join("\n");
+		})
+		.join("\n");
 
-  return `<div class="section">
+	return `<div class="section">
     <h2>App Breakdown</h2>
     <table>
       <thead>
@@ -267,31 +283,33 @@ function renderAppBreakdown(result: BatchAnalysisResult): string {
 }
 
 const batchHtmlSections: BatchSectionRenderers<string> = {
-  batchSummary: renderBatchSummary,
-  batchExplanation: renderBatchExplanation,
-  activityBreakdown: renderActivityBreakdown,
-  recurringPatterns: renderRecurringPatterns,
-  cumulativeHotspots: renderCumulativeHotspots,
-  appBreakdown: renderAppBreakdown,
+	batchSummary: renderBatchSummary,
+	batchExplanation: renderBatchExplanation,
+	activityBreakdown: renderActivityBreakdown,
+	recurringPatterns: renderRecurringPatterns,
+	cumulativeHotspots: renderCumulativeHotspots,
+	appBreakdown: renderAppBreakdown,
 };
 
 /**
  * Format a batch analysis result as a self-contained BC-themed HTML page.
  */
 export function formatBatchHtml(result: BatchAnalysisResult): string {
-  const sectionHtml = BATCH_SECTION_ORDER
-    .map((section) => batchHtmlSections[section](result))
-    .filter((html) => html !== "")
-    .join("\n\n  ");
+	const sectionHtml = BATCH_SECTION_ORDER.map((section) =>
+		batchHtmlSections[section](result),
+	)
+		.filter((html) => html !== "")
+		.join("\n\n  ");
 
-  const errorsHtml = result.errors.length > 0
-    ? `<div class="section">
+	const errorsHtml =
+		result.errors.length > 0
+			? `<div class="section">
     <h2 style="color:#EB6965">Errors</h2>
     ${result.errors.map((e) => `<p style="color:#EB6965"><strong>&times;</strong> ${escapeHtml(e.profilePath)}: ${escapeHtml(e.error)}</p>`).join("\n")}
   </div>`
-    : "";
+			: "";
 
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">

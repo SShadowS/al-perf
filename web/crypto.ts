@@ -1,13 +1,13 @@
 import {
-	constants as cryptoConst,
 	createCipheriv,
 	createDecipheriv,
-	createHmac,
 	createHash,
+	createHmac,
 	createPrivateKey,
 	createPublicKey,
-	publicEncrypt,
+	constants as cryptoConst,
 	privateDecrypt,
+	publicEncrypt,
 	randomBytes,
 	timingSafeEqual,
 } from "crypto";
@@ -25,7 +25,7 @@ export interface BundlePart {
 }
 
 export interface EncryptedBundle {
-	wrapped: Buffer;       // 384 bytes for RSA-3072
+	wrapped: Buffer; // 384 bytes for RSA-3072
 	blob: BundlePart;
 	result: BundlePart;
 }
@@ -65,8 +65,14 @@ export function encryptBundle(
 	const ciphertextBlob = aesCbc256Encrypt(kEnc, iv1, plaintextBlob);
 	const ciphertextResult = aesCbc256Encrypt(kEnc, iv2, plaintextResult);
 
-	const tagBlob = hmacSha256Text(kMac, Buffer.concat([iv1, manifestHash, ciphertextBlob]).toString("base64"));
-	const tagResult = hmacSha256Text(kMac, Buffer.concat([iv2, manifestHash, ciphertextResult]).toString("base64"));
+	const tagBlob = hmacSha256Text(
+		kMac,
+		Buffer.concat([iv1, manifestHash, ciphertextBlob]).toString("base64"),
+	);
+	const tagResult = hmacSha256Text(
+		kMac,
+		Buffer.concat([iv2, manifestHash, ciphertextResult]).toString("base64"),
+	);
 
 	const pubKey = createPublicKey({ key: jwk, format: "jwk" });
 	const wrapped = publicEncrypt(
@@ -139,7 +145,10 @@ export function decryptBundleForTest(
 }
 
 function verifyTag(kMac: Buffer, part: BundlePart, manifestHash: Buffer): void {
-	const expected = hmacSha256Text(kMac, Buffer.concat([part.iv, manifestHash, part.ciphertext]).toString("base64"));
+	const expected = hmacSha256Text(
+		kMac,
+		Buffer.concat([part.iv, manifestHash, part.ciphertext]).toString("base64"),
+	);
 	if (expected.byteLength !== part.tag.byteLength) {
 		throw new Error("tag length mismatch");
 	}

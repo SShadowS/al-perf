@@ -10,46 +10,52 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { readdir, readFile, writeFile, stat } from "fs/promises";
-import { resolve, basename } from "path";
 import { existsSync } from "fs";
+import { readdir, readFile, stat, writeFile } from "fs/promises";
+import { resolve } from "path";
 import { computeCallCost, formatCallCost } from "../src/explain/api-cost.js";
-import type { ApiCallCost } from "../src/explain/api-cost.js";
 
 const RUNS_DIR = resolve(import.meta.dir, "..", "exampledata", "runs");
 
 function log(msg: string): void {
-  process.stderr.write(msg + "\n");
+	process.stderr.write(msg + "\n");
 }
 
 async function readFileOr(path: string): Promise<string | undefined> {
-  if (!existsSync(path)) return undefined;
-  return await readFile(path, "utf-8");
+	if (!existsSync(path)) return undefined;
+	return await readFile(path, "utf-8");
 }
 
 interface ProfileOutputs {
-  explainNarrative?: string;
-  deepFindings?: string;
-  meta?: string;
+	explainNarrative?: string;
+	deepFindings?: string;
+	meta?: string;
 }
 
-async function loadProfileOutputs(runDir: string, profileName: string): Promise<ProfileOutputs | null> {
-  const dir = resolve(runDir, profileName);
-  if (!existsSync(dir)) return null;
-  return {
-    explainNarrative: await readFileOr(resolve(dir, "explain", "parsed-output.txt")),
-    deepFindings: await readFileOr(resolve(dir, "deep", "parsed-findings.json")),
-    meta: await readFileOr(resolve(dir, "meta.json")),
-  };
+async function loadProfileOutputs(
+	runDir: string,
+	profileName: string,
+): Promise<ProfileOutputs | null> {
+	const dir = resolve(runDir, profileName);
+	if (!existsSync(dir)) return null;
+	return {
+		explainNarrative: await readFileOr(
+			resolve(dir, "explain", "parsed-output.txt"),
+		),
+		deepFindings: await readFileOr(
+			resolve(dir, "deep", "parsed-findings.json"),
+		),
+		meta: await readFileOr(resolve(dir, "meta.json")),
+	};
 }
 
 function getModelFromMeta(metaJson: string | undefined): string {
-  if (!metaJson) return "unknown";
-  try {
-    return JSON.parse(metaJson).model ?? "unknown";
-  } catch {
-    return "unknown";
-  }
+	if (!metaJson) return "unknown";
+	try {
+		return JSON.parse(metaJson).model ?? "unknown";
+	} catch {
+		return "unknown";
+	}
 }
 
 const COMPARE_SYSTEM_PROMPT = `You are a Business Central AL performance analysis expert reviewing AI-generated performance analysis outputs.
@@ -98,352 +104,368 @@ At the end, include a JSON block with structured scores:
 \`\`\``;
 
 interface ParsedArgs {
-  aggregate: boolean;
-  aRuns: string[];
-  bRuns: string[];
-  positionalA?: string;
-  positionalB?: string;
+	aggregate: boolean;
+	aRuns: string[];
+	bRuns: string[];
+	positionalA?: string;
+	positionalB?: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args = argv.slice(2);
-  const result: ParsedArgs = { aggregate: false, aRuns: [], bRuns: [] };
+	const args = argv.slice(2);
+	const result: ParsedArgs = { aggregate: false, aRuns: [], bRuns: [] };
 
-  let i = 0;
-  const positionals: string[] = [];
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg === "--aggregate") {
-      result.aggregate = true;
-      i++;
-    } else if (arg === "--a" && i + 1 < args.length) {
-      result.aRuns = args[i + 1].split(",").map((s) => s.trim()).filter(Boolean);
-      i += 2;
-    } else if (arg === "--b" && i + 1 < args.length) {
-      result.bRuns = args[i + 1].split(",").map((s) => s.trim()).filter(Boolean);
-      i += 2;
-    } else {
-      positionals.push(arg);
-      i++;
-    }
-  }
+	let i = 0;
+	const positionals: string[] = [];
+	while (i < args.length) {
+		const arg = args[i];
+		if (arg === "--aggregate") {
+			result.aggregate = true;
+			i++;
+		} else if (arg === "--a" && i + 1 < args.length) {
+			result.aRuns = args[i + 1]
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
+			i += 2;
+		} else if (arg === "--b" && i + 1 < args.length) {
+			result.bRuns = args[i + 1]
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
+			i += 2;
+		} else {
+			positionals.push(arg);
+			i++;
+		}
+	}
 
-  if (!result.aggregate && positionals.length >= 2) {
-    result.positionalA = positionals[0];
-    result.positionalB = positionals[1];
-  }
+	if (!result.aggregate && positionals.length >= 2) {
+		result.positionalA = positionals[0];
+		result.positionalB = positionals[1];
+	}
 
-  return result;
+	return result;
 }
 
 async function discoverProfileNames(runDirs: string[]): Promise<string[]> {
-  const names = new Set<string>();
-  for (const dir of runDirs) {
-    const entries = await readdir(dir);
-    for (const e of entries) {
-      if (existsSync(resolve(dir, e, "meta.json"))) {
-        names.add(e);
-      }
-    }
-  }
-  return [...names].sort();
+	const names = new Set<string>();
+	for (const dir of runDirs) {
+		const entries = await readdir(dir);
+		for (const e of entries) {
+			if (existsSync(resolve(dir, e, "meta.json"))) {
+				names.add(e);
+			}
+		}
+	}
+	return [...names].sort();
 }
 
 async function getAllRunDirs(): Promise<string[]> {
-  const entries = await readdir(RUNS_DIR);
-  const dirs: string[] = [];
-  for (const entry of entries) {
-    const s = await stat(resolve(RUNS_DIR, entry));
-    if (s.isDirectory()) dirs.push(entry);
-  }
-  dirs.sort();
-  return dirs;
+	const entries = await readdir(RUNS_DIR);
+	const dirs: string[] = [];
+	for (const entry of entries) {
+		const s = await stat(resolve(RUNS_DIR, entry));
+		if (s.isDirectory()) dirs.push(entry);
+	}
+	dirs.sort();
+	return dirs;
 }
 
 function extractJsonBlock(text: string): unknown | null {
-  const match = text.match(/```json\s*([\s\S]*?)```/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1].trim());
-  } catch {
-    return null;
-  }
+	const match = text.match(/```json\s*([\s\S]*?)```/);
+	if (!match) return null;
+	try {
+		return JSON.parse(match[1].trim());
+	} catch {
+		return null;
+	}
 }
 
 async function mainAggregate(args: ParsedArgs): Promise<void> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    log("ERROR: ANTHROPIC_API_KEY environment variable is not set");
-    process.exit(1);
-  }
+	const apiKey = process.env.ANTHROPIC_API_KEY;
+	if (!apiKey) {
+		log("ERROR: ANTHROPIC_API_KEY environment variable is not set");
+		process.exit(1);
+	}
 
-  if (args.aRuns.length === 0 || args.bRuns.length === 0) {
-    log("ERROR: --aggregate requires both --a and --b with comma-separated run names");
-    process.exit(1);
-  }
+	if (args.aRuns.length === 0 || args.bRuns.length === 0) {
+		log(
+			"ERROR: --aggregate requires both --a and --b with comma-separated run names",
+		);
+		process.exit(1);
+	}
 
-  const allRuns = await getAllRunDirs();
+	const allRuns = await getAllRunDirs();
 
-  // Validate all run names exist
-  for (const run of [...args.aRuns, ...args.bRuns]) {
-    if (!allRuns.includes(run)) {
-      log(`ERROR: Run "${run}" not found in ${RUNS_DIR}`);
-      process.exit(1);
-    }
-  }
+	// Validate all run names exist
+	for (const run of [...args.aRuns, ...args.bRuns]) {
+		if (!allRuns.includes(run)) {
+			log(`ERROR: Run "${run}" not found in ${RUNS_DIR}`);
+			process.exit(1);
+		}
+	}
 
-  const aRunDirs = args.aRuns.map((r) => resolve(RUNS_DIR, r));
-  const bRunDirs = args.bRuns.map((r) => resolve(RUNS_DIR, r));
+	const aRunDirs = args.aRuns.map((r) => resolve(RUNS_DIR, r));
+	const bRunDirs = args.bRuns.map((r) => resolve(RUNS_DIR, r));
 
-  // Discover all profile names across all runs
-  const profileNames = await discoverProfileNames([...aRunDirs, ...bRunDirs]);
+	// Discover all profile names across all runs
+	const profileNames = await discoverProfileNames([...aRunDirs, ...bRunDirs]);
 
-  // Detect model from first available run in each group
-  const firstAOutputs = await loadProfileOutputs(aRunDirs[0], profileNames[0]);
-  const firstBOutputs = await loadProfileOutputs(bRunDirs[0], profileNames[0]);
-  const modelA = getModelFromMeta(firstAOutputs?.meta);
-  const modelB = getModelFromMeta(firstBOutputs?.meta);
+	// Detect model from first available run in each group
+	const firstAOutputs = await loadProfileOutputs(aRunDirs[0], profileNames[0]);
+	const firstBOutputs = await loadProfileOutputs(bRunDirs[0], profileNames[0]);
+	const modelA = getModelFromMeta(firstAOutputs?.meta);
+	const modelB = getModelFromMeta(firstBOutputs?.meta);
 
-  log(`Aggregate comparison:`);
-  log(`  Group A: ${args.aRuns.join(", ")} (model: ${modelA}, ${args.aRuns.length} runs)`);
-  log(`  Group B: ${args.bRuns.join(", ")} (model: ${modelB}, ${args.bRuns.length} runs)`);
-  log(`  Profiles: ${profileNames.length}`);
+	log(`Aggregate comparison:`);
+	log(
+		`  Group A: ${args.aRuns.join(", ")} (model: ${modelA}, ${args.aRuns.length} runs)`,
+	);
+	log(
+		`  Group B: ${args.bRuns.join(", ")} (model: ${modelB}, ${args.bRuns.length} runs)`,
+	);
+	log(`  Profiles: ${profileNames.length}`);
 
-  // Build the comparison payload
-  const sections: string[] = [];
+	// Build the comparison payload
+	const sections: string[] = [];
 
-  for (const name of profileNames) {
-    let section = `## Profile: ${name}\n\n`;
+	for (const name of profileNames) {
+		let section = `## Profile: ${name}\n\n`;
 
-    section += `### Group A (${args.aRuns.length} runs)\n\n`;
-    for (let i = 0; i < args.aRuns.length; i++) {
-      const outputs = await loadProfileOutputs(aRunDirs[i], name);
-      section += `#### Run ${i + 1}: ${args.aRuns[i]}\n\n`;
-      if (outputs) {
-        section += `##### Explain Narrative\n${outputs.explainNarrative ?? "_not available_"}\n\n`;
-        section += `##### Deep Findings\n${outputs.deepFindings ?? "_not available_"}\n\n`;
-      } else {
-        section += "_Not available in this run_\n\n";
-      }
-    }
+		section += `### Group A (${args.aRuns.length} runs)\n\n`;
+		for (let i = 0; i < args.aRuns.length; i++) {
+			const outputs = await loadProfileOutputs(aRunDirs[i], name);
+			section += `#### Run ${i + 1}: ${args.aRuns[i]}\n\n`;
+			if (outputs) {
+				section += `##### Explain Narrative\n${outputs.explainNarrative ?? "_not available_"}\n\n`;
+				section += `##### Deep Findings\n${outputs.deepFindings ?? "_not available_"}\n\n`;
+			} else {
+				section += "_Not available in this run_\n\n";
+			}
+		}
 
-    section += `### Group B (${args.bRuns.length} runs)\n\n`;
-    for (let i = 0; i < args.bRuns.length; i++) {
-      const outputs = await loadProfileOutputs(bRunDirs[i], name);
-      section += `#### Run ${i + 1}: ${args.bRuns[i]}\n\n`;
-      if (outputs) {
-        section += `##### Explain Narrative\n${outputs.explainNarrative ?? "_not available_"}\n\n`;
-        section += `##### Deep Findings\n${outputs.deepFindings ?? "_not available_"}\n\n`;
-      } else {
-        section += "_Not available in this run_\n\n";
-      }
-    }
+		section += `### Group B (${args.bRuns.length} runs)\n\n`;
+		for (let i = 0; i < args.bRuns.length; i++) {
+			const outputs = await loadProfileOutputs(bRunDirs[i], name);
+			section += `#### Run ${i + 1}: ${args.bRuns[i]}\n\n`;
+			if (outputs) {
+				section += `##### Explain Narrative\n${outputs.explainNarrative ?? "_not available_"}\n\n`;
+				section += `##### Deep Findings\n${outputs.deepFindings ?? "_not available_"}\n\n`;
+			} else {
+				section += "_Not available in this run_\n\n";
+			}
+		}
 
-    sections.push(section);
-  }
+		sections.push(section);
+	}
 
-  const userPayload = sections.join("\n---\n\n");
+	const userPayload = sections.join("\n---\n\n");
 
-  log(`\nPayload size: ${(userPayload.length / 1024).toFixed(1)}KB`);
-  log("Sending to Claude for aggregate comparison...\n");
+	log(`\nPayload size: ${(userPayload.length / 1024).toFixed(1)}KB`);
+	log("Sending to Claude for aggregate comparison...\n");
 
-  const client = new Anthropic({ apiKey });
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 8192,
-    system: AGGREGATE_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userPayload }],
-  });
+	const client = new Anthropic({ apiKey });
+	const response = await client.messages.create({
+		model: "claude-sonnet-4-6",
+		max_tokens: 8192,
+		system: AGGREGATE_SYSTEM_PROMPT,
+		messages: [{ role: "user", content: userPayload }],
+	});
 
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
+	const text = response.content
+		.filter((b): b is Anthropic.TextBlock => b.type === "text")
+		.map((b) => b.text)
+		.join("");
 
-  const cost = computeCallCost(
-    "compare-quality-aggregate",
-    "claude-sonnet-4-6",
-    response.usage.input_tokens,
-    response.usage.output_tokens,
-  );
+	const cost = computeCallCost(
+		"compare-quality-aggregate",
+		"claude-sonnet-4-6",
+		response.usage.input_tokens,
+		response.usage.output_tokens,
+	);
 
-  log(`Compare cost: ${formatCallCost(cost)}`);
+	log(`Compare cost: ${formatCallCost(cost)}`);
 
-  // Build the report
-  const report = [
-    `# AI Quality Aggregate Comparison Report`,
-    ``,
-    `**Group A**: ${args.aRuns.map((r) => `\`${r}\``).join(", ")} (model: ${modelA})`,
-    `**Group B**: ${args.bRuns.map((r) => `\`${r}\``).join(", ")} (model: ${modelB})`,
-    `**Profiles compared**: ${profileNames.length}`,
-    `**Runs per group**: A=${args.aRuns.length}, B=${args.bRuns.length}`,
-    `**Comparison cost**: ${formatCallCost(cost)}`,
-    ``,
-    `---`,
-    ``,
-    text,
-  ].join("\n");
+	// Build the report
+	const report = [
+		`# AI Quality Aggregate Comparison Report`,
+		``,
+		`**Group A**: ${args.aRuns.map((r) => `\`${r}\``).join(", ")} (model: ${modelA})`,
+		`**Group B**: ${args.bRuns.map((r) => `\`${r}\``).join(", ")} (model: ${modelB})`,
+		`**Profiles compared**: ${profileNames.length}`,
+		`**Runs per group**: A=${args.aRuns.length}, B=${args.bRuns.length}`,
+		`**Comparison cost**: ${formatCallCost(cost)}`,
+		``,
+		`---`,
+		``,
+		text,
+	].join("\n");
 
-  // Save to the LAST run folder in group B
-  const lastBRunDir = bRunDirs[bRunDirs.length - 1];
-  const reportPath = resolve(lastBRunDir, "comparison-report.md");
-  await writeFile(reportPath, report, "utf-8");
-  log(`\nReport saved to: ${reportPath}`);
+	// Save to the LAST run folder in group B
+	const lastBRunDir = bRunDirs[bRunDirs.length - 1];
+	const reportPath = resolve(lastBRunDir, "comparison-report.md");
+	await writeFile(reportPath, report, "utf-8");
+	log(`\nReport saved to: ${reportPath}`);
 
-  // Extract and save JSON scores
-  const scores = extractJsonBlock(text);
-  if (scores) {
-    const scoresPath = resolve(lastBRunDir, "comparison-scores.json");
-    await writeFile(scoresPath, JSON.stringify(scores, null, 2), "utf-8");
-    log(`Scores saved to: ${scoresPath}`);
-  } else {
-    log("WARNING: Could not extract JSON scores block from response");
-  }
+	// Extract and save JSON scores
+	const scores = extractJsonBlock(text);
+	if (scores) {
+		const scoresPath = resolve(lastBRunDir, "comparison-scores.json");
+		await writeFile(scoresPath, JSON.stringify(scores, null, 2), "utf-8");
+		log(`Scores saved to: ${scoresPath}`);
+	} else {
+		log("WARNING: Could not extract JSON scores block from response");
+	}
 
-  // Also print to stdout for immediate reading
-  process.stdout.write(report + "\n");
+	// Also print to stdout for immediate reading
+	process.stdout.write(report + "\n");
 }
 
 async function main(): Promise<void> {
-  const parsedArgs = parseArgs(process.argv);
+	const parsedArgs = parseArgs(process.argv);
 
-  if (parsedArgs.aggregate) {
-    return mainAggregate(parsedArgs);
-  }
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    log("ERROR: ANTHROPIC_API_KEY environment variable is not set");
-    process.exit(1);
-  }
+	if (parsedArgs.aggregate) {
+		return mainAggregate(parsedArgs);
+	}
+	const apiKey = process.env.ANTHROPIC_API_KEY;
+	if (!apiKey) {
+		log("ERROR: ANTHROPIC_API_KEY environment variable is not set");
+		process.exit(1);
+	}
 
-  // Determine which two runs to compare (filter to directories only)
-  const allRuns = await getAllRunDirs();
-  let runA: string;
-  let runB: string;
+	// Determine which two runs to compare (filter to directories only)
+	const allRuns = await getAllRunDirs();
+	let runA: string;
+	let runB: string;
 
-  if (parsedArgs.positionalA && parsedArgs.positionalB) {
-    runA = parsedArgs.positionalA;
-    runB = parsedArgs.positionalB;
-    if (!allRuns.includes(runA)) {
-      log(`ERROR: Run "${runA}" not found in ${RUNS_DIR}`);
-      process.exit(1);
-    }
-    if (!allRuns.includes(runB)) {
-      log(`ERROR: Run "${runB}" not found in ${RUNS_DIR}`);
-      process.exit(1);
-    }
-  } else {
-    if (allRuns.length < 2) {
-      log("ERROR: Need at least 2 runs to compare. Run test-ai-quality.ts twice first.");
-      process.exit(1);
-    }
-    runA = allRuns[allRuns.length - 2];
-    runB = allRuns[allRuns.length - 1];
-  }
+	if (parsedArgs.positionalA && parsedArgs.positionalB) {
+		runA = parsedArgs.positionalA;
+		runB = parsedArgs.positionalB;
+		if (!allRuns.includes(runA)) {
+			log(`ERROR: Run "${runA}" not found in ${RUNS_DIR}`);
+			process.exit(1);
+		}
+		if (!allRuns.includes(runB)) {
+			log(`ERROR: Run "${runB}" not found in ${RUNS_DIR}`);
+			process.exit(1);
+		}
+	} else {
+		if (allRuns.length < 2) {
+			log(
+				"ERROR: Need at least 2 runs to compare. Run test-ai-quality.ts twice first.",
+			);
+			process.exit(1);
+		}
+		runA = allRuns[allRuns.length - 2];
+		runB = allRuns[allRuns.length - 1];
+	}
 
-  const runADir = resolve(RUNS_DIR, runA);
-  const runBDir = resolve(RUNS_DIR, runB);
+	const runADir = resolve(RUNS_DIR, runA);
+	const runBDir = resolve(RUNS_DIR, runB);
 
-  // Discover profiles
-  const aEntries = await readdir(runADir);
-  const bEntries = await readdir(runBDir);
-  const profileNames = [...new Set([
-    ...aEntries.filter((e) => existsSync(resolve(runADir, e, "meta.json"))),
-    ...bEntries.filter((e) => existsSync(resolve(runBDir, e, "meta.json"))),
-  ])].sort();
+	// Discover profiles
+	const aEntries = await readdir(runADir);
+	const bEntries = await readdir(runBDir);
+	const profileNames = [
+		...new Set([
+			...aEntries.filter((e) => existsSync(resolve(runADir, e, "meta.json"))),
+			...bEntries.filter((e) => existsSync(resolve(runBDir, e, "meta.json"))),
+		]),
+	].sort();
 
-  // Detect models from first profile's meta
-  const firstA = await loadProfileOutputs(runADir, profileNames[0]);
-  const firstB = await loadProfileOutputs(runBDir, profileNames[0]);
-  const modelA = getModelFromMeta(firstA?.meta);
-  const modelB = getModelFromMeta(firstB?.meta);
+	// Detect models from first profile's meta
+	const firstA = await loadProfileOutputs(runADir, profileNames[0]);
+	const firstB = await loadProfileOutputs(runBDir, profileNames[0]);
+	const modelA = getModelFromMeta(firstA?.meta);
+	const modelB = getModelFromMeta(firstB?.meta);
 
-  log(`Comparing runs:`);
-  log(`  A: ${runA} (model: ${modelA})`);
-  log(`  B: ${runB} (model: ${modelB})`);
-  log(`  Profiles: ${profileNames.length}`);
+	log(`Comparing runs:`);
+	log(`  A: ${runA} (model: ${modelA})`);
+	log(`  B: ${runB} (model: ${modelB})`);
+	log(`  Profiles: ${profileNames.length}`);
 
-  // Build the comparison payload
-  const sections: string[] = [];
+	// Build the comparison payload
+	const sections: string[] = [];
 
-  for (const name of profileNames) {
-    const outputsA = await loadProfileOutputs(runADir, name);
-    const outputsB = await loadProfileOutputs(runBDir, name);
+	for (const name of profileNames) {
+		const outputsA = await loadProfileOutputs(runADir, name);
+		const outputsB = await loadProfileOutputs(runBDir, name);
 
-    if (!outputsA && !outputsB) continue;
+		if (!outputsA && !outputsB) continue;
 
-    let section = `## Profile: ${name}\n\n`;
+		let section = `## Profile: ${name}\n\n`;
 
-    section += `### Analysis A (${modelA}, run ${runA})\n\n`;
-    if (outputsA) {
-      section += `#### Explain Narrative\n${outputsA.explainNarrative ?? "_not available_"}\n\n`;
-      section += `#### Deep Findings\n${outputsA.deepFindings ?? "_not available_"}\n\n`;
-    } else {
-      section += "_Not available in this run_\n\n";
-    }
+		section += `### Analysis A (${modelA}, run ${runA})\n\n`;
+		if (outputsA) {
+			section += `#### Explain Narrative\n${outputsA.explainNarrative ?? "_not available_"}\n\n`;
+			section += `#### Deep Findings\n${outputsA.deepFindings ?? "_not available_"}\n\n`;
+		} else {
+			section += "_Not available in this run_\n\n";
+		}
 
-    section += `### Analysis B (${modelB}, run ${runB})\n\n`;
-    if (outputsB) {
-      section += `#### Explain Narrative\n${outputsB.explainNarrative ?? "_not available_"}\n\n`;
-      section += `#### Deep Findings\n${outputsB.deepFindings ?? "_not available_"}\n\n`;
-    } else {
-      section += "_Not available in this run_\n\n";
-    }
+		section += `### Analysis B (${modelB}, run ${runB})\n\n`;
+		if (outputsB) {
+			section += `#### Explain Narrative\n${outputsB.explainNarrative ?? "_not available_"}\n\n`;
+			section += `#### Deep Findings\n${outputsB.deepFindings ?? "_not available_"}\n\n`;
+		} else {
+			section += "_Not available in this run_\n\n";
+		}
 
-    sections.push(section);
-  }
+		sections.push(section);
+	}
 
-  const userPayload = sections.join("\n---\n\n");
+	const userPayload = sections.join("\n---\n\n");
 
-  log(`\nPayload size: ${(userPayload.length / 1024).toFixed(1)}KB`);
-  log("Sending to Claude for comparison...\n");
+	log(`\nPayload size: ${(userPayload.length / 1024).toFixed(1)}KB`);
+	log("Sending to Claude for comparison...\n");
 
-  const client = new Anthropic({ apiKey });
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 8192,
-    system: COMPARE_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userPayload }],
-  });
+	const client = new Anthropic({ apiKey });
+	const response = await client.messages.create({
+		model: "claude-sonnet-4-6",
+		max_tokens: 8192,
+		system: COMPARE_SYSTEM_PROMPT,
+		messages: [{ role: "user", content: userPayload }],
+	});
 
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
+	const text = response.content
+		.filter((b): b is Anthropic.TextBlock => b.type === "text")
+		.map((b) => b.text)
+		.join("");
 
-  const cost = computeCallCost(
-    "compare-quality",
-    "claude-sonnet-4-6",
-    response.usage.input_tokens,
-    response.usage.output_tokens,
-  );
+	const cost = computeCallCost(
+		"compare-quality",
+		"claude-sonnet-4-6",
+		response.usage.input_tokens,
+		response.usage.output_tokens,
+	);
 
-  log(`Compare cost: ${formatCallCost(cost)}`);
+	log(`Compare cost: ${formatCallCost(cost)}`);
 
-  // Build the report
-  const report = [
-    `# AI Quality Comparison Report`,
-    ``,
-    `**Run A**: \`${runA}\` (model: ${modelA})`,
-    `**Run B**: \`${runB}\` (model: ${modelB})`,
-    `**Profiles compared**: ${profileNames.length}`,
-    `**Comparison cost**: ${formatCallCost(cost)}`,
-    ``,
-    `---`,
-    ``,
-    text,
-  ].join("\n");
+	// Build the report
+	const report = [
+		`# AI Quality Comparison Report`,
+		``,
+		`**Run A**: \`${runA}\` (model: ${modelA})`,
+		`**Run B**: \`${runB}\` (model: ${modelB})`,
+		`**Profiles compared**: ${profileNames.length}`,
+		`**Comparison cost**: ${formatCallCost(cost)}`,
+		``,
+		`---`,
+		``,
+		text,
+	].join("\n");
 
-  // Save to the newer run folder
-  const reportPath = resolve(runBDir, "comparison-report.md");
-  await writeFile(reportPath, report, "utf-8");
-  log(`\nReport saved to: ${reportPath}`);
+	// Save to the newer run folder
+	const reportPath = resolve(runBDir, "comparison-report.md");
+	await writeFile(reportPath, report, "utf-8");
+	log(`\nReport saved to: ${reportPath}`);
 
-  // Also print to stdout for immediate reading
-  process.stdout.write(report + "\n");
+	// Also print to stdout for immediate reading
+	process.stdout.write(report + "\n");
 }
 
 main().catch((err) => {
-  log(`FATAL: ${err.message ?? err}`);
-  process.exit(1);
+	log(`FATAL: ${err.message ?? err}`);
+	process.exit(1);
 });

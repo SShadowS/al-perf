@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from "bun:test";
+import { generateKeyPairSync } from "crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { generateKeyPairSync } from "crypto";
 
 const TEST_DATA = mkdtempSync(join(tmpdir(), "alperf-poc-ingest-"));
 process.env.AL_PERF_DATA_DIR = TEST_DATA;

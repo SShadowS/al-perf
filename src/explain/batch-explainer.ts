@@ -1,9 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { BatchAnalysisResult } from "../output/batch-types.js";
-import type { ExplainModel, ExplainOptions, AiDebugInfo } from "./explainer.js";
-import { MODEL_IDS } from "./explainer.js";
-import { computeCallCost, type ApiCallCost } from "./api-cost.js";
 import { config } from "../config.js";
+import type { BatchAnalysisResult } from "../output/batch-types.js";
+import { type ApiCallCost, computeCallCost } from "./api-cost.js";
+import type { AiDebugInfo, ExplainOptions } from "./explainer.js";
+import { MODEL_IDS } from "./explainer.js";
 
 export const BATCH_SYSTEM_PROMPT = `You are a Business Central performance analyst reviewing a batch of AL CPU profiles collected from the scheduled performance profiler. These profiles represent multiple user activities over a time window.
 
@@ -22,95 +22,112 @@ Be specific. Reference method names, object names, and pattern types. Prioritize
 Keep the analysis concise — under 500 words.`;
 
 export interface TrimmedBatchResult {
-  meta: BatchAnalysisResult["meta"];
-  summary: BatchAnalysisResult["summary"];
-  recurringPatterns: BatchAnalysisResult["recurringPatterns"];
-  cumulativeHotspots: BatchAnalysisResult["cumulativeHotspots"];
-  activityBreakdown: Array<{
-    profilePath: string;
-    healthScore: number;
-    patternCount: { critical: number; warning: number; info: number };
-    topHotspot: { functionName: string; objectName: string; selfTimePercent: number } | null;
-    duration: number;
-    metadata?: { activityDescription: string; activityType: string };
-    selfReferential?: boolean;
-  }>;
-  appBreakdown: BatchAnalysisResult["appBreakdown"];
-  errors: BatchAnalysisResult["errors"];
-  totalHotspots: number;
-  totalPatterns: number;
+	meta: BatchAnalysisResult["meta"];
+	summary: BatchAnalysisResult["summary"];
+	recurringPatterns: BatchAnalysisResult["recurringPatterns"];
+	cumulativeHotspots: BatchAnalysisResult["cumulativeHotspots"];
+	activityBreakdown: Array<{
+		profilePath: string;
+		healthScore: number;
+		patternCount: { critical: number; warning: number; info: number };
+		topHotspot: {
+			functionName: string;
+			objectName: string;
+			selfTimePercent: number;
+		} | null;
+		duration: number;
+		metadata?: { activityDescription: string; activityType: string };
+		selfReferential?: boolean;
+	}>;
+	appBreakdown: BatchAnalysisResult["appBreakdown"];
+	errors: BatchAnalysisResult["errors"];
+	totalHotspots: number;
+	totalPatterns: number;
 }
 
-export function trimBatchResultForPrompt(result: BatchAnalysisResult): TrimmedBatchResult {
-  return {
-    meta: result.meta,
-    summary: result.summary,
-    recurringPatterns: result.recurringPatterns.slice(0, config.batchExplain.trimmedPatterns),
-    cumulativeHotspots: result.cumulativeHotspots.slice(0, config.batchExplain.trimmedHotspots),
-    activityBreakdown: result.activityBreakdown.slice(0, config.batchExplain.trimmedActivities).map((a) => ({
-      profilePath: a.profilePath,
-      healthScore: a.healthScore,
-      patternCount: a.patternCount,
-      topHotspot: a.topHotspot,
-      duration: a.duration,
-      metadata: a.metadata
-        ? { activityDescription: a.metadata.activityDescription, activityType: a.metadata.activityType }
-        : undefined,
-      ...(a.selfReferential ? { selfReferential: a.selfReferential } : {}),
-    })),
-    appBreakdown: result.appBreakdown.slice(0, config.batchExplain.trimmedApps),
-    errors: result.errors,
-    totalHotspots: result.cumulativeHotspots.length,
-    totalPatterns: result.recurringPatterns.length,
-  };
+export function trimBatchResultForPrompt(
+	result: BatchAnalysisResult,
+): TrimmedBatchResult {
+	return {
+		meta: result.meta,
+		summary: result.summary,
+		recurringPatterns: result.recurringPatterns.slice(
+			0,
+			config.batchExplain.trimmedPatterns,
+		),
+		cumulativeHotspots: result.cumulativeHotspots.slice(
+			0,
+			config.batchExplain.trimmedHotspots,
+		),
+		activityBreakdown: result.activityBreakdown
+			.slice(0, config.batchExplain.trimmedActivities)
+			.map((a) => ({
+				profilePath: a.profilePath,
+				healthScore: a.healthScore,
+				patternCount: a.patternCount,
+				topHotspot: a.topHotspot,
+				duration: a.duration,
+				metadata: a.metadata
+					? {
+							activityDescription: a.metadata.activityDescription,
+							activityType: a.metadata.activityType,
+						}
+					: undefined,
+				...(a.selfReferential ? { selfReferential: a.selfReferential } : {}),
+			})),
+		appBreakdown: result.appBreakdown.slice(0, config.batchExplain.trimmedApps),
+		errors: result.errors,
+		totalHotspots: result.cumulativeHotspots.length,
+		totalPatterns: result.recurringPatterns.length,
+	};
 }
 
 export interface BatchExplainResult {
-  text: string;
-  cost: ApiCallCost;
-  debugInfo: AiDebugInfo;
+	text: string;
+	cost: ApiCallCost;
+	debugInfo: AiDebugInfo;
 }
 
 export async function explainBatchAnalysis(
-  result: BatchAnalysisResult,
-  options: ExplainOptions,
+	result: BatchAnalysisResult,
+	options: ExplainOptions,
 ): Promise<BatchExplainResult> {
-  const client = new Anthropic({ apiKey: options.apiKey });
-  const trimmed = trimBatchResultForPrompt(result);
-  const model = MODEL_IDS[options.model ?? config.defaultModel];
+	const client = new Anthropic({ apiKey: options.apiKey });
+	const trimmed = trimBatchResultForPrompt(result);
+	const model = MODEL_IDS[options.model ?? config.defaultModel];
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: config.batchExplain.maxTokens,
-    system: BATCH_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify(trimmed, null, 2),
-      },
-    ],
-  });
+	const response = await client.messages.create({
+		model,
+		max_tokens: config.batchExplain.maxTokens,
+		system: BATCH_SYSTEM_PROMPT,
+		messages: [
+			{
+				role: "user",
+				content: JSON.stringify(trimmed, null, 2),
+			},
+		],
+	});
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  let text = textBlock?.text ?? "";
-  if (response.stop_reason === "max_tokens") {
-    text += "\n\n*(Response truncated)*";
-  }
+	const textBlock = response.content.find((b) => b.type === "text");
+	let text = textBlock?.text ?? "";
+	if (response.stop_reason === "max_tokens") {
+		text += "\n\n*(Response truncated)*";
+	}
 
-  const cost = computeCallCost(
-    "batch-explain",
-    model,
-    response.usage.input_tokens,
-    response.usage.output_tokens,
-  );
+	const cost = computeCallCost(
+		"batch-explain",
+		model,
+		response.usage.input_tokens,
+		response.usage.output_tokens,
+	);
 
-  return {
-    text,
-    cost,
-    debugInfo: {
-      systemPrompt: BATCH_SYSTEM_PROMPT,
-      userPayload: trimmed,
-      rawResponse: response,
-    },
-  };
+	return {
+		text,
+		cost,
+		debugInfo: {
+			systemPrompt: BATCH_SYSTEM_PROMPT,
+			userPayload: trimmed,
+			rawResponse: response,
+		},
+	};
 }

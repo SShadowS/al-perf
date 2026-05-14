@@ -1,14 +1,14 @@
-import type { ProcessedProfile, ProcessedNode } from "../types/processed.js";
 import type { DetectedPattern, PatternDetector } from "../types/patterns.js";
+import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import { isIdleNode } from "./processor.js";
 
 /**
  * Format a node reference as "FunctionName (ObjectType ObjectId)".
  */
 export function formatMethodRef(node: ProcessedNode): string {
-  const { functionName } = node.callFrame;
-  const { objectType, objectId } = node.applicationDefinition;
-  return `${functionName} (${objectType} ${objectId})`;
+	const { functionName } = node.callFrame;
+	const { objectType, objectId } = node.applicationDefinition;
+	return `${functionName} (${objectType} ${objectId})`;
 }
 
 /**
@@ -16,27 +16,28 @@ export function formatMethodRef(node: ProcessedNode): string {
  * Severity: critical.
  */
 export const detectSingleMethodDominance: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  const patterns: DetectedPattern[] = [];
+	const patterns: DetectedPattern[] = [];
 
-  for (const node of profile.allNodes) {
-    if (isIdleNode(node)) continue;
-    if (node.selfTimePercent > 50) {
-      patterns.push({
-        id: "single-method-dominance",
-        severity: "critical",
-        title: `${node.callFrame.functionName} dominates profile`,
-        description: `${formatMethodRef(node)} accounts for ${node.selfTimePercent.toFixed(1)}% of total self-time.`,
-        impact: node.selfTime,
-        involvedMethods: [formatMethodRef(node)],
-        evidence: `selfTimePercent = ${node.selfTimePercent.toFixed(1)}% (threshold: 50%)`,
-        suggestion: "Investigate this method for tight computation loops or excessive calls. Consider caching results or reducing call frequency.",
-      });
-    }
-  }
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node)) continue;
+		if (node.selfTimePercent > 50) {
+			patterns.push({
+				id: "single-method-dominance",
+				severity: "critical",
+				title: `${node.callFrame.functionName} dominates profile`,
+				description: `${formatMethodRef(node)} accounts for ${node.selfTimePercent.toFixed(1)}% of total self-time.`,
+				impact: node.selfTime,
+				involvedMethods: [formatMethodRef(node)],
+				evidence: `selfTimePercent = ${node.selfTimePercent.toFixed(1)}% (threshold: 50%)`,
+				suggestion:
+					"Investigate this method for tight computation loops or excessive calls. Consider caching results or reducing call frequency.",
+			});
+		}
+	}
 
-  return patterns;
+	return patterns;
 };
 
 /**
@@ -44,27 +45,32 @@ export const detectSingleMethodDominance: PatternDetector = (
  * Severity: warning.
  */
 export const detectHighHitCount: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  const patterns: DetectedPattern[] = [];
+	const patterns: DetectedPattern[] = [];
 
-  for (const node of profile.allNodes) {
-    if (isIdleNode(node)) continue;
-    if (node.parent && node.parent.hitCount > 0 && node.hitCount > node.parent.hitCount * 10) {
-      patterns.push({
-        id: "high-hit-count",
-        severity: "warning",
-        title: `${node.callFrame.functionName} has disproportionate hit count`,
-        description: `${formatMethodRef(node)} has ${node.hitCount} hits vs parent ${formatMethodRef(node.parent)} with ${node.parent.hitCount} hits (ratio ${(node.hitCount / node.parent.hitCount).toFixed(1)}x).`,
-        impact: node.selfTime,
-        involvedMethods: [formatMethodRef(node), formatMethodRef(node.parent)],
-        evidence: `hitCount ratio = ${(node.hitCount / node.parent.hitCount).toFixed(1)}x (threshold: 10x)`,
-        suggestion: "High hit count suggests this method is called very frequently. Check if callers can batch operations or if an event subscriber is firing too often.",
-      });
-    }
-  }
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node)) continue;
+		if (
+			node.parent &&
+			node.parent.hitCount > 0 &&
+			node.hitCount > node.parent.hitCount * 10
+		) {
+			patterns.push({
+				id: "high-hit-count",
+				severity: "warning",
+				title: `${node.callFrame.functionName} has disproportionate hit count`,
+				description: `${formatMethodRef(node)} has ${node.hitCount} hits vs parent ${formatMethodRef(node.parent)} with ${node.parent.hitCount} hits (ratio ${(node.hitCount / node.parent.hitCount).toFixed(1)}x).`,
+				impact: node.selfTime,
+				involvedMethods: [formatMethodRef(node), formatMethodRef(node.parent)],
+				evidence: `hitCount ratio = ${(node.hitCount / node.parent.hitCount).toFixed(1)}x (threshold: 10x)`,
+				suggestion:
+					"High hit count suggests this method is called very frequently. Check if callers can batch operations or if an event subscriber is firing too often.",
+			});
+		}
+	}
 
-  return patterns;
+	return patterns;
 };
 
 /**
@@ -72,26 +78,29 @@ export const detectHighHitCount: PatternDetector = (
  * Severity: warning.
  */
 export const detectDeepCallStack: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  if (profile.maxDepth <= 30) return [];
+	if (profile.maxDepth <= 30) return [];
 
-  // Find the deepest node(s)
-  const deepestNodes = profile.allNodes.filter((n) => n.depth === profile.maxDepth);
-  const involvedMethods = deepestNodes.slice(0, 5).map(formatMethodRef);
+	// Find the deepest node(s)
+	const deepestNodes = profile.allNodes.filter(
+		(n) => n.depth === profile.maxDepth,
+	);
+	const involvedMethods = deepestNodes.slice(0, 5).map(formatMethodRef);
 
-  return [
-    {
-      id: "deep-call-stack",
-      severity: "warning",
-      title: `Call stack depth of ${profile.maxDepth} detected`,
-      description: `Profile has a maximum call stack depth of ${profile.maxDepth}, which may indicate deep recursion or excessive nesting.`,
-      impact: deepestNodes.reduce((sum, n) => sum + n.selfTime, 0),
-      involvedMethods,
-      evidence: `maxDepth = ${profile.maxDepth} (threshold: 30)`,
-      suggestion: "Deep call stacks can indicate excessive indirection. Review the call chain for unnecessary layers or consider flattening the architecture.",
-    },
-  ];
+	return [
+		{
+			id: "deep-call-stack",
+			severity: "warning",
+			title: `Call stack depth of ${profile.maxDepth} detected`,
+			description: `Profile has a maximum call stack depth of ${profile.maxDepth}, which may indicate deep recursion or excessive nesting.`,
+			impact: deepestNodes.reduce((sum, n) => sum + n.selfTime, 0),
+			involvedMethods,
+			evidence: `maxDepth = ${profile.maxDepth} (threshold: 30)`,
+			suggestion:
+				"Deep call stacks can indicate excessive indirection. Review the call chain for unnecessary layers or consider flattening the architecture.",
+		},
+	];
 };
 
 /**
@@ -99,45 +108,49 @@ export const detectDeepCallStack: PatternDetector = (
  * Severity: critical.
  */
 export const detectRepeatedSiblings: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  const patterns: DetectedPattern[] = [];
+	const patterns: DetectedPattern[] = [];
 
-  for (const node of profile.allNodes) {
-    if (isIdleNode(node)) continue;
-    if (node.children.length < 50) continue;
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node)) continue;
+		if (node.children.length < 50) continue;
 
-    // Group children by functionName+objectId
-    const groups = new Map<string, ProcessedNode[]>();
-    for (const child of node.children) {
-      const key = `${child.callFrame.functionName}:${child.applicationDefinition.objectId}`;
-      const group = groups.get(key);
-      if (group) {
-        group.push(child);
-      } else {
-        groups.set(key, [child]);
-      }
-    }
+		// Group children by functionName+objectId
+		const groups = new Map<string, ProcessedNode[]>();
+		for (const child of node.children) {
+			const key = `${child.callFrame.functionName}:${child.applicationDefinition.objectId}`;
+			const group = groups.get(key);
+			if (group) {
+				group.push(child);
+			} else {
+				groups.set(key, [child]);
+			}
+		}
 
-    for (const [, group] of groups) {
-      if (group.length >= 50) {
-        const representative = group[0];
-        const totalImpact = group.reduce((sum, n) => sum + n.totalTime, 0);
-        patterns.push({
-          id: "repeated-siblings",
-          severity: "critical",
-          title: `${representative.callFrame.functionName} called ${group.length} times under ${node.callFrame.functionName}`,
-          description: `${formatMethodRef(node)} has ${group.length} child calls to ${formatMethodRef(representative)}, suggesting a loop or repeated invocation pattern.`,
-          impact: totalImpact,
-          involvedMethods: [formatMethodRef(node), formatMethodRef(representative)],
-          evidence: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
-          suggestion: "The same method is called repeatedly at the same call site. Consider batching these calls or caching the result.",
-        });
-      }
-    }
-  }
+		for (const [, group] of groups) {
+			if (group.length >= 50) {
+				const representative = group[0];
+				const totalImpact = group.reduce((sum, n) => sum + n.totalTime, 0);
+				patterns.push({
+					id: "repeated-siblings",
+					severity: "critical",
+					title: `${representative.callFrame.functionName} called ${group.length} times under ${node.callFrame.functionName}`,
+					description: `${formatMethodRef(node)} has ${group.length} child calls to ${formatMethodRef(representative)}, suggesting a loop or repeated invocation pattern.`,
+					impact: totalImpact,
+					involvedMethods: [
+						formatMethodRef(node),
+						formatMethodRef(representative),
+					],
+					evidence: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
+					suggestion:
+						"The same method is called repeatedly at the same call site. Consider batching these calls or caching the result.",
+				});
+			}
+		}
+	}
 
-  return patterns;
+	return patterns;
 };
 
 /**
@@ -146,35 +159,41 @@ export const detectRepeatedSiblings: PatternDetector = (
  * Severity: warning.
  */
 export const detectEventSubscriberHotspot: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  const eventPrefixes = ["OnBefore", "OnAfter", "HandleOn"];
+	const eventPrefixes = ["OnBefore", "OnAfter", "HandleOn"];
 
-  const eventNodes = profile.allNodes.filter((node) =>
-    eventPrefixes.some((prefix) => node.callFrame.functionName.startsWith(prefix)),
-  );
+	const eventNodes = profile.allNodes.filter((node) =>
+		eventPrefixes.some((prefix) =>
+			node.callFrame.functionName.startsWith(prefix),
+		),
+	);
 
-  if (eventNodes.length === 0) return [];
+	if (eventNodes.length === 0) return [];
 
-  const totalSelfTimePercent = eventNodes.reduce((sum, n) => sum + n.selfTimePercent, 0);
+	const totalSelfTimePercent = eventNodes.reduce(
+		(sum, n) => sum + n.selfTimePercent,
+		0,
+	);
 
-  if (totalSelfTimePercent <= 10) return [];
+	if (totalSelfTimePercent <= 10) return [];
 
-  const totalImpact = eventNodes.reduce((sum, n) => sum + n.selfTime, 0);
-  const involvedMethods = eventNodes.map(formatMethodRef);
+	const totalImpact = eventNodes.reduce((sum, n) => sum + n.selfTime, 0);
+	const involvedMethods = eventNodes.map(formatMethodRef);
 
-  return [
-    {
-      id: "event-subscriber-hotspot",
-      severity: "warning",
-      title: `Event subscribers consume ${totalSelfTimePercent.toFixed(1)}% of self-time`,
-      description: `${eventNodes.length} event subscriber methods (OnBefore/OnAfter/HandleOn) collectively account for ${totalSelfTimePercent.toFixed(1)}% of total self-time.`,
-      impact: totalImpact,
-      involvedMethods,
-      evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${eventNodes.length} methods (threshold: 10%)`,
-      suggestion: "This event subscriber is consuming significant time. Review whether it needs to run for every event, or if it can be filtered or optimized.",
-    },
-  ];
+	return [
+		{
+			id: "event-subscriber-hotspot",
+			severity: "warning",
+			title: `Event subscribers consume ${totalSelfTimePercent.toFixed(1)}% of self-time`,
+			description: `${eventNodes.length} event subscriber methods (OnBefore/OnAfter/HandleOn) collectively account for ${totalSelfTimePercent.toFixed(1)}% of total self-time.`,
+			impact: totalImpact,
+			involvedMethods,
+			evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${eventNodes.length} methods (threshold: 10%)`,
+			suggestion:
+				"This event subscriber is consuming significant time. Review whether it needs to run for every event, or if it can be filtered or optimized.",
+		},
+	];
 };
 
 /**
@@ -182,50 +201,57 @@ export const detectEventSubscriberHotspot: PatternDetector = (
  * Severity: warning.
  */
 export const detectRecursion: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  const reported = new Set<string>();
-  const patterns: DetectedPattern[] = [];
+	const reported = new Set<string>();
+	const patterns: DetectedPattern[] = [];
 
-  for (const node of profile.allNodes) {
-    if (isIdleNode(node)) continue;
-    const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
-    if (reported.has(key)) continue;
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node)) continue;
+		const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		if (reported.has(key)) continue;
 
-    // Walk up ancestors to check for same method
-    let ancestor = node.parent;
-    let depth = 0;
-    while (ancestor) {
-      if (
-        ancestor.callFrame.functionName === node.callFrame.functionName &&
-        ancestor.applicationDefinition.objectId === node.applicationDefinition.objectId
-      ) {
-        reported.add(key);
+		// Walk up ancestors to check for same method
+		let ancestor = node.parent;
+		let depth = 0;
+		while (ancestor) {
+			if (
+				ancestor.callFrame.functionName === node.callFrame.functionName &&
+				ancestor.applicationDefinition.objectId ===
+					node.applicationDefinition.objectId
+			) {
+				reported.add(key);
 
-        const allInstances = profile.allNodes.filter(
-          n => n.callFrame.functionName === node.callFrame.functionName &&
-               n.applicationDefinition.objectId === node.applicationDefinition.objectId
-        );
-        const totalImpact = allInstances.reduce((sum, n) => sum + n.selfTime, 0);
+				const allInstances = profile.allNodes.filter(
+					(n) =>
+						n.callFrame.functionName === node.callFrame.functionName &&
+						n.applicationDefinition.objectId ===
+							node.applicationDefinition.objectId,
+				);
+				const totalImpact = allInstances.reduce(
+					(sum, n) => sum + n.selfTime,
+					0,
+				);
 
-        patterns.push({
-          id: "recursive-call",
-          severity: "warning",
-          title: `${node.callFrame.functionName} calls itself recursively (depth ${depth + 1}+)`,
-          description: `${formatMethodRef(node)} appears ${allInstances.length} times in the call tree as a recursive chain.`,
-          impact: totalImpact,
-          involvedMethods: [formatMethodRef(node)],
-          evidence: `${allInstances.length} instances of the same method in ancestor-descendant relationships`,
-          suggestion: "Recursive calls in AL often indicate unintentional trigger chains or BOM explosion patterns. Consider iterative approaches or caching to limit recursion depth.",
-        });
-        break;
-      }
-      ancestor = ancestor.parent;
-      depth++;
-    }
-  }
+				patterns.push({
+					id: "recursive-call",
+					severity: "warning",
+					title: `${node.callFrame.functionName} calls itself recursively (depth ${depth + 1}+)`,
+					description: `${formatMethodRef(node)} appears ${allInstances.length} times in the call tree as a recursive chain.`,
+					impact: totalImpact,
+					involvedMethods: [formatMethodRef(node)],
+					evidence: `${allInstances.length} instances of the same method in ancestor-descendant relationships`,
+					suggestion:
+						"Recursive calls in AL often indicate unintentional trigger chains or BOM explosion patterns. Consider iterative approaches or caching to limit recursion depth.",
+				});
+				break;
+			}
+			ancestor = ancestor.parent;
+			depth++;
+		}
+	}
 
-  return patterns;
+	return patterns;
 };
 
 /**
@@ -233,84 +259,95 @@ export const detectRecursion: PatternDetector = (
  * form chains where a subscriber triggers another subscriber.
  */
 export const detectEventChains: PatternDetector = (
-  profile: ProcessedProfile,
+	profile: ProcessedProfile,
 ): DetectedPattern[] => {
-  const patterns: DetectedPattern[] = [];
-  const eventPattern = /^(OnBefore|OnAfter|HandleOn)/i;
+	const patterns: DetectedPattern[] = [];
+	const eventPattern = /^(OnBefore|OnAfter|HandleOn)/i;
 
-  // Find all event subscriber nodes
-  const eventNodes = profile.allNodes.filter(
-    n => !isIdleNode(n) && eventPattern.test(n.callFrame.functionName)
-  );
+	// Find all event subscriber nodes
+	const eventNodes = profile.allNodes.filter(
+		(n) => !isIdleNode(n) && eventPattern.test(n.callFrame.functionName),
+	);
 
-  if (eventNodes.length < 2) return patterns;
+	if (eventNodes.length < 2) return patterns;
 
-  // Group by root event subscriber: find nodes where an event subscriber calls another
-  const chains = new Map<string, { root: ProcessedNode; chain: ProcessedNode[]; totalTime: number }>();
+	// Group by root event subscriber: find nodes where an event subscriber calls another
+	const chains = new Map<
+		string,
+		{ root: ProcessedNode; chain: ProcessedNode[]; totalTime: number }
+	>();
 
-  for (const node of eventNodes) {
-    // Walk up to find if any ancestor is also an event subscriber
-    let ancestor = node.parent;
-    while (ancestor) {
-      if (!isIdleNode(ancestor) && eventPattern.test(ancestor.callFrame.functionName)) {
-        const rootKey = `${ancestor.callFrame.functionName}_${ancestor.applicationDefinition.objectId}_${ancestor.id}`;
-        let chain = chains.get(rootKey);
-        if (!chain) {
-          chain = { root: ancestor, chain: [ancestor], totalTime: ancestor.totalTime };
-          chains.set(rootKey, chain);
-        }
-        if (!chain.chain.includes(node)) {
-          chain.chain.push(node);
-        }
-        break;
-      }
-      ancestor = ancestor.parent;
-    }
-  }
+	for (const node of eventNodes) {
+		// Walk up to find if any ancestor is also an event subscriber
+		let ancestor = node.parent;
+		while (ancestor) {
+			if (
+				!isIdleNode(ancestor) &&
+				eventPattern.test(ancestor.callFrame.functionName)
+			) {
+				const rootKey = `${ancestor.callFrame.functionName}_${ancestor.applicationDefinition.objectId}_${ancestor.id}`;
+				let chain = chains.get(rootKey);
+				if (!chain) {
+					chain = {
+						root: ancestor,
+						chain: [ancestor],
+						totalTime: ancestor.totalTime,
+					};
+					chains.set(rootKey, chain);
+				}
+				if (!chain.chain.includes(node)) {
+					chain.chain.push(node);
+				}
+				break;
+			}
+			ancestor = ancestor.parent;
+		}
+	}
 
-  // Report chains with 2+ event subscribers
-  for (const [_, chain] of chains) {
-    if (chain.chain.length < 2) continue;
-    const methods = chain.chain.map(n => formatMethodRef(n));
-    patterns.push({
-      id: "event-chain",
-      severity: "warning",
-      title: `Event chain from ${chain.root.callFrame.functionName} (${chain.chain.length} subscribers)`,
-      description: `Event subscriber ${formatMethodRef(chain.root)} triggers a chain of ${chain.chain.length} nested event subscribers, compounding execution cost.`,
-      impact: chain.totalTime,
-      involvedMethods: methods,
-      evidence: `${chain.chain.length} nested event subscriber calls`,
-      suggestion: "Review whether all subscribers in this chain are necessary. Consider consolidating event handlers or reducing the chain depth.",
-    });
-  }
+	// Report chains with 2+ event subscribers
+	for (const [_, chain] of chains) {
+		if (chain.chain.length < 2) continue;
+		const methods = chain.chain.map((n) => formatMethodRef(n));
+		patterns.push({
+			id: "event-chain",
+			severity: "warning",
+			title: `Event chain from ${chain.root.callFrame.functionName} (${chain.chain.length} subscribers)`,
+			description: `Event subscriber ${formatMethodRef(chain.root)} triggers a chain of ${chain.chain.length} nested event subscribers, compounding execution cost.`,
+			impact: chain.totalTime,
+			involvedMethods: methods,
+			evidence: `${chain.chain.length} nested event subscriber calls`,
+			suggestion:
+				"Review whether all subscribers in this chain are necessary. Consider consolidating event handlers or reducing the chain depth.",
+		});
+	}
 
-  return patterns;
+	return patterns;
 };
 
 /**
  * All built-in pattern detectors.
  */
 const allDetectors: PatternDetector[] = [
-  detectSingleMethodDominance,
-  detectHighHitCount,
-  detectDeepCallStack,
-  detectRepeatedSiblings,
-  detectEventSubscriberHotspot,
-  detectRecursion,
-  detectEventChains,
+	detectSingleMethodDominance,
+	detectHighHitCount,
+	detectDeepCallStack,
+	detectRepeatedSiblings,
+	detectEventSubscriberHotspot,
+	detectRecursion,
+	detectEventChains,
 ];
 
 /**
  * Run all pattern detectors and return results sorted by impact descending.
  */
 export function runDetectors(profile: ProcessedProfile): DetectedPattern[] {
-  const patterns: DetectedPattern[] = [];
+	const patterns: DetectedPattern[] = [];
 
-  for (const detector of allDetectors) {
-    patterns.push(...detector(profile));
-  }
+	for (const detector of allDetectors) {
+		patterns.push(...detector(profile));
+	}
 
-  patterns.sort((a, b) => b.impact - a.impact);
+	patterns.sort((a, b) => b.impact - a.impact);
 
-  return patterns;
+	return patterns;
 }

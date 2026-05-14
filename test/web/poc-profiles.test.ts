@@ -34,21 +34,37 @@ async function setupAndIngest() {
 		}),
 	});
 
-	const profilePath = resolve(import.meta.dir, "../fixtures/instrumentation-minimal.alcpuprofile");
+	const profilePath = resolve(
+		import.meta.dir,
+		"../fixtures/instrumentation-minimal.alcpuprofile",
+	);
 	const profileData = readFileSync(profilePath);
 
 	const fd = new FormData();
-	fd.append("manifest", new Blob([JSON.stringify({
-		activityId: VALID_GUID,
-		activityType: "Background",
-		startTime: new Date().toISOString(),
-	})], { type: "application/json" }), "manifest.json");
-	fd.append("profile", new Blob([profileData], { type: "application/octet-stream" }), "p.alcpuprofile");
+	fd.append(
+		"manifest",
+		new Blob(
+			[
+				JSON.stringify({
+					activityId: VALID_GUID,
+					activityType: "Background",
+					startTime: new Date().toISOString(),
+				}),
+			],
+			{ type: "application/json" },
+		),
+		"manifest.json",
+	);
+	fd.append(
+		"profile",
+		new Blob([profileData], { type: "application/octet-stream" }),
+		"p.alcpuprofile",
+	);
 
 	await fetch(`${BASE}/api/ingest`, {
 		method: "POST",
 		headers: {
-			"Authorization": "Bearer test-secret-1234",
+			Authorization: "Bearer test-secret-1234",
 			"X-Tenant-Id": "poc",
 			"X-Idempotency-Key": VALID_GUID,
 		},
@@ -60,16 +76,23 @@ describe("GET /api/profiles/{activityId} (POC v0 plaintext)", () => {
 	it("returns ciphertext bundle + plaintext manifest", async () => {
 		await setupAndIngest();
 		const res = await fetch(`${BASE}/api/profiles/${VALID_GUID}?tenant=poc`, {
-			headers: { "Authorization": "Bearer test-secret-1234" },
+			headers: { Authorization: "Bearer test-secret-1234" },
 		});
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-type")).toBe("application/json");
 		const body = await res.json();
 		expect(body.keyVersion).toBe(1);
 		expect(typeof body.manifest).toBe("string"); // base64
-		expect(typeof body.wrapped).toBe("string");  // base64
-		expect(body.blob && body.blob.iv && body.blob.tag && body.blob.ciphertext).toBeTruthy();
-		expect(body.result && body.result.iv && body.result.tag && body.result.ciphertext).toBeTruthy();
+		expect(typeof body.wrapped).toBe("string"); // base64
+		expect(
+			body.blob && body.blob.iv && body.blob.tag && body.blob.ciphertext,
+		).toBeTruthy();
+		expect(
+			body.result &&
+				body.result.iv &&
+				body.result.tag &&
+				body.result.ciphertext,
+		).toBeTruthy();
 		expect(body.metrics).toBeTruthy();
 	});
 

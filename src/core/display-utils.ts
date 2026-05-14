@@ -7,16 +7,16 @@
  * (common in BC profiler output for direct DB calls).
  */
 export function isSqlStatement(name: string): boolean {
-  const upper = name.trimStart().toUpperCase();
-  return (
-    upper.startsWith("SELECT ") ||
-    upper.startsWith("INSERT ") ||
-    upper.startsWith("UPDATE ") ||
-    upper.startsWith("DELETE ") ||
-    upper.startsWith("IF EXISTS(SELECT") ||
-    upper.startsWith("EXEC ") ||
-    upper.startsWith("BEGIN")
-  );
+	const upper = name.trimStart().toUpperCase();
+	return (
+		upper.startsWith("SELECT ") ||
+		upper.startsWith("INSERT ") ||
+		upper.startsWith("UPDATE ") ||
+		upper.startsWith("DELETE ") ||
+		upper.startsWith("IF EXISTS(SELECT") ||
+		upper.startsWith("EXEC ") ||
+		upper.startsWith("BEGIN")
+	);
 }
 
 /**
@@ -28,7 +28,7 @@ export function isSqlStatement(name: string): boolean {
  * @returns        The original or truncated string (with trailing ellipsis)
  */
 export function truncateFunctionName(name: string, maxLen = 120): string {
-  if (name.length <= maxLen) return name;
-  if (!isSqlStatement(name)) return name;
-  return name.slice(0, maxLen) + "\u2026";
+	if (name.length <= maxLen) return name;
+	if (!isSqlStatement(name)) return name;
+	return name.slice(0, maxLen) + "\u2026";
 }

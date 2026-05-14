@@ -4,13 +4,13 @@ import { createMcpServer } from "./server.js";
 
 // Parse --source/-s flag from argv
 function parseArgs(): { defaultSourcePath?: string } {
-  const args = process.argv.slice(2);
-  for (let i = 0; i < args.length; i++) {
-    if ((args[i] === "--source" || args[i] === "-s") && i + 1 < args.length) {
-      return { defaultSourcePath: args[i + 1] };
-    }
-  }
-  return {};
+	const args = process.argv.slice(2);
+	for (let i = 0; i < args.length; i++) {
+		if ((args[i] === "--source" || args[i] === "-s") && i + 1 < args.length) {
+			return { defaultSourcePath: args[i + 1] };
+		}
+	}
+	return {};
 }
 
 const opts = parseArgs();

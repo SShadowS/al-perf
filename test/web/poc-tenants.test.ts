@@ -31,7 +31,8 @@ describe("POST /api/tenants/register (POC)", () => {
 			body: JSON.stringify({
 				tenantCode: "poc",
 				sharedSecret: "test-secret-1234",
-				publicKeyXml: "<RSAKeyValue><Modulus>placeholder</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>",
+				publicKeyXml:
+					"<RSAKeyValue><Modulus>placeholder</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>",
 			}),
 		});
 		expect(res.status).toBe(201);

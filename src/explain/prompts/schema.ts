@@ -1,7 +1,7 @@
-import { CROSS_METHOD_PROMPT } from "./cross-method.js";
 import { ANOMALY_PROMPT } from "./anomaly.js";
 import { BUSINESS_LOGIC_PROMPT } from "./business-logic.js";
 import { CODE_FIX_PROMPT } from "./code-fix.js";
+import { CROSS_METHOD_PROMPT } from "./cross-method.js";
 
 export const AI_FINDINGS_SCHEMA = `## Output Format
 
@@ -41,45 +41,45 @@ You MUST respond with valid JSON matching this schema exactly. Do not include an
 `;
 
 export interface PromptConfig {
-  /** Hint about sqlPatterns/callGraph/astSummaries fields in the payload */
-  dataAwareHints: boolean;
-  /** Increase finding range from 3-10 to 5-15 */
-  expandedFindings: boolean;
-  /** Add cross-extension interaction analysis focus */
-  crossExtensionFocus: boolean;
+	/** Hint about sqlPatterns/callGraph/astSummaries fields in the payload */
+	dataAwareHints: boolean;
+	/** Increase finding range from 3-10 to 5-15 */
+	expandedFindings: boolean;
+	/** Add cross-extension interaction analysis focus */
+	crossExtensionFocus: boolean;
 }
 
 export const PROMPT_PRESETS: Record<string, PromptConfig> = {
-  v1: {
-    dataAwareHints: false,
-    expandedFindings: false,
-    crossExtensionFocus: false,
-  },
-  "+datahints": {
-    dataAwareHints: true,
-    expandedFindings: false,
-    crossExtensionFocus: false,
-  },
-  "+morefindings": {
-    dataAwareHints: false,
-    expandedFindings: true,
-    crossExtensionFocus: false,
-  },
-  "+crossext": {
-    dataAwareHints: false,
-    expandedFindings: false,
-    crossExtensionFocus: true,
-  },
-  "+datahints+crossext": {
-    dataAwareHints: true,
-    expandedFindings: false,
-    crossExtensionFocus: true,
-  },
-  "+all": {
-    dataAwareHints: true,
-    expandedFindings: true,
-    crossExtensionFocus: true,
-  },
+	v1: {
+		dataAwareHints: false,
+		expandedFindings: false,
+		crossExtensionFocus: false,
+	},
+	"+datahints": {
+		dataAwareHints: true,
+		expandedFindings: false,
+		crossExtensionFocus: false,
+	},
+	"+morefindings": {
+		dataAwareHints: false,
+		expandedFindings: true,
+		crossExtensionFocus: false,
+	},
+	"+crossext": {
+		dataAwareHints: false,
+		expandedFindings: false,
+		crossExtensionFocus: true,
+	},
+	"+datahints+crossext": {
+		dataAwareHints: true,
+		expandedFindings: false,
+		crossExtensionFocus: true,
+	},
+	"+all": {
+		dataAwareHints: true,
+		expandedFindings: true,
+		crossExtensionFocus: true,
+	},
 };
 
 const DATA_AWARE_HINTS = `## Payload Data Guide
@@ -102,37 +102,41 @@ Pay special attention to performance issues caused by interactions BETWEEN exten
 `;
 
 export interface BuildDeepSystemPromptOptions {
-  hasSource: boolean;
-  promptConfig?: PromptConfig;
+	hasSource: boolean;
+	promptConfig?: PromptConfig;
 }
 
-export function buildDeepSystemPrompt(options: BuildDeepSystemPromptOptions): string {
-  const intro = `You are a Business Central AL performance expert performing deep analysis. You are given structured profile analysis data including call tree structure and (optionally) source code of hotspot methods. Your job is to find performance issues that rule-based pattern detectors cannot express.`;
+export function buildDeepSystemPrompt(
+	options: BuildDeepSystemPromptOptions,
+): string {
+	const intro = `You are a Business Central AL performance expert performing deep analysis. You are given structured profile analysis data including call tree structure and (optionally) source code of hotspot methods. Your job is to find performance issues that rule-based pattern detectors cannot express.`;
 
-  const parts: string[] = [intro, CROSS_METHOD_PROMPT, ANOMALY_PROMPT];
+	const parts: string[] = [intro, CROSS_METHOD_PROMPT, ANOMALY_PROMPT];
 
-  if (options.promptConfig?.dataAwareHints) {
-    parts.push(DATA_AWARE_HINTS);
-  }
+	if (options.promptConfig?.dataAwareHints) {
+		parts.push(DATA_AWARE_HINTS);
+	}
 
-  if (options.promptConfig?.crossExtensionFocus) {
-    parts.push(CROSS_EXTENSION_FOCUS);
-  }
+	if (options.promptConfig?.crossExtensionFocus) {
+		parts.push(CROSS_EXTENSION_FOCUS);
+	}
 
-  if (options.hasSource) {
-    parts.push(BUSINESS_LOGIC_PROMPT);
-    parts.push(CODE_FIX_PROMPT);
-  }
+	if (options.hasSource) {
+		parts.push(BUSINESS_LOGIC_PROMPT);
+		parts.push(CODE_FIX_PROMPT);
+	}
 
-  // Use expanded or standard finding count
-  if (options.promptConfig?.expandedFindings) {
-    parts.push(AI_FINDINGS_SCHEMA.replace(
-      "Return 3-10 findings",
-      "Return 5-15 findings",
-    ));
-  } else {
-    parts.push(AI_FINDINGS_SCHEMA);
-  }
+	// Use expanded or standard finding count
+	if (options.promptConfig?.expandedFindings) {
+		parts.push(
+			AI_FINDINGS_SCHEMA.replace(
+				"Return 3-10 findings",
+				"Return 5-15 findings",
+			),
+		);
+	} else {
+		parts.push(AI_FINDINGS_SCHEMA);
+	}
 
-  return parts.join("\n\n");
+	return parts.join("\n\n");
 }

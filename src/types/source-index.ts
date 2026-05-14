@@ -1,208 +1,215 @@
 export interface SourceIndex {
-  /** All indexed AL files */
-  files: ALFileInfo[];
+	/** All indexed AL files */
+	files: ALFileInfo[];
 
-  /** All procedures, keyed by name (lowercase) for lookup */
-  procedures: Map<string, ProcedureInfo[]>;
+	/** All procedures, keyed by name (lowercase) for lookup */
+	procedures: Map<string, ProcedureInfo[]>;
 
-  /** All triggers, keyed by name (lowercase) for lookup */
-  triggers: Map<string, TriggerInfo[]>;
+	/** All triggers, keyed by name (lowercase) for lookup */
+	triggers: Map<string, TriggerInfo[]>;
 
-  /** Object info, keyed by "ObjectType_ObjectId" */
-  objects: Map<string, ObjectInfo>;
+	/** Object info, keyed by "ObjectType_ObjectId" */
+	objects: Map<string, ObjectInfo>;
 
-  /** Event publisher/subscriber catalog built from source attributes */
-  eventCatalog: EventCatalog;
+	/** Event publisher/subscriber catalog built from source attributes */
+	eventCatalog: EventCatalog;
 }
 
 export interface EventPublisherInfo {
-  procedureName: string;
-  eventType: "IntegrationEvent" | "BusinessEvent";
-  objectType: string;
-  objectId: number;
-  objectName: string;
-  file: string;
-  line: number;
+	procedureName: string;
+	eventType: "IntegrationEvent" | "BusinessEvent";
+	objectType: string;
+	objectId: number;
+	objectName: string;
+	file: string;
+	line: number;
 }
 
 export interface EventSubscriberInfo {
-  procedureName: string;
-  /** Target object type the subscriber listens to */
-  targetObjectType: string;
-  /** Target object ID or name */
-  targetObjectId: string;
-  /** Target event name */
-  targetEventName: string;
-  objectType: string;
-  objectId: number;
-  objectName: string;
-  file: string;
-  line: number;
+	procedureName: string;
+	/** Target object type the subscriber listens to */
+	targetObjectType: string;
+	/** Target object ID or name */
+	targetObjectId: string;
+	/** Target event name */
+	targetEventName: string;
+	objectType: string;
+	objectId: number;
+	objectName: string;
+	file: string;
+	line: number;
 }
 
 export interface EventCatalog {
-  publishers: EventPublisherInfo[];
-  subscribers: EventSubscriberInfo[];
+	publishers: EventPublisherInfo[];
+	subscribers: EventSubscriberInfo[];
 }
 
 export interface ALFileInfo {
-  /** Relative path to the .al file */
-  relativePath: string;
+	/** Relative path to the .al file */
+	relativePath: string;
 
-  /** Absolute path to the .al file */
-  absolutePath: string;
+	/** Absolute path to the .al file */
+	absolutePath: string;
 
-  /** The object declared in this file */
-  objectType: string;
-  objectName: string;
-  objectId: number;
+	/** The object declared in this file */
+	objectType: string;
+	objectName: string;
+	objectId: number;
 }
 
 export interface ObjectInfo {
-  objectType: string;
-  objectName: string;
-  objectId: number;
-  file: ALFileInfo;
-  procedures: ProcedureInfo[];
-  triggers: TriggerInfo[];
-  fields: TableFieldInfo[];
-  keys: TableKeyInfo[];
+	objectType: string;
+	objectName: string;
+	objectId: number;
+	file: ALFileInfo;
+	procedures: ProcedureInfo[];
+	triggers: TriggerInfo[];
+	fields: TableFieldInfo[];
+	keys: TableKeyInfo[];
 }
 
 export interface TableFieldInfo {
-  id: number;
-  name: string;
-  dataType: string;
-  calcFormulaType?: "Sum" | "Lookup" | "Count" | "Average" | "Min" | "Max" | "Exist";
-  calcFormulaTable?: string;
-  /** Table referenced in TableRelation property */
-  tableRelationTarget?: string;
-  line: number;
+	id: number;
+	name: string;
+	dataType: string;
+	calcFormulaType?:
+		| "Sum"
+		| "Lookup"
+		| "Count"
+		| "Average"
+		| "Min"
+		| "Max"
+		| "Exist";
+	calcFormulaTable?: string;
+	/** Table referenced in TableRelation property */
+	tableRelationTarget?: string;
+	line: number;
 }
 
 export interface TableRelationInfo {
-  /** Source table that has the relation */
-  fromTable: string;
-  fromTableId: number;
-  /** Field in the source table */
-  fromField: string;
-  /** Target table referenced */
-  toTable: string;
-  /** Type of relationship */
-  relationType: "TableRelation" | "CalcFormula";
-  line: number;
+	/** Source table that has the relation */
+	fromTable: string;
+	fromTableId: number;
+	/** Field in the source table */
+	fromField: string;
+	/** Target table referenced */
+	toTable: string;
+	/** Type of relationship */
+	relationType: "TableRelation" | "CalcFormula";
+	line: number;
 }
 
 export interface TableKeyInfo {
-  name: string;
-  fields: string[];
-  clustered: boolean;
-  line: number;
+	name: string;
+	fields: string[];
+	clustered: boolean;
+	line: number;
 }
 
 export interface ProcedureInfo {
-  name: string;
-  objectType: string;
-  objectName: string;
-  objectId: number;
-  file: string;
-  lineStart: number;
-  lineEnd: number;
-  features: ProcedureFeatures;
-  isEventSubscriber: boolean;
+	name: string;
+	objectType: string;
+	objectName: string;
+	objectId: number;
+	file: string;
+	lineStart: number;
+	lineEnd: number;
+	features: ProcedureFeatures;
+	isEventSubscriber: boolean;
 }
 
 export interface TriggerInfo {
-  name: string;
-  objectType: string;
-  objectName: string;
-  objectId: number;
-  file: string;
-  lineStart: number;
-  lineEnd: number;
-  features: ProcedureFeatures;
+	name: string;
+	objectType: string;
+	objectName: string;
+	objectId: number;
+	file: string;
+	lineStart: number;
+	lineEnd: number;
+	features: ProcedureFeatures;
 }
 
 export interface ProcedureFeatures {
-  loops: LoopInfo[];
-  recordOps: RecordOpInfo[];
-  recordOpsInLoops: RecordOpInfo[];
-  dangerousCallsInLoops: DangerousCallInfo[];
-  variables: VariableInfo[];
-  fieldAccesses: FieldAccessInfo[];
-  nestingDepth: number;
+	loops: LoopInfo[];
+	recordOps: RecordOpInfo[];
+	recordOpsInLoops: RecordOpInfo[];
+	dangerousCallsInLoops: DangerousCallInfo[];
+	variables: VariableInfo[];
+	fieldAccesses: FieldAccessInfo[];
+	nestingDepth: number;
 }
 
 export interface FieldAccessInfo {
-  /** The record variable name (e.g., "SalesLine") */
-  recordVariable: string;
-  /** The field name (e.g., "Amount", "Document No.") */
-  fieldName: string;
-  line: number;
-  column: number;
+	/** The record variable name (e.g., "SalesLine") */
+	recordVariable: string;
+	/** The field name (e.g., "Amount", "Document No.") */
+	fieldName: string;
+	line: number;
+	column: number;
 }
 
 export interface VariableInfo {
-  name: string;
-  /** Full type string, e.g. "Record \"Sales Line\"", "Integer", "Text[100]" */
-  typeStr: string;
-  /** True if this is a Record type */
-  isRecord: boolean;
-  /** Table name if Record type, e.g. "Sales Line" */
-  tableName?: string;
-  /** True if declared with 'temporary' keyword */
-  isTemporary: boolean;
-  line: number;
+	name: string;
+	/** Full type string, e.g. "Record \"Sales Line\"", "Integer", "Text[100]" */
+	typeStr: string;
+	/** True if this is a Record type */
+	isRecord: boolean;
+	/** Table name if Record type, e.g. "Sales Line" */
+	tableName?: string;
+	/** True if declared with 'temporary' keyword */
+	isTemporary: boolean;
+	line: number;
 }
 
 export interface DangerousCallInfo {
-  type: "Commit" | "Error" | "TestField";
-  line: number;
-  column: number;
-  insideLoop: boolean;
+	type: "Commit" | "Error" | "TestField";
+	line: number;
+	column: number;
+	insideLoop: boolean;
 }
 
 export interface LoopInfo {
-  type: "repeat" | "for" | "foreach" | "while";
-  lineStart: number;
-  lineEnd: number;
+	type: "repeat" | "for" | "foreach" | "while";
+	lineStart: number;
+	lineEnd: number;
 }
 
 export type RecordOpType =
-  | "FindSet"
-  | "FindFirst"
-  | "FindLast"
-  | "Find"
-  | "Get"
-  | "CalcFields"
-  | "CalcSums"
-  | "Modify"
-  | "ModifyAll"
-  | "Insert"
-  | "Delete"
-  | "DeleteAll"
-  | "SetLoadFields"
-  | "SetRange"
-  | "SetFilter"
-  | "Reset"
-  | "Next"
-  | "Count"
-  | "CountApprox"
-  | "IsEmpty";
+	| "FindSet"
+	| "FindFirst"
+	| "FindLast"
+	| "Find"
+	| "Get"
+	| "CalcFields"
+	| "CalcSums"
+	| "Modify"
+	| "ModifyAll"
+	| "Insert"
+	| "Delete"
+	| "DeleteAll"
+	| "SetLoadFields"
+	| "SetRange"
+	| "SetFilter"
+	| "Reset"
+	| "Next"
+	| "Count"
+	| "CountApprox"
+	| "IsEmpty";
 
 export interface RecordOpInfo {
-  type: RecordOpType;
-  line: number;
-  column: number;
-  insideLoop: boolean;
-  recordVariable?: string;
-  /** First argument string for SetRange/SetFilter (the field name being filtered) */
-  fieldArgument?: string;
-  /** All field arguments for SetLoadFields calls */
-  allFieldArguments?: string[];
+	type: RecordOpType;
+	line: number;
+	column: number;
+	insideLoop: boolean;
+	recordVariable?: string;
+	/** First argument string for SetRange/SetFilter (the field name being filtered) */
+	fieldArgument?: string;
+	/** All field arguments for SetLoadFields calls */
+	allFieldArguments?: string[];
 }
 
 export interface LineRange {
-  start: number;
-  end: number;
+	start: number;
+	end: number;
 }

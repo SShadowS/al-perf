@@ -1,23 +1,23 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import pkg from "../../package.json";
 import { registerAnalyzeCommand } from "./commands/analyze.js";
-import { registerHotspotsCommand } from "./commands/hotspots.js";
+import { registerAnalyzeSourceCommand } from "./commands/analyze-source.js";
+import { registerBatchCommand } from "./commands/batch.js";
 import { registerCompareCommand } from "./commands/compare.js";
 import { explainCommand } from "./commands/explain.js";
-import { sourceMapCommand } from "./commands/source-map.js";
-import { registerMcpCommand } from "./commands/mcp.js";
 import { registerGateCommand } from "./commands/gate.js";
-import { registerAnalyzeSourceCommand } from "./commands/analyze-source.js";
 import { createHistoryCommand } from "./commands/history.js";
-import { registerBatchCommand } from "./commands/batch.js";
-import pkg from "../../package.json";
+import { registerHotspotsCommand } from "./commands/hotspots.js";
+import { registerMcpCommand } from "./commands/mcp.js";
+import { sourceMapCommand } from "./commands/source-map.js";
 
 const program = new Command();
 
 program
-  .name("al-profile")
-  .description("Analyze Business Central .alcpuprofile files")
-  .version(pkg.version);
+	.name("al-profile")
+	.description("Analyze Business Central .alcpuprofile files")
+	.version(pkg.version);
 
 registerAnalyzeCommand(program);
 registerHotspotsCommand(program);

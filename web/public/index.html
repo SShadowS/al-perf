@@ -12,6 +12,9 @@
   <meta name="twitter:title" content="AL Profile Analyzer">
   <meta name="twitter:description" content="Find performance hotspots in Business Central AL code.">
   <meta name="twitter:image" content="/og-image.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <script src="marked.min.js"></script>
   <script src="app.js" defer></script>
@@ -23,24 +26,28 @@
   <main>
     <!-- Drop Zone -->
     <div id="dropzone">
-      <div class="icon">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <h1 class="product-name">AL Profile Analyzer</h1>
+      <p class="product-tagline">Precision performance analysis for Business Central</p>
+      <div class="upload-prompt">
+        <svg class="upload-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Upload icon">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="17 8 12 3 7 8"/>
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
+        <span class="upload-label">Drop .alcpuprofile here, or click to browse</span>
       </div>
-      <div class="primary-text">Drop .alcpuprofile file(s) here</div>
-      <div class="secondary-text">Drop multiple profiles for batch analysis. Add a companion .zip for source-correlated insights.</div>
-      <div class="version-tag">v2.1.0</div>
+      <div class="upload-hint">Multiple profiles for batch analysis. Add a .zip for source correlation.</div>
+      <div id="stats" class="stats-line"></div>
       <input type="file" id="file-input" multiple hidden accept=".alcpuprofile,.zip">
     </div>
 
     <!-- Loading State -->
     <div id="loading" class="hidden">
-      <div class="spinner"></div>
-      <div id="loading-status">Analyzing profile...</div>
-      <div class="secondary-text" style="margin-top: 0.5rem">Deep analysis takes around 2 minutes, occasionally longer for larger profiles</div>
+      <div class="loading-header">
+        <div class="spinner"></div>
+        <div id="loading-status">Analyzing profile...</div>
+      </div>
+      <div id="progress-steps"></div>
       <div id="elapsed-timer"></div>
     </div>
 
@@ -51,8 +58,8 @@
           <div class="consent-card-title">Help us improve</div>
           <p>Save this request anonymously for 7 days to help improve analysis quality.</p>
           <div class="consent-actions">
-            <button id="consent-allow" class="btn btn-primary btn-sm">Allow</button>
-            <button id="consent-dismiss" class="btn btn-secondary btn-sm">Dismiss</button>
+            <button type="button" id="consent-allow" class="btn btn-primary btn-sm">Allow</button>
+            <button type="button" id="consent-dismiss" class="btn btn-secondary btn-sm">Dismiss</button>
           </div>
         </div>
         <div id="consent-thanks" class="consent-thanks" style="display: none;">
@@ -79,11 +86,11 @@
     <!-- Error State -->
     <div id="error" class="hidden">
       <p id="error-message"></p>
-      <button id="try-again">Try Again</button>
+      <button type="button" id="try-again">Try Again</button>
     </div>
   </main>
 
   <!-- New Analysis Button -->
-  <button id="new-analysis" class="hidden">New Analysis</button>
+  <button type="button" id="new-analysis" class="hidden">New Analysis</button>
 </body>
 </html>

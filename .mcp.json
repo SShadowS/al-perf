@@ -1,9 +1,9 @@
 {
-  "mcpServers": {
-    "al-profiler": {
-      "command": "bun",
-      "args": ["run", "src/mcp/index.ts"],
-      "env": {}
-    }
-  }
+	"mcpServers": {
+		"al-profiler": {
+			"command": "bun",
+			"args": ["run", "src/mcp/index.ts"],
+			"env": {}
+		}
+	}
 }

@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
-import { mkdir, writeFile, rm } from "fs/promises";
-import { resolve, dirname, basename, sep } from "path";
+import { mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
+import { basename, dirname, resolve, sep } from "path";
 
 /** Size limits to prevent decompression bombs */
 export const MAX_ENTRY_SIZE = 50 * 1024 * 1024; // 50MB per file
@@ -12,122 +12,127 @@ export const MAX_TOTAL_SIZE = 500 * 1024 * 1024; // 500MB total extraction
  * Instrumentation profiles typically have a .zip with the same base name.
  */
 export function findCompanionZip(profilePath: string): string | null {
-  const dir = dirname(profilePath);
-  const base = basename(profilePath, ".alcpuprofile");
-  const zipPath = resolve(dir, `${base}.zip`);
-  return existsSync(zipPath) ? zipPath : null;
+	const dir = dirname(profilePath);
+	const base = basename(profilePath, ".alcpuprofile");
+	const zipPath = resolve(dir, `${base}.zip`);
+	return existsSync(zipPath) ? zipPath : null;
 }
 
 export interface ExtractResult {
-  extractDir: string;
-  alFileCount: number;
-  cleanup: () => Promise<void>;
+	extractDir: string;
+	alFileCount: number;
+	cleanup: () => Promise<void>;
 }
 
 /**
  * Extract .al files from a companion zip to a temporary directory.
  * Uses DecompressionStream for deflate (no external deps).
  */
-export async function extractCompanionZip(zipPath: string): Promise<ExtractResult> {
-  const extractDir = resolve(
-    tmpdir(),
-    `al-profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  );
-  await mkdir(extractDir, { recursive: true });
+export async function extractCompanionZip(
+	zipPath: string,
+): Promise<ExtractResult> {
+	const extractDir = resolve(
+		tmpdir(),
+		`al-profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+	);
+	await mkdir(extractDir, { recursive: true });
 
-  const file = Bun.file(zipPath);
-  const arrayBuffer = await file.arrayBuffer();
-  const entries = await readZipEntries(arrayBuffer);
+	const file = Bun.file(zipPath);
+	const arrayBuffer = await file.arrayBuffer();
+	const entries = await readZipEntries(arrayBuffer);
 
-  let alFileCount = 0;
-  for (const entry of entries) {
-    if (entry.name.toLowerCase().endsWith(".al")) {
-      const outputPath = resolve(extractDir, entry.name);
-      // Zip slip protection: ensure resolved path stays inside extractDir
-      if (!outputPath.startsWith(extractDir + sep) && outputPath !== extractDir) {
-        continue;
-      }
-      await mkdir(dirname(outputPath), { recursive: true });
-      await writeFile(outputPath, entry.data);
-      alFileCount++;
-    }
-  }
+	let alFileCount = 0;
+	for (const entry of entries) {
+		if (entry.name.toLowerCase().endsWith(".al")) {
+			const outputPath = resolve(extractDir, entry.name);
+			// Zip slip protection: ensure resolved path stays inside extractDir
+			if (
+				!outputPath.startsWith(extractDir + sep) &&
+				outputPath !== extractDir
+			) {
+				continue;
+			}
+			await mkdir(dirname(outputPath), { recursive: true });
+			await writeFile(outputPath, entry.data);
+			alFileCount++;
+		}
+	}
 
-  return {
-    extractDir,
-    alFileCount,
-    cleanup: async () => {
-      await rm(extractDir, { recursive: true, force: true });
-    },
-  };
+	return {
+		extractDir,
+		alFileCount,
+		cleanup: async () => {
+			await rm(extractDir, { recursive: true, force: true });
+		},
+	};
 }
 
 async function readZipEntries(
-  buffer: ArrayBuffer,
+	buffer: ArrayBuffer,
 ): Promise<{ name: string; data: Uint8Array }[]> {
-  const view = new DataView(buffer);
-  const bytes = new Uint8Array(buffer);
-  const entries: { name: string; data: Uint8Array }[] = [];
-  let totalDecompressedSize = 0;
+	const view = new DataView(buffer);
+	const bytes = new Uint8Array(buffer);
+	const entries: { name: string; data: Uint8Array }[] = [];
+	let totalDecompressedSize = 0;
 
-  let offset = 0;
-  while (offset < bytes.length - 4) {
-    const sig = view.getUint32(offset, true);
-    if (sig !== 0x04034b50) break; // Local file header signature
+	let offset = 0;
+	while (offset < bytes.length - 4) {
+		const sig = view.getUint32(offset, true);
+		if (sig !== 0x04034b50) break; // Local file header signature
 
-    // NOTE: This reader does not handle entries with data descriptors (bit 3 of general purpose flags).
-    // AL companion zips from Business Central do not use data descriptors, so this is acceptable.
-    const compressionMethod = view.getUint16(offset + 8, true);
-    const compressedSize = view.getUint32(offset + 18, true);
-    const uncompressedSize = view.getUint32(offset + 22, true);
-    const nameLength = view.getUint16(offset + 26, true);
-    const extraLength = view.getUint16(offset + 28, true);
+		// NOTE: This reader does not handle entries with data descriptors (bit 3 of general purpose flags).
+		// AL companion zips from Business Central do not use data descriptors, so this is acceptable.
+		const compressionMethod = view.getUint16(offset + 8, true);
+		const compressedSize = view.getUint32(offset + 18, true);
+		const uncompressedSize = view.getUint32(offset + 22, true);
+		const nameLength = view.getUint16(offset + 26, true);
+		const extraLength = view.getUint16(offset + 28, true);
 
-    const nameBytes = bytes.slice(offset + 30, offset + 30 + nameLength);
-    const name = new TextDecoder().decode(nameBytes);
+		const nameBytes = bytes.slice(offset + 30, offset + 30 + nameLength);
+		const name = new TextDecoder().decode(nameBytes);
 
-    const dataStart = offset + 30 + nameLength + extraLength;
-    const compressedData = bytes.slice(dataStart, dataStart + compressedSize);
+		const dataStart = offset + 30 + nameLength + extraLength;
+		const compressedData = bytes.slice(dataStart, dataStart + compressedSize);
 
-    // Skip directories
-    if (name.endsWith("/")) {
-      offset = dataStart + compressedSize;
-      continue;
-    }
+		// Skip directories
+		if (name.endsWith("/")) {
+			offset = dataStart + compressedSize;
+			continue;
+		}
 
-    // Decompression bomb protection: skip entries with declared size over limit
-    if (uncompressedSize > MAX_ENTRY_SIZE) {
-      offset = dataStart + compressedSize;
-      continue;
-    }
+		// Decompression bomb protection: skip entries with declared size over limit
+		if (uncompressedSize > MAX_ENTRY_SIZE) {
+			offset = dataStart + compressedSize;
+			continue;
+		}
 
-    let data: Uint8Array;
-    if (compressionMethod === 0) {
-      // Stored (no compression)
-      data = compressedData;
-    } else if (compressionMethod === 8) {
-      // Deflate
-      data = await inflateData(compressedData, MAX_ENTRY_SIZE);
-    } else {
-      // Unsupported compression method — skip
-      offset = dataStart + compressedSize;
-      continue;
-    }
+		let data: Uint8Array;
+		if (compressionMethod === 0) {
+			// Stored (no compression)
+			data = compressedData;
+		} else if (compressionMethod === 8) {
+			// Deflate
+			data = await inflateData(compressedData, MAX_ENTRY_SIZE);
+		} else {
+			// Unsupported compression method — skip
+			offset = dataStart + compressedSize;
+			continue;
+		}
 
-    // Enforce per-entry and total size limits on actual decompressed data
-    if (data.length > MAX_ENTRY_SIZE) {
-      continue;
-    }
-    totalDecompressedSize += data.length;
-    if (totalDecompressedSize > MAX_TOTAL_SIZE) {
-      break;
-    }
+		// Enforce per-entry and total size limits on actual decompressed data
+		if (data.length > MAX_ENTRY_SIZE) {
+			continue;
+		}
+		totalDecompressedSize += data.length;
+		if (totalDecompressedSize > MAX_TOTAL_SIZE) {
+			break;
+		}
 
-    entries.push({ name, data });
-    offset = dataStart + compressedSize;
-  }
+		entries.push({ name, data });
+		offset = dataStart + compressedSize;
+	}
 
-  return entries;
+	return entries;
 }
 
 /**
@@ -135,35 +140,35 @@ async function readZipEntries(
  * Enforces a maxSize limit to prevent decompression bombs.
  */
 async function inflateData(
-  compressedData: Uint8Array,
-  maxSize: number,
+	compressedData: Uint8Array,
+	maxSize: number,
 ): Promise<Uint8Array> {
-  const ds = new DecompressionStream("deflate-raw");
-  const writer = ds.writable.getWriter();
-  const reader = ds.readable.getReader();
+	const ds = new DecompressionStream("deflate-raw");
+	const writer = ds.writable.getWriter();
+	const reader = ds.readable.getReader();
 
-  writer.write(compressedData as BufferSource);
-  writer.close();
+	writer.write(compressedData as BufferSource);
+	writer.close();
 
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    totalLength += value.length;
-    if (totalLength > maxSize) {
-      await reader.cancel();
-      throw new Error(`Decompressed size exceeds limit of ${maxSize} bytes`);
-    }
-  }
+	const chunks: Uint8Array[] = [];
+	let totalLength = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+		totalLength += value.length;
+		if (totalLength > maxSize) {
+			await reader.cancel();
+			throw new Error(`Decompressed size exceeds limit of ${maxSize} bytes`);
+		}
+	}
 
-  const result = new Uint8Array(totalLength);
-  let pos = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, pos);
-    pos += chunk.length;
-  }
+	const result = new Uint8Array(totalLength);
+	let pos = 0;
+	for (const chunk of chunks) {
+		result.set(chunk, pos);
+		pos += chunk.length;
+	}
 
-  return result;
+	return result;
 }
