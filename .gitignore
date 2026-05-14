@@ -22,3 +22,7 @@ Initial Plan.md
 private/
 .superpowers/
 web/data/
+.tools/
+.claude/settings.local.json
+stats.json
+test/fixtures/batch-recorded/
