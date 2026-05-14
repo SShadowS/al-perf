@@ -1991,13 +1991,13 @@ Before declaring Phase 2a done, verify against the spec:
    - Section 1 architecture L3 (resolver, event-graph) → Tasks 2–9 ✓
    - Section 2 `CallEdge` (dispatchKind + resolution + provenance) → Task 5 ✓; `EventSymbol`/`EventEdge` → Task 7 ✓; `AnalysisCoverage` → Task 8 ✓; record-op/record-var `tableId` resolution → Task 3 ✓
    - Section 3 pass 3 "resolve graph" → Tasks 5–9 ✓
-   - Section 5 Native Resolver Scope: implicit triggers → Task 6 ✓; event publisher/subscriber resolution → Task 7 ✓; `Codeunit.Run` literal targets → Tasks 4–5 ✓; "nothing resolves silently to clean" — every call site gets an edge, unresolved is data → Task 5 ✓. Deferred items (SymbolReference.json parsing, non-record variable type tracking, RunTrigger boolean capture) are listed in the Scope section with rationale — these are intentional Phase 2a boundaries, not gaps.
+   - Section 5 Native Resolver Scope: implicit triggers → Task 6 ✓; event publisher/subscriber resolution → Task 7 ✓; `Codeunit.Run`/`Page.Run`/`Report.Run` literal targets → Tasks 4–5 ✓; dynamic (variable-target) object-run calls → `dispatchKind: "dynamic"`, `resolution: "unknown"` → Task 5 ✓ (wired in the Phase 2a final-review fix pass); "nothing resolves silently to clean" — every call site gets an edge, unresolved is data → Task 5 ✓. Deferred items (SymbolReference.json parsing, non-record variable type tracking, RunTrigger boolean capture) are listed in the Scope section with rationale — these are intentional Phase 2a boundaries, not gaps.
    - Section 6 graceful degradation — missing workspace → empty model + diagnostic; opaque apps → `coverage.opaqueApps`; unresolved → data not crash → Tasks 8, 10 ✓
    - Section 7 TDD — every task is test-first; the determinism test is updated in Task 10 ✓
 
 2. **Phase boundary:** `analyzeWorkspace` returns a `SemanticModel` whose `callGraph`/`eventGraph`/`coverage` are populated and whose routine `features` have `tableId`s resolved, but whose routine `summary` is still `undefined`. Phase 2b populates `summary` via the L4 summary engine.
 
-3. **Known scoping (intentional, not bugs):** member calls on non-record instance variables → `unresolved`; `Insert`/`Modify`/`Delete` implicit-trigger edges → `resolution: "maybe"`; symbol-only `.app` dependencies → opaque. All three are documented in the Scope section.
+3. **Known scoping (intentional, not bugs):** member calls on non-record instance variables → `dispatchKind: "method"`, `resolution: "unknown"` (the target method is not pinned — these are counted in `coverage.unresolvedCallsites`, which filters on `resolution === "unknown"`, not on `dispatchKind`); `Insert`/`Modify`/`Delete` implicit-trigger edges → `resolution: "maybe"`; symbol-only `.app` dependencies → opaque. All three are documented in the Scope section.
 
 ---
 
