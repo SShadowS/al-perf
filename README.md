@@ -176,6 +176,10 @@ bun test <file>      # Run a single test file
 bunx tsc --noEmit    # Type check
 bun run build        # Generate .d.ts declarations
 bun run web          # Start the web server
+bun run format       # Format with Biome
+bun run lint         # Lint with Biome
+bun run check        # Biome check + autofix
+bun run verify       # Biome check + tsc + tests (pre-commit gate)
 ```
 
 ## POC Continuous Monitoring (auto-ship)
