@@ -19,6 +19,10 @@ COPY web/ web/
 
 EXPOSE 3010
 
+# Persistent data (debug captures, stats) — mount a volume here:
+#   docker run -v al-perf-data:/data -p 3010:3010 sshadows/al-perf
+VOLUME /data
+
 # Temp files (zip extraction) go to /tmp — mount as tmpfs for in-memory processing:
-#   docker run --tmpfs /tmp:size=512m -p 3010:3010 al-perf
+#   docker run --tmpfs /tmp:size=512m -p 3010:3010 sshadows/al-perf
 CMD ["bun", "run", "web/server.ts"]
