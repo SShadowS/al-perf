@@ -49,6 +49,13 @@ const DEBUG_DIR = process.env.AL_PERF_DEBUG_DIR ?? resolve(DATA_DIR, "debug");
 const CAPTURE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 
 const debugStore = new DebugStore(CAPTURE_EXPIRY_MS);
+// Boot-time identity for deploy/restart detection via /api/debug/status.
+const STARTED_AT = new Date();
+const APP_VERSION = (
+	JSON.parse(
+		await readFile(resolve(import.meta.dir, "..", "package.json"), "utf-8"),
+	) as { version: string }
+).version;
 // Ensure the data root exists so stats writes succeed on a fresh local checkout.
 await mkdir(DATA_DIR, { recursive: true });
 await initIdCounter(DEBUG_DIR);
@@ -847,6 +854,9 @@ export const server = Bun.serve({
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
 			return withSecurityHeaders(
 				Response.json({
+					version: APP_VERSION,
+					startedAt: STARTED_AT.toISOString(),
+					uptimeSec: Math.floor((Date.now() - STARTED_AT.getTime()) / 1000),
 					debugMode: DEBUG_MODE,
 					pendingCaptures: debugStore.pendingCount,
 				}),

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.1 — 2026-05-25
+
+### Added
+
+- **Deploy/restart detection** — `/api/debug/status` now returns `version` (from `package.json`), `startedAt` (boot timestamp), and `uptimeSec`, so a redeploy/restart is detectable over HTTP and the running version is visible. Existing `debugMode`/`pendingCaptures` fields unchanged.
+
 ## 2.3.0 — 2026-05-25
 
 ### Added
