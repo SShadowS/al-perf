@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { Language, Parser, type Tree } from "web-tree-sitter";
 
 const WASM_URL =
-	"https://github.com/SShadowS/tree-sitter-al/releases/download/latest/tree-sitter-al.wasm";
+	"https://github.com/SShadowS/tree-sitter-al/releases/latest/download/tree-sitter-al.wasm";
 
 let cachedParser: Parser | null = null;
 
