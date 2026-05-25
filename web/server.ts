@@ -26,7 +26,11 @@ import type { ProfileMetadata } from "../src/types/batch.js";
 import type { ProcessedProfile } from "../src/types/processed.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
-const STATS_FILE = resolve(import.meta.dir, "stats.json");
+// Persisted data root — set AL_PERF_DATA_DIR=/data in Docker so it lands on the
+// mounted volume and survives container redeploys. Defaults to web/data for local dev.
+const DATA_DIR =
+	process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
+const STATS_FILE = resolve(DATA_DIR, "stats.json");
 const RECORD_DIR = resolve(
 	import.meta.dir,
 	"..",
@@ -40,10 +44,13 @@ const PORT = parseInt(process.env.PORT || "3010", 10);
 let recordNextBatch = false;
 
 const DEBUG_MODE = process.env.AL_PERF_DEBUG === "1";
-const DEBUG_DIR = resolve(import.meta.dir, "..", "debug");
+// Debug/consent captures live under the data root so they share the volume.
+const DEBUG_DIR = process.env.AL_PERF_DEBUG_DIR ?? resolve(DATA_DIR, "debug");
 const CAPTURE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 
 const debugStore = new DebugStore(CAPTURE_EXPIRY_MS);
+// Ensure the data root exists so stats writes succeed on a fresh local checkout.
+await mkdir(DATA_DIR, { recursive: true });
 await initIdCounter(DEBUG_DIR);
 const sweepInterval = setInterval(() => debugStore.sweep(), 5 * 60 * 1000);
 
@@ -180,7 +187,12 @@ async function runAnalysis(
 		});
 
 		// AI explanation and deep analysis
-		const apiKey = process.env.ANTHROPIC_API_KEY;
+		// AI_DISABLED=1 skips all AI calls (e.g. during upgrades) while keeping
+		// ANTHROPIC_API_KEY in env for non-web work.
+		const apiKey =
+			process.env.AI_DISABLED === "1"
+				? undefined
+				: process.env.ANTHROPIC_API_KEY;
 		const apiCosts: ApiCallCost[] = [];
 		let explainResult: ExplainResult | undefined;
 		let deepResult: DeepExplainResult | undefined;
@@ -356,8 +368,11 @@ async function runBatchAnalysis(
 		onProgress("analyzing", `Analyzing ${profilePaths.length} profiles...`);
 		const result = await analyzeBatch(profilePaths, { metadata, sourcePath });
 
-		// Run AI explanation if API key is available
-		const apiKey = process.env.ANTHROPIC_API_KEY;
+		// Run AI explanation if API key is available (AI_DISABLED=1 skips it)
+		const apiKey =
+			process.env.AI_DISABLED === "1"
+				? undefined
+				: process.env.ANTHROPIC_API_KEY;
 		const apiCosts: ApiCallCost[] = [];
 		let batchExplainResult: BatchExplainResult | undefined;
 
@@ -763,6 +778,7 @@ export const server = Bun.serve({
 
 		if (url.pathname === "/api/tenants/register" && req.method === "POST") {
 			const { handleTenantRegister } = await import("./handlers/tenants.ts");
+			// Read env per-request so tests can override the data dir after import.
 			const dataDir =
 				process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
 			return withSecurityHeaders(await handleTenantRegister(req, dataDir));
@@ -802,11 +818,9 @@ export const server = Bun.serve({
 						),
 					);
 				}
-				const reqIp = server.requestIP(req)?.address ?? "unknown";
 				const now = new Date();
 				const consent = {
 					consentedAt: now.toISOString(),
-					consentedBy: reqIp,
 					retentionDays: 7,
 					expiresAt: new Date(
 						now.getTime() + 7 * 24 * 60 * 60 * 1000,
@@ -855,7 +869,13 @@ console.log(
 	`AL Profile Analyzer web server running at http://localhost:${server.port}`,
 );
 console.log(
-	`AI explain: ${process.env.ANTHROPIC_API_KEY ? "enabled" : "disabled (set ANTHROPIC_API_KEY to enable)"}`,
+	`AI explain: ${
+		process.env.AI_DISABLED === "1"
+			? "disabled (AI_DISABLED=1)"
+			: process.env.ANTHROPIC_API_KEY
+				? "enabled"
+				: "disabled (set ANTHROPIC_API_KEY to enable)"
+	}`,
 );
 console.log(
 	`Debug mode: ${DEBUG_MODE ? "enabled (saving all requests)" : "disabled (consent mode available)"}`,

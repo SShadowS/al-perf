@@ -2,6 +2,21 @@
 // AL Profile Analyzer — Web UI
 // ---------------------------------------------------------------------------
 
+// Upgrade / sponsor banner — show unless previously dismissed
+(() => {
+	const banner = document.getElementById("upgrade-banner");
+	if (!banner) return;
+	if (localStorage.getItem("upgradeBannerDismissed") !== "1") {
+		banner.style.display = "block";
+	}
+	document
+		.getElementById("upgrade-banner-close")
+		?.addEventListener("click", () => {
+			banner.style.display = "none";
+			localStorage.setItem("upgradeBannerDismissed", "1");
+		});
+})();
+
 // Check debug mode on page load
 fetch("/api/debug/status")
 	.then((r) => r.json())

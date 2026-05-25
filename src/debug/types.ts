@@ -28,7 +28,6 @@ export interface AiCallCapture {
 
 export interface ConsentInfo {
 	consentedAt: string;
-	consentedBy: string;
 	retentionDays: number;
 	expiresAt: string;
 }
@@ -41,7 +40,6 @@ export interface CaptureMeta {
 	costs: object;
 	analysisDurationMs: number;
 	consentedAt?: string;
-	consentedBy?: string;
 	retentionDays?: number;
 	expiresAt?: string;
 }

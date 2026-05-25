@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.0 — 2026-05-25
+
+### Added
+
+- **Web upgrade/sponsor banner** — Dismissible top banner announcing the v2 upgrade and offering a single sponsor logo slot. State persisted in `localStorage`.
+- **`AI_DISABLED` flag** — Setting `AI_DISABLED=1` skips all AI calls (explain + deep) in the web service, avoiding wasted latency/retries when the API key is unavailable. Startup log reflects the state.
+
+### Fixed
+
+- **Persistent captures + stats** — Debug/consent captures (`DEBUG_DIR`) and `stats.json` now live under the data root (`AL_PERF_DATA_DIR`, `/data` in Docker), so they survive container redeploys instead of landing in the ephemeral container layer.
+- **Privacy: no IP in consent captures** — Removed `consentedBy` (visitor IP) from saved consent capture metadata, matching the "anonymously" wording.
+
 ## 0.1.0 — 2026-03-05
 
 Initial feature-complete release with 27 analysis capabilities across three tiers.

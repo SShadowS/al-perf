@@ -129,7 +129,6 @@ describe("writeCaptureToDisk", () => {
 		const capture = makeCapture();
 		const consent: ConsentInfo = {
 			consentedAt: "2026-03-08T14:30:00.000Z",
-			consentedBy: "testuser@example.com",
 			retentionDays: 30,
 			expiresAt: "2026-04-07T14:30:00.000Z",
 		};
@@ -146,7 +145,7 @@ describe("writeCaptureToDisk", () => {
 		);
 		expect(meta.mode).toBe("user-consent");
 		expect(meta.consentedAt).toBe("2026-03-08T14:30:00.000Z");
-		expect(meta.consentedBy).toBe("testuser@example.com");
+		expect(meta.consentedBy).toBeUndefined();
 		expect(meta.retentionDays).toBe(30);
 		expect(meta.expiresAt).toBe("2026-04-07T14:30:00.000Z");
 	});

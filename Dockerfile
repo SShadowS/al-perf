@@ -19,8 +19,10 @@ COPY web/ web/
 
 EXPOSE 3010
 
-# Persistent data (debug captures, stats) — mount a volume here:
+# Persistent data (debug/consent captures, stats, tenants) lives under /data so it
+# survives container redeploys. Mount a volume here:
 #   docker run -v al-perf-data:/data -p 3010:3010 sshadows/al-perf
+ENV AL_PERF_DATA_DIR=/data
 VOLUME /data
 
 # Temp files (zip extraction) go to /tmp — mount as tmpfs for in-memory processing:

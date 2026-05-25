@@ -20,6 +20,25 @@
   <script src="app.js" defer></script>
 </head>
 <body>
+  <div id="upgrade-banner" class="upgrade-banner" style="display: none;">
+    <div class="upgrade-banner-inner">
+      <div class="upgrade-banner-msg">
+        <strong>Major upgrade in progress.</strong>
+        Static analysis is fully active. AI-powered features are temporarily disabled
+        while I ship a faster, smarter AL Profile Analyzer&nbsp;v2 —
+        <strong>live June&nbsp;1,&nbsp;2026</strong>.
+      </div>
+      <div class="upgrade-banner-sponsor">
+        <span class="upgrade-banner-tag">Sponsor</span>
+        <span class="upgrade-banner-logo" aria-label="Your logo here">Your logo here</span>
+        <span class="upgrade-banner-sponsor-text">
+          One spot only —
+          <a href="mailto:SShadowS@SShadowS.dk?subject=Sponsoring%20AL%20Profile%20Analyzer">SShadowS@SShadowS.dk</a>
+        </span>
+      </div>
+      <button type="button" id="upgrade-banner-close" class="upgrade-banner-close" aria-label="Dismiss">×</button>
+    </div>
+  </div>
   <div id="debug-banner" class="debug-banner" style="display: none;">
     <strong>Debug Mode</strong> — all requests are being recorded
   </div>
@@ -55,7 +74,7 @@
     <div id="results" class="hidden">
       <nav id="sidebar">
         <div id="consent-prompt" class="consent-card" style="display: none;">
-          <div class="consent-card-title">Help us improve</div>
+          <div class="consent-card-title">Help me improve</div>
           <p>Save this request anonymously for 7 days to help improve analysis quality.</p>
           <div class="consent-actions">
             <button type="button" id="consent-allow" class="btn btn-primary btn-sm">Allow</button>
