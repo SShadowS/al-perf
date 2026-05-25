@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.2 — 2026-05-25
+
+### Fixed
+
+- **Stale assets behind Cloudflare** — `app.js`/`style.css` were cached ~186 days by Cloudflare with no cache-busting, so returning visitors (e.g. on mobile) kept old assets and never saw the upgrade banner. HTML now stamps local asset refs with `?v=<version>` and is served `Cache-Control: no-cache`, so each release yields fresh asset URLs and affected browsers self-heal on next visit.
+
 ## 2.3.1 — 2026-05-25
 
 ### Added

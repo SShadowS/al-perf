@@ -112,10 +112,29 @@ async function serveStatic(pathname: string): Promise<Response | null> {
 	}
 
 	const file = Bun.file(filePath);
-	if (await file.exists()) {
-		return new Response(file);
+	if (!(await file.exists())) {
+		return null;
 	}
-	return null;
+
+	// For HTML, stamp local asset refs with the app version and force revalidation.
+	// Cloudflare caches JS/CSS aggressively (no cache-busting in filenames), so
+	// returning visitors would otherwise hold stale assets for months. Versioned
+	// URLs (?v=) produce a fresh URL each release; no-cache on the HTML entry point
+	// ensures browsers always fetch the latest asset references.
+	if (filePath.endsWith(".html")) {
+		const html = (await file.text()).replace(
+			/(href|src)="(style\.css|app\.js|marked\.min\.js)"/g,
+			`$1="$2?v=${APP_VERSION}"`,
+		);
+		return new Response(html, {
+			headers: {
+				"Content-Type": "text/html; charset=utf-8",
+				"Cache-Control": "no-cache",
+			},
+		});
+	}
+
+	return new Response(file);
 }
 
 // ---------------------------------------------------------------------------
