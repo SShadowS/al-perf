@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.3 — 2026-06-01
+
+### Fixed
+
+- **Upgrade banner auto-hides when AI is active** — Previously the banner rendered unconditionally until manually dismissed, so restoring the `ANTHROPIC_API_KEY` did not remove it. The banner now starts hidden and is shown by `app.js` only when `/api/debug/status` reports `aiEnabled: false`. Added `aiEnabled` to the status endpoint (`true` when `ANTHROPIC_API_KEY` is set and `AI_DISABLED !== "1"`).
+
 ## 2.3.2 — 2026-05-25
 
 ### Fixed

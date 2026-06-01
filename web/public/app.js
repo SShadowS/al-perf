@@ -2,22 +2,16 @@
 // AL Profile Analyzer — Web UI
 // ---------------------------------------------------------------------------
 
-// Upgrade / sponsor banner — show unless previously dismissed
-(() => {
-	const banner = document.getElementById("upgrade-banner");
-	if (!banner) return;
-	if (localStorage.getItem("upgradeBannerDismissed") !== "1") {
-		banner.style.display = "block";
-	}
-	document
-		.getElementById("upgrade-banner-close")
-		?.addEventListener("click", () => {
-			banner.style.display = "none";
-			localStorage.setItem("upgradeBannerDismissed", "1");
-		});
-})();
+// Upgrade / sponsor banner — show only when AI is disabled AND not previously dismissed
+const upgradeBanner = document.getElementById("upgrade-banner");
+document
+	.getElementById("upgrade-banner-close")
+	?.addEventListener("click", () => {
+		if (upgradeBanner) upgradeBanner.style.display = "none";
+		localStorage.setItem("upgradeBannerDismissed", "1");
+	});
 
-// Check debug mode on page load
+// Check status on page load — drives debug banner + upgrade banner visibility
 fetch("/api/debug/status")
 	.then((r) => r.json())
 	.then((status) => {
@@ -25,6 +19,14 @@ fetch("/api/debug/status")
 			document.getElementById("debug-banner").style.display = "block";
 		}
 		window.__debugMode = status.debugMode;
+
+		if (
+			upgradeBanner &&
+			!status.aiEnabled &&
+			localStorage.getItem("upgradeBannerDismissed") !== "1"
+		) {
+			upgradeBanner.style.display = "block";
+		}
 	})
 	.catch(() => {});
 

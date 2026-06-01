@@ -871,6 +871,8 @@ export const server = Bun.serve({
 		}
 
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
+			const aiEnabled =
+				process.env.AI_DISABLED !== "1" && !!process.env.ANTHROPIC_API_KEY;
 			return withSecurityHeaders(
 				Response.json({
 					version: APP_VERSION,
@@ -878,6 +880,7 @@ export const server = Bun.serve({
 					uptimeSec: Math.floor((Date.now() - STARTED_AT.getTime()) / 1000),
 					debugMode: DEBUG_MODE,
 					pendingCaptures: debugStore.pendingCount,
+					aiEnabled,
 				}),
 			);
 		}
