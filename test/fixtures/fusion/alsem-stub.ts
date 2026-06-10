@@ -20,6 +20,12 @@
  *                   (non-empty) findings: ProcessLine → a weighted prioritized
  *                   finding; OnRun → matched but self 0% → R2-12 filter drops it
  *                   from `weighted` (stays in hotspotAnnotations).
+ *                   Schema 1.1.0: inventory includes a field-trigger row
+ *                   (enclosingMember + originatingObject); analyze findings include
+ *                   evidencePath + primaryLocation.enclosingMember.
+ *   old-findings  — same as `findings` but schema 1.0.0 and NO new fields
+ *                   (enclosingMember / evidencePath). Tests that an old engine
+ *                   still parses gracefully (majorMatches 1.x → ok, fields absent).
  *
  * The subcommand (argv[2] = "fingerprint" | "analyze") selects which envelope
  * the "ok"/"wrong-schema"/"opaque"/"findings" modes emit.
@@ -111,10 +117,13 @@ function analyzeEnvelope(schemaVersion: string, opaque: boolean) {
 
 const FINDINGS_APP_GUID = "00000000-0000-0000-0000-000000005000";
 
+// Stable ids for the field-trigger row (Table 72100, OnValidate for "Quantity").
+const FINDINGS_TABLE_GUID = "00000000-0000-0000-0000-000000007210";
+
 function findingsInventory() {
 	return {
 		kind: "routine-inventory",
-		schemaVersion: "1.0.0",
+		schemaVersion: "1.1.0",
 		alsemVersion: "0.0.0-stub",
 		deterministic: true,
 		generatedAt: "1970-01-01T00:00:00Z",
@@ -131,10 +140,11 @@ function findingsInventory() {
 				},
 			],
 			identities: {
-				displayNames: ["ProcessLine", "OnRun"],
+				displayNames: ["ProcessLine", "OnRun", "OnValidate"],
 				stableIds: [
 					`${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
 					`${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
+					`${FINDINGS_TABLE_GUID}:Table:72100#onval`,
 				],
 			},
 			rootClassifications: [],
@@ -150,6 +160,16 @@ function findingsInventory() {
 					objectType: "Codeunit",
 					routineName: "OnRun",
 					stableRoutineId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
+				},
+				// Schema 1.1.0: a field-trigger row with enclosingMember + originatingObject.
+				// Represents Table 72100's "Quantity" field OnValidate trigger.
+				{
+					enclosingMember: "Quantity",
+					objectNumber: 72100,
+					objectType: "Table",
+					originatingObject: `${FINDINGS_TABLE_GUID}:Table:72100`,
+					routineName: "OnValidate",
+					stableRoutineId: `${FINDINGS_TABLE_GUID}:Table:72100#onval`,
 				},
 			],
 		},
@@ -185,23 +205,157 @@ function makeStubFinding(
 }
 
 function findingsAnalyze() {
+	const procFinding = makeStubFinding(
+		"F-PROC",
+		"fp-proc",
+		"d1-db-op-in-loop",
+		"DB operation inside a loop",
+		"ProcessLine",
+	);
+	// Schema 1.1.0: add evidencePath (with sourceAnchor as the engine emits it)
+	// to the ProcessLine finding. Two steps: the outer caller and the inner op.
+	const procFindingWithEvidence = {
+		...procFinding,
+		evidencePath: [
+			{
+				routineId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
+				sourceAnchor: {
+					file: "ws:src/Cod50000.al",
+					line: 5,
+					startColumn: 3,
+					endColumn: 20,
+				},
+				note: "calls",
+				callsiteId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun/cs1`,
+			},
+			{
+				routineId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
+				sourceAnchor: {
+					file: "ws:src/Cod50000.al",
+					line: 10,
+					startColumn: 5,
+					endColumn: 40,
+				},
+				note: "DB read inside loop",
+				operationId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc/op1`,
+				loopId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc/loop1`,
+			},
+		],
+	};
+
+	const onrunFinding = makeStubFinding(
+		"F-ONRUN",
+		"fp-onrun",
+		"d2-orchestrator",
+		"Orchestrator dispatch",
+		"OnRun",
+	);
+	// Schema 1.1.0: add primaryLocation.enclosingMember to a field-trigger finding.
+	const onvalidateFinding = {
+		...makeStubFinding(
+			"F-ONVAL",
+			"fp-onval",
+			"d1-db-op-in-loop",
+			"DB operation inside a field trigger",
+			"OnValidate",
+		),
+		primaryLocation: {
+			file: "ws:src/Tab72100.al",
+			line: 20,
+			column: 1,
+			objectId: `${FINDINGS_TABLE_GUID}/Table/72100`,
+			objectName: "StubTable",
+			routineName: "OnValidate",
+			enclosingMember: "Quantity",
+			originatingObject: `${FINDINGS_TABLE_GUID}:Table:72100`,
+		},
+	};
+
 	const findings = [
 		// Lands on the hot leaf (ProcessLine, self 100%) → weighted.
+		procFindingWithEvidence,
+		// Lands on the zero-self orchestrator (OnRun, self 0%) → R2-12 drops it
+		// from weighted; it remains in hotspotAnnotations + correlationSummary.
+		onrunFinding,
+		// A field-trigger finding with primaryLocation.enclosingMember.
+		onvalidateFinding,
+	];
+	return {
+		kind: "analyze-report",
+		schemaVersion: "1.1.0",
+		alsemVersion: "0.0.0-stub",
+		deterministic: true,
+		generatedAt: "1970-01-01T00:00:00Z",
+		diagnostics: [],
+		payload: {
+			findings,
+			summary: {
+				byDetector: {
+					"d1-db-op-in-loop": 2,
+					"d2-orchestrator": 1,
+				},
+				bySeverity: { high: 3 },
+				detectorStats: [],
+				opaqueApps: [],
+				routinesAnalyzed: 3,
+				sourceUnitsParsed: 1,
+				totalFindings: 3,
+			},
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// "old-findings" mode — schema 1.0.0 stub, NO new fields.
+// Tests that majorMatches(1.0.0, 1.1.0) → still parses; new fields absent → undefined.
+// ---------------------------------------------------------------------------
+
+function oldFindingsInventory() {
+	return {
+		kind: "routine-inventory",
+		schemaVersion: "1.0.0",
+		alsemVersion: "0.0.0-stub",
+		deterministic: true,
+		generatedAt: "1970-01-01T00:00:00Z",
+		diagnostics: [],
+		payload: {
+			apps: [APP],
+			coverage: [
+				{
+					directStatus: "complete",
+					inheritedStatus: "complete",
+					reasons: [],
+					subject: `${FINDINGS_APP_GUID}:Codeunit:50000#aaaa`,
+					unknownTargets: [],
+				},
+			],
+			identities: {
+				displayNames: ["ProcessLine"],
+				stableIds: [`${FINDINGS_APP_GUID}:Codeunit:50000#proc`],
+			},
+			rootClassifications: [],
+			routineInventory: [
+				// NO enclosingMember / originatingObject — old engine shape.
+				{
+					objectNumber: 50000,
+					objectType: "Codeunit",
+					routineName: "ProcessLine",
+					stableRoutineId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
+				},
+			],
+		},
+	};
+}
+
+function oldFindingsAnalyze() {
+	// NO evidencePath / NO primaryLocation.enclosingMember — old engine shape.
+	const findings = [
 		makeStubFinding(
 			"F-PROC",
 			"fp-proc",
 			"d1-db-op-in-loop",
 			"DB operation inside a loop",
 			"ProcessLine",
-		),
-		// Lands on the zero-self orchestrator (OnRun, self 0%) → R2-12 drops it
-		// from weighted; it remains in hotspotAnnotations + correlationSummary.
-		makeStubFinding(
-			"F-ONRUN",
-			"fp-onrun",
-			"d2-orchestrator",
-			"Orchestrator dispatch",
-			"OnRun",
 		),
 	];
 	return {
@@ -214,16 +368,23 @@ function findingsAnalyze() {
 		payload: {
 			findings,
 			summary: {
-				byDetector: { "d1-db-op-in-loop": 1, "d2-orchestrator": 1 },
-				bySeverity: { high: 2 },
+				byDetector: { "d1-db-op-in-loop": 1 },
+				bySeverity: { high: 1 },
 				detectorStats: [],
 				opaqueApps: [],
-				routinesAnalyzed: 2,
+				routinesAnalyzed: 1,
 				sourceUnitsParsed: 1,
-				totalFindings: 2,
+				totalFindings: 1,
 			},
 		},
 	};
+}
+
+function emitOldFindings() {
+	const doc =
+		subcommand === "analyze" ? oldFindingsAnalyze() : oldFindingsInventory();
+	process.stdout.write(JSON.stringify(doc));
+	process.exit(0);
 }
 
 function emit(schemaVersion: string, opaque: boolean) {
@@ -262,12 +423,15 @@ switch (mode) {
 		emit("99.0.0", false);
 		break;
 	case "opaque":
-		emit("1.0.0", true);
+		emit("1.1.0", true);
 		break;
 	case "findings":
 		emitFindings();
 		break;
+	case "old-findings":
+		emitOldFindings();
+		break;
 	default:
-		emit("1.0.0", false);
+		emit("1.1.0", false);
 		break;
 }

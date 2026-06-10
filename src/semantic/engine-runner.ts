@@ -21,6 +21,7 @@ import {
 	type AppIdentity,
 	type CoverageEntry,
 	type DiagnosticContract,
+	type EvidenceStep,
 	EXPECTED_ANALYZE_SCHEMA_VERSION,
 	EXPECTED_INVENTORY_SCHEMA_VERSION,
 	type FindingSummary,
@@ -543,6 +544,65 @@ export function runEngine(
 	return pending;
 }
 
+// ---------------------------------------------------------------------------
+// Finding evidence-path mapping
+// ---------------------------------------------------------------------------
+
+/**
+ * The engine emits each evidencePath step as
+ * `{ routineId, sourceAnchor: { file, line, … }, note, operationId?, callsiteId?, loopId? }`.
+ * al-perf's EvidenceStep flattens sourceAnchor to `{ file, line }` at the top level.
+ * primaryLocation.enclosingMember + originatingObject are passed through verbatim
+ * (they are already in FindingLocation's optional fields).
+ *
+ * All new fields are defensive: if the engine omits them (old 1.0.0 engine), the
+ * result is gracefully undefined.
+ */
+function mapFindingEvidencePath(raw: FindingSummary): FindingSummary {
+	const rawAny = raw as unknown as Record<string, unknown>;
+	const rawPath = rawAny.evidencePath;
+	if (!Array.isArray(rawPath) || rawPath.length === 0) {
+		// No evidencePath emitted (old engine or detector without a path) → passthrough.
+		return raw;
+	}
+
+	const evidencePath: EvidenceStep[] = rawPath.map(
+		(step: Record<string, unknown>) => {
+			const anchor = step.sourceAnchor as
+				| Record<string, unknown>
+				| undefined
+				| null;
+			const file =
+				typeof anchor?.file === "string"
+					? anchor.file
+					: typeof step.file === "string"
+						? step.file
+						: "";
+			const line =
+				typeof anchor?.line === "number"
+					? anchor.line
+					: typeof step.line === "number"
+						? step.line
+						: 0;
+			const mapped: EvidenceStep = {
+				routineId: typeof step.routineId === "string" ? step.routineId : "",
+				file,
+				line,
+				note: typeof step.note === "string" ? step.note : "",
+			};
+			if (typeof step.operationId === "string") {
+				mapped.operationId = step.operationId;
+			}
+			if (typeof step.loopId === "string") {
+				mapped.loopId = step.loopId;
+			}
+			return mapped;
+		},
+	);
+
+	return { ...raw, evidencePath };
+}
+
 async function runEngineUnsafe(
 	binPath: string,
 	workspaceDir: string,
@@ -563,6 +623,7 @@ async function runEngineUnsafe(
 		binPath,
 		"analyze",
 		workspaceDir,
+		"--with-evidence",
 		"--format",
 		"json",
 		"--deterministic",
@@ -628,11 +689,14 @@ async function runEngineUnsafe(
 	const coverageDegraded = opaqueApps.length > 0;
 
 	// Sort findings deterministically by (fingerprint, id) per R2-F.
-	const findings = [...ana.payload.findings].sort((a, b) => {
-		const fpCmp = a.fingerprint.localeCompare(b.fingerprint);
-		if (fpCmp !== 0) return fpCmp;
-		return a.id.localeCompare(b.id);
-	});
+	// Also map evidencePath.sourceAnchor → flat {file,line} per EvidenceStep.
+	const findings = [...ana.payload.findings]
+		.map(mapFindingEvidencePath)
+		.sort((a, b) => {
+			const fpCmp = a.fingerprint.localeCompare(b.fingerprint);
+			if (fpCmp !== 0) return fpCmp;
+			return a.id.localeCompare(b.id);
+		});
 
 	const analysis: EngineAnalysis = {
 		routines: inv.payload.routineInventory,

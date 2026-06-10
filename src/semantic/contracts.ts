@@ -14,10 +14,10 @@
 // ---------------------------------------------------------------------------
 
 /** The schemaVersion we expect from `alsem fingerprint --inventory-only`. */
-export const EXPECTED_INVENTORY_SCHEMA_VERSION = "1.0.0";
+export const EXPECTED_INVENTORY_SCHEMA_VERSION = "1.1.0";
 
 /** The schemaVersion we expect from `alsem analyze`. */
-export const EXPECTED_ANALYZE_SCHEMA_VERSION = "1.0.0";
+export const EXPECTED_ANALYZE_SCHEMA_VERSION = "1.1.0";
 
 // ---------------------------------------------------------------------------
 // Shared envelope types
@@ -38,12 +38,21 @@ export interface AppIdentity {
 /**
  * A single routine entry in the inventory projection.
  * Emitted by `alsem fingerprint <ws> --inventory-only --format json`.
+ *
+ * Schema 1.1.0: `enclosingMember` + `originatingObject` are present only for
+ * member-trigger routines (field/control/action OnValidate etc.). Absent for
+ * procedures and object-level triggers. An old engine (1.0.0) omits them →
+ * both fields are `undefined` and the consumer degrades gracefully.
  */
 export interface RoutineIdentity {
 	stableRoutineId: string;
 	objectType: string;
 	objectNumber: number;
 	routineName: string;
+	/** Present only for member-trigger routines (schema 1.1.0+). */
+	enclosingMember?: string;
+	/** Present only for member-trigger routines (schema 1.1.0+). */
+	originatingObject?: string;
 }
 
 /** One coverage entry in the inventory payload. */
@@ -125,6 +134,24 @@ export interface FindingLocation {
 	objectName?: string;
 	routineId?: string;
 	routineName?: string;
+	/** Present when the finding is inside a member-trigger (schema 1.1.0+, --with-evidence). */
+	enclosingMember?: string;
+	/** Present when the finding is inside a member-trigger (schema 1.1.0+, --with-evidence). */
+	originatingObject?: string;
+}
+
+/**
+ * One step in an evidence path as emitted by `alsem analyze --with-evidence`.
+ * The engine emits `sourceAnchor` (file/line/range); al-perf maps it to `{file, line}`.
+ * `routineId` is in `:`-form (StableRoutineId).
+ */
+export interface EvidenceStep {
+	routineId: string;
+	file: string;
+	line: number;
+	note: string;
+	operationId?: string;
+	loopId?: string;
 }
 
 /** Fix hint attached to a finding. */
@@ -158,6 +185,13 @@ export interface FindingSummary {
 	affectedTables: string[];
 	fixHint?: FixHint;
 	pathCount?: number;
+	/**
+	 * The call chain from the finding's anchor to the issue (schema 1.1.0+,
+	 * only when `analyze --with-evidence` is passed). Each step carries the
+	 * engine's `sourceAnchor` mapped to `{file, line}`. Absent for an old
+	 * engine or a detector that emits no path.
+	 */
+	evidencePath?: EvidenceStep[];
 }
 
 /** Per-detector stats in the analyze summary. */

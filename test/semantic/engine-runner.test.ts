@@ -414,6 +414,105 @@ describe("engine-runner: cache hit", () => {
 	});
 });
 
+// ── (d'') schema 1.1.0 new fields: enclosingMember, evidencePath ─────────────
+
+describe("engine-runner: schema 1.1.0 new fields", () => {
+	test("findings mode: inventory row carries enclosingMember + originatingObject", async () => {
+		const { binary } = makeTmpStub("findings");
+		const result = await runEngine(WS_MIN, {
+			engine: binary,
+			timeoutMs: 15_000,
+		});
+		expect(isEngineAnalysis(result)).toBe(true);
+		if (!isEngineAnalysis(result)) return;
+
+		// The stub emits a field-trigger row with enclosingMember "Quantity".
+		const onValidateRow = result.routines.find(
+			(r) => r.routineName === "OnValidate" && r.objectType === "Table",
+		);
+		expect(onValidateRow).toBeDefined();
+		expect(onValidateRow?.enclosingMember).toBe("Quantity");
+		expect(onValidateRow?.originatingObject).toMatch(/Table:72100/);
+	});
+
+	test("findings mode: ProcessLine finding carries parsed evidencePath (flat file+line)", async () => {
+		const { binary } = makeTmpStub("findings");
+		const result = await runEngine(WS_MIN, {
+			engine: binary,
+			timeoutMs: 15_000,
+		});
+		expect(isEngineAnalysis(result)).toBe(true);
+		if (!isEngineAnalysis(result)) return;
+
+		const procFinding = result.findings.find((f) => f.id === "F-PROC");
+		expect(procFinding).toBeDefined();
+		expect(procFinding?.evidencePath).toBeDefined();
+		expect(Array.isArray(procFinding?.evidencePath)).toBe(true);
+		expect(procFinding?.evidencePath?.length).toBe(2);
+
+		const step0 = procFinding?.evidencePath?.[0];
+		expect(step0?.routineId).toMatch(/Codeunit:50000#onrun/);
+		expect(step0?.file).toBe("ws:src/Cod50000.al");
+		expect(step0?.line).toBe(5);
+		expect(step0?.note).toBe("calls");
+		// callsiteId is NOT in EvidenceStep — only operationId + loopId.
+		expect(step0?.operationId).toBeUndefined();
+		expect(step0?.loopId).toBeUndefined();
+
+		const step1 = procFinding?.evidencePath?.[1];
+		expect(step1?.routineId).toMatch(/Codeunit:50000#proc/);
+		expect(step1?.file).toBe("ws:src/Cod50000.al");
+		expect(step1?.line).toBe(10);
+		expect(step1?.note).toBe("DB read inside loop");
+		expect(step1?.operationId).toMatch(/op1/);
+		expect(step1?.loopId).toMatch(/loop1/);
+	});
+
+	test("findings mode: field-trigger finding carries primaryLocation.enclosingMember", async () => {
+		const { binary } = makeTmpStub("findings");
+		const result = await runEngine(WS_MIN, {
+			engine: binary,
+			timeoutMs: 15_000,
+		});
+		expect(isEngineAnalysis(result)).toBe(true);
+		if (!isEngineAnalysis(result)) return;
+
+		const onValFinding = result.findings.find((f) => f.id === "F-ONVAL");
+		expect(onValFinding).toBeDefined();
+		expect(onValFinding?.primaryLocation.enclosingMember).toBe("Quantity");
+		expect(onValFinding?.primaryLocation.originatingObject).toMatch(
+			/Table:72100/,
+		);
+		// No evidencePath on this finding (not emitted by the stub).
+		expect(onValFinding?.evidencePath).toBeUndefined();
+	});
+
+	test("old-findings mode (1.0.0): parses gracefully — no crash, new fields absent", async () => {
+		const { binary } = makeTmpStub("old-findings");
+		const result = await runEngine(WS_MIN, {
+			engine: binary,
+			timeoutMs: 15_000,
+		});
+		// majorMatches("1.0.0", "1.1.0") → same major "1" → NOT a schema degrade.
+		expect(isEngineAnalysis(result)).toBe(true);
+		if (!isEngineAnalysis(result)) return;
+
+		// The old inventory row has no enclosingMember / originatingObject.
+		const procRow = result.routines.find(
+			(r) => r.routineName === "ProcessLine",
+		);
+		expect(procRow).toBeDefined();
+		expect(procRow?.enclosingMember).toBeUndefined();
+		expect(procRow?.originatingObject).toBeUndefined();
+
+		// The old finding has no evidencePath.
+		const procFinding = result.findings.find((f) => f.id === "F-PROC");
+		expect(procFinding).toBeDefined();
+		expect(procFinding?.evidencePath).toBeUndefined();
+		expect(procFinding?.primaryLocation.enclosingMember).toBeUndefined();
+	});
+});
+
 // ── (f) goldens drift (gated: AL_SEM_BIN) ────────────────────────────────────
 
 describe("engine-runner: committed goldens are current", () => {
