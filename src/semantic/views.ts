@@ -64,10 +64,19 @@ export interface PrioritizedFinding {
 	gapTime?: number;
 	/** Representative frame's selfTime/totalTime — flags orchestrators (R2-3). */
 	efficiencyScore: number;
-	/** Number of distinct hot method frames this finding spans (>1 ⇒ ambiguous). */
+	/**
+	 * Number of distinct hot method frames this finding spans (>1 ⇒ ambiguous);
+	 * 0 for unweighted findings (no hot frame).
+	 */
 	frameCount: number;
 	status: CorrelationStatus;
 	attributionConfidence: AttributionConfidence;
+	/**
+	 * For unweighted findings only: which honest bucket this row came from
+	 * (cold/orphan/unkeyable). Absent on weighted rows (they have a real
+	 * per-method `status`). Carried so renderers don't flatten the distinction.
+	 */
+	bucket?: "cold" | "orphan" | "unkeyable";
 }
 
 /**
@@ -201,32 +210,41 @@ export function prioritizeFindings(
 	const weighted = [...acc.values()].map(toPrioritized).sort(cmpPrioritized);
 
 	// Unweighted bucket: cold + orphan + unkeyable findings (no runtime sample).
+	// Each source array is tagged with its TRUE bucket — `blind-spot` here is a
+	// structural placeholder for the required `status` field (none of these are a
+	// real per-method correlation status); the honest signal is `bucket`, which
+	// renderers MUST use to label the row. The cold/orphan/unkeyable distinction
+	// survives on the row, not just in correlationSummary.
+	const toUnweighted = (
+		finding: FindingSummary,
+		bucket: "cold" | "orphan" | "unkeyable",
+	): PrioritizedFinding => ({
+		finding,
+		functionName: finding.primaryLocation.routineName ?? "",
+		objectType: "",
+		objectId: 0,
+		appName: "",
+		selfTimePercent: 0,
+		totalTimePercent: 0,
+		gapTime: undefined,
+		efficiencyScore: 0,
+		frameCount: 0,
+		status: "blind-spot",
+		attributionConfidence: "exact",
+		bucket,
+	});
+
 	const unweighted: PrioritizedFinding[] = [
-		...fused.coldFindings,
-		...fused.orphanFindings,
-		...fused.unkeyableFindings,
-	]
-		.map(
-			(finding): PrioritizedFinding => ({
-				finding,
-				functionName: finding.primaryLocation.routineName ?? "",
-				objectType: "",
-				objectId: 0,
-				appName: "",
-				selfTimePercent: 0,
-				totalTimePercent: 0,
-				gapTime: undefined,
-				efficiencyScore: 0,
-				frameCount: 0,
-				status: "blind-spot" as CorrelationStatus,
-				attributionConfidence: "exact" as AttributionConfidence,
-			}),
-		)
-		.sort((x, y) => {
-			const fp = x.finding.fingerprint.localeCompare(y.finding.fingerprint);
-			if (fp !== 0) return fp;
-			return x.finding.id.localeCompare(y.finding.id);
-		});
+		...fused.coldFindings.map((f) => toUnweighted(f, "cold")),
+		...fused.orphanFindings.map((f) => toUnweighted(f, "orphan")),
+		...fused.unkeyableFindings.map((f) => toUnweighted(f, "unkeyable")),
+	].sort((x, y) => {
+		// (fingerprint, id) tiebreak via localeCompare — matches correlate.ts's
+		// house determinism convention (intentional, byte-stable ordering).
+		const fp = x.finding.fingerprint.localeCompare(y.finding.fingerprint);
+		if (fp !== 0) return fp;
+		return x.finding.id.localeCompare(y.finding.id);
+	});
 
 	return { weighted, unweighted };
 }
@@ -246,6 +264,8 @@ function cmpPrioritized(a: PrioritizedFinding, b: PrioritizedFinding): number {
 		return b.totalTimePercent - a.totalTimePercent;
 	if (b.efficiencyScore !== a.efficiencyScore)
 		return b.efficiencyScore - a.efficiencyScore;
+	// (fingerprint, id) tiebreak via localeCompare — matches correlate.ts's house
+	// determinism convention (intentional, byte-stable ordering).
 	const fp = a.finding.fingerprint.localeCompare(b.finding.fingerprint);
 	if (fp !== 0) return fp;
 	return a.finding.id.localeCompare(b.finding.id);

@@ -187,8 +187,10 @@ describe("prioritizeFindings", () => {
 		const { weighted, unweighted } = prioritizeFindings(fused, methods);
 		expect(weighted.map((r) => r.finding.id)).toEqual(["FH"]);
 		expect(weighted.every((r) => r.selfTimePercent > 0)).toBe(true);
-		// The cold finding must appear in unweighted
-		expect(unweighted.map((r) => r.finding.id)).toContain("FC");
+		// The cold finding must appear in unweighted AND honestly carry its bucket.
+		const fc = unweighted.find((r) => r.finding.id === "FC");
+		expect(fc).toBeDefined();
+		expect(fc?.bucket).toBe("cold");
 	});
 
 	it("is byte-stable across two runs (R2-14)", () => {
