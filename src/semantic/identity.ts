@@ -249,7 +249,9 @@ export function extractMemberTrigger(
 	const trigger = functionName.slice(lastIdx + sep.length);
 	if (!AL_TRIGGER_KEYWORDS.has(trigger.toLowerCase())) return null;
 	// Strip the '&' accelerator character from the member portion (RE-4).
-	const member = functionName.slice(0, lastIdx).replace(/&/g, "");
+	const member = functionName.slice(0, lastIdx).replace(/&/g, "").trim();
+	// An empty member (e.g. "& - OnAction" → "") can't match a real routine.
+	if (member === "") return null;
 	return { member, trigger };
 }
 

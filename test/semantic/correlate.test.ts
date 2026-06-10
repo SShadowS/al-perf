@@ -1611,3 +1611,48 @@ describe("correlate: RE-11 honest zero-finding precise match", () => {
 		expect(result.correlationSummary.matched).toBe(1);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Test 28: member name literally contains " - " → split-on-LAST locks correctly
+// A field named "A - B" with an OnValidate trigger. The profile frame is
+// "A - B - OnValidate"; extractMemberTrigger splits on the LAST " - " →
+// member "A - B", trigger "OnValidate" → matches inventory enclosingMember "A - B".
+// ---------------------------------------------------------------------------
+
+describe("correlate: member name containing ' - ' (split-on-last edge)", () => {
+	const STABLE_ID_DASH = `${APP_GUID}:Table:18#dash00000000000000000000000000000000000000000000000000000000000000001`;
+	const STABLE_ID_OTHER = `${APP_GUID}:Table:18#othr00000000000000000000000000000000000000000000000000000000000000002`;
+
+	// The dashed field "A - B" plus a sibling so the bare key collides (>1 routine)
+	// and the precise-resolution branch is actually exercised.
+	const routineDash: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_DASH,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "A - B",
+	};
+	const routineOther: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_OTHER,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Other Field",
+	};
+
+	const engine = makeEngine([routineDash, routineOther], []);
+
+	const methodDash = makeMethod("A - B - OnValidate", "Table", 18);
+	const result = correlate([methodDash], engine);
+	const keyDash = "A - B - OnValidate_Table_18";
+
+	it("'A - B - OnValidate' → matched (split on LAST ' - ')", () => {
+		expect(result.attributions.get(keyDash)!.status).toBe("matched");
+	});
+
+	it("attributes to the 'A - B' field (not the sibling)", () => {
+		expect(result.attributions.get(keyDash)!.stableRoutineId).toBe(
+			STABLE_ID_DASH,
+		);
+	});
+});

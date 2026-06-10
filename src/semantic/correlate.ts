@@ -67,6 +67,12 @@ function makePreciseMemberKey(
 	member: string,
 	trigger: string,
 ): PreciseMemberKey {
+	// The member is lowercased (AL is case-insensitive on identifiers) but the
+	// trigger is NOT — the trigger casing is already guaranteed to match because
+	// this precise key is only consulted AFTER the bare join key
+	// (objectType, objectNumber, normalizeTriggerName) has collided, i.e. the
+	// trigger names matched at the bare level. Do not relax that gate without
+	// also lowercasing the trigger here, or a casing hazard reappears.
 	return `${canonicalObjectType(objectType)}|${objectNumber}|${member.toLowerCase()}|${trigger}`;
 }
 
@@ -475,8 +481,10 @@ export function correlate(
 				}
 				// If preciseEntries.length > 1 → genuine overload (same member+trigger,
 				// multiple signatures) → fall through to ambiguous below.
-				// If preciseEntries is absent or empty → old engine (no enclosingMember
-				// on any candidate) → fall through to ambiguous below.
+				// If preciseEntries is absent or empty → no precise member match: the
+				// candidates carry no enclosingMember (old 1.0.0 engine), OR the frame's
+				// member simply isn't in the inventory under this name → fall through to
+				// ambiguous below.
 			}
 
 			if (!resolvedPrecisely) {
