@@ -52,18 +52,21 @@ Bump `INVENTORY_SCHEMA_VERSION` 1.0.0 → **1.1.0** (minor — additive optional
 `majorMatches()` accepts it, and an engine that predates it simply omits the field → al-perf falls
 back to today's ambiguous behavior, so the change is backward/forward compatible both ways).
 
-**THE CRUX FOR REVIEW — byte-parity scope.** The engine is mid-migration: the Rust `alch-engine`
-byte-matches the al-sem TypeScript oracle's committed goldens. Adding `enclosingMember` to the
-inventory projection forks into one of two execution shapes, and the design MUST pick the right one:
-  - **(A) the inventory projection is under byte-parity** → the field must be added to BOTH the
-    al-sem TS oracle AND the alch-engine Rust projection, and the inventory goldens rebaselined in
-    lockstep (KNOWN_DIVERGENCES.json stays []). Heavier, cross-repo, touches the migration.
-  - **(B) the inventory projection is Rust-only** (it was added for al-perf fusion during CLI
-    broadening; if the TS oracle never emitted it, it is not a parity surface) → change alch-engine
-    only; no TS-oracle change, no parity rebaseline.
-  The implementer MUST determine which holds (grep the al-sem TS repo for the inventory projection /
-  `routine-inventory` / `INVENTORY_SCHEMA_VERSION` and check whether `--inventory-only` output is in
-  the parity golden set) BEFORE writing code. This question is the #1 item for the external review.
+**THE CRUX — byte-parity scope — RESOLVED: Option (B), Rust-only.** Investigated before review:
+the `routine-inventory` projection (`fingerprint --inventory-only`, `kind: "routine-inventory"`,
+schemaVersion 1.0.0) is **Rust-only**. The al-sem TS oracle never emitted it (zero references to
+`routine-inventory`/`inventory-only`/`routineInventory`/`INVENTORY_SCHEMA` in U:\Git\al-sem; no
+inventory goldens). The alch-engine parity harness (`tests/cli_b_fingerprint_differential.rs`) runs
+ALL fingerprint fixtures with `inventory_only: false`; `--inventory-only` is exercised only by the
+Rust-internal `tests/cli_p1_inventory.rs` (no al-sem goldens, no KNOWN_DIVERGENCES coupling).
+Therefore adding `enclosingMember` to `routineInventory[]` (alch-engine
+`src/engine/l5/snapshot_full.rs:1068-1076`, `INVENTORY_SCHEMA_VERSION` at :1036) is a clean
+single-repo Rust change: NO al-sem TS edit, NO golden rebaseline, NO KNOWN_DIVERGENCES impact, just
+the Rust projection + its internal test. **Residual #1 review item (downgraded from the parity
+question):** does the alch-engine MODEL actually carry the enclosing field/control/action name for a
+member-trigger routine (so the projection CAN populate `enclosingMember`)? The L2/L3 indexer must
+know which member a trigger belongs to — verify the data exists before relying on it; if it doesn't,
+P3a needs an L2/L3 model addition (heavier), which the review must surface.
 
 ### al-perf side (P3a)
 1. `contracts.ts`: add `enclosingMember?: string` to `RoutineIdentity`; bump
