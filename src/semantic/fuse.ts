@@ -83,3 +83,41 @@ export async function fuseProfile(
 	// Pure correlation — no I/O, no subprocess.
 	return correlate(methods, engine);
 }
+
+// ---------------------------------------------------------------------------
+// formatFusionSummary — the one-line CLI summary string (unit-testable)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the one-line al-sem fusion summary for the CLI.
+ *
+ * Format:
+ *   `al-sem fusion: <N> hotspots correlated (<M> findings), <K> clean, <J> ambiguous, <L> blind-spots`
+ *
+ * where:
+ *   N = matched + ambiguous            (correlated hotspots)
+ *   M = total findings attached across all attributions
+ *   K = matchedClean                   (matched with zero findings, verified clean)
+ *   J = ambiguous                      (overloads / colliding trigger names)
+ *   L = blindSpot                      (AL frames not in the al-sem universe)
+ *
+ * NOTE: M sums `findings.length` over EVERY attribution. When two distinct
+ * profile frames normalize to the same join key (e.g. two field triggers
+ * collapsing to a bare `OnValidate`), each receives the same union of findings,
+ * so M can over-count under colliding frames. This is acceptable for a headline
+ * summary line; precise de-duplication is a P2 concern.
+ */
+export function formatFusionSummary(model: FusedModel): string {
+	const s = model.correlationSummary;
+	let findingsCount = 0;
+	for (const attr of model.attributions.values()) {
+		findingsCount += attr.findings.length;
+	}
+	return (
+		`al-sem fusion: ${s.matched + s.ambiguous} hotspots correlated` +
+		` (${findingsCount} findings),` +
+		` ${s.matchedClean} clean,` +
+		` ${s.ambiguous} ambiguous,` +
+		` ${s.blindSpot} blind-spots`
+	);
+}

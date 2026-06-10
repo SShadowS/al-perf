@@ -1,18 +1,5 @@
 // Core analysis functions (library API)
 
-// al-sem fusion (Phase P1) — opt-in, additive
-export { fuseProfile } from "./semantic/fuse.js";
-export type { FuseOptions, FuseResult } from "./semantic/fuse.js";
-export type {
-	AttributionConfidence,
-	CorrelationStatus,
-	CorrelationSummary,
-	EngineMetadata,
-	FusedModel,
-	MismatchWarning,
-	SemanticAttribution,
-} from "./types/fused.js";
-
 export type { SourceAnalysisResult } from "./cli/commands/analyze-source.js";
 // CLI types
 export type { GateResult } from "./cli/commands/gate.js";
@@ -95,6 +82,10 @@ export type {
 	TableBreakdown,
 	TableOperationBreakdown,
 } from "./output/types.js";
+// al-sem fusion (Phase P1) — opt-in, additive
+export type { EngineDisabled } from "./semantic/engine-runner.js";
+export type { FuseOptions, FuseResult } from "./semantic/fuse.js";
+export { formatFusionSummary, fuseProfile } from "./semantic/fuse.js";
 export { SourceIndexCache } from "./source/cache.js";
 // Source correlation
 export { buildSourceIndex, indexALFile } from "./source/indexer.js";
@@ -122,6 +113,15 @@ export type {
 } from "./types/aggregated.js";
 export type { AIFinding } from "./types/ai-findings.js";
 export type { ProfileMetadata } from "./types/batch.js";
+export type {
+	AttributionConfidence,
+	CorrelationStatus,
+	CorrelationSummary,
+	EngineMetadata,
+	FusedModel,
+	MismatchWarning,
+	SemanticAttribution,
+} from "./types/fused.js";
 export type { HistoryEntry, HistoryQuery } from "./types/history.js";
 export type { DetectedPattern, PatternSeverity } from "./types/patterns.js";
 export type { ProcessedNode, ProcessedProfile } from "./types/processed.js";

@@ -11,7 +11,7 @@ import type { DeepExplainResult } from "../../explain/deep-analyzer.js";
 import { deepAnalysis } from "../../explain/deep-analyzer.js";
 import type { ExplainResult } from "../../explain/explainer.js";
 import { type ExplainModel, explainAnalysis } from "../../explain/explainer.js";
-import { fuseProfile } from "../../semantic/fuse.js";
+import { formatFusionSummary, fuseProfile } from "../../semantic/fuse.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import {
 	extractCompanionZip,
@@ -241,29 +241,17 @@ export function registerAnalyzeCommand(program: Command) {
 						fusionWorkspace,
 					);
 					if ("disabled" in fuseResult) {
-						// Only surface the disabled reason when the user explicitly asked
-						// (--source is a workspace but binary not found / fusion opted out
-						// by the runner) — match al-perf's existing verbosity conventions:
-						// a single quiet line at most, never nag when not configured.
-						if (opts.fusion !== false) {
-							// User didn't opt out — surface a minimal note so they know why.
-							process.stderr.write(
-								`al-sem fusion: disabled (${fuseResult.reason})\n`,
-							);
-						}
-					} else {
-						const s = fuseResult.correlationSummary;
-						const findingsCount = [...fuseResult.attributions.values()].reduce(
-							(sum, a) => sum + a.findings.length,
-							0,
-						);
+						// We only reach here when fusionEnabled is true (--no-fusion was NOT
+						// passed) and --source is a workspace dir, so the user implicitly
+						// asked for fusion. Surface a single quiet stderr note explaining
+						// why it degraded (e.g. binary not found) — never nag beyond one line.
 						process.stderr.write(
-							`al-sem fusion: ${s.matched + s.ambiguous} hotspots correlated` +
-								` (${findingsCount} findings),` +
-								` ${s.matchedClean} clean,` +
-								` ${s.ambiguous} ambiguous,` +
-								` ${s.blindSpot} blind-spots\n`,
+							`al-sem fusion: disabled (${fuseResult.reason})\n`,
 						);
+					} else {
+						// The summary goes to STDERR so stdout (the profile output) stays
+						// byte-identical to a fusion-off run.
+						process.stderr.write(`${formatFusionSummary(fuseResult)}\n`);
 					}
 				} catch (err: unknown) {
 					// Never crash al-perf — log silently.

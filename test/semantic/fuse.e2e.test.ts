@@ -12,19 +12,21 @@
  *       produced; with fusion on (gated) → summary line present.
  */
 
-import { describe, expect, test } from "bun:test";
-import { resolve } from "path";
-import { correlate } from "../../src/semantic/correlate.js";
-import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
-import { clearEngineCache } from "../../src/semantic/engine-runner.js";
-import { fuseProfile } from "../../src/semantic/fuse.js";
-import type { MethodBreakdown } from "../../src/types/aggregated.js";
-import type { FusedModel } from "../../src/types/fused.js";
+import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join, resolve } from "path";
 import type {
 	AnalyzeReport,
 	CoverageEntry,
 	InventoryDoc,
 } from "../../src/semantic/contracts.js";
+import { correlate } from "../../src/semantic/correlate.js";
+import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
+import { clearEngineCache } from "../../src/semantic/engine-runner.js";
+import { formatFusionSummary, fuseProfile } from "../../src/semantic/fuse.js";
+import type { MethodBreakdown } from "../../src/types/aggregated.js";
+import type { FusedModel } from "../../src/types/fused.js";
 
 // ---------------------------------------------------------------------------
 // Constants + paths
@@ -32,6 +34,13 @@ import type {
 
 const FIXTURE_DIR = resolve(import.meta.dir, "../fixtures/fusion");
 const WS_MIN = resolve(FIXTURE_DIR, "ws-min");
+const STUB_TS = resolve(FIXTURE_DIR, "alsem-stub.ts");
+const CLI = resolve(import.meta.dir, "../../src/cli/index.ts");
+const SAMPLE_PROFILE = resolve(
+	import.meta.dir,
+	"../fixtures/sampling-minimal.alcpuprofile",
+);
+const BUN_EXE = process.execPath;
 
 const AL_SEM_BIN = process.env.AL_SEM_BIN;
 
@@ -61,12 +70,87 @@ function isDisabled(
 	);
 }
 
+// Temp dirs created for stub launchers; cleaned up after each test.
+let cleanups: Array<() => void> = [];
+afterEach(() => {
+	for (const fn of cleanups) {
+		try {
+			fn();
+		} catch {
+			// ignore
+		}
+	}
+	cleanups = [];
+});
+
+/**
+ * Build a platform-appropriate launcher that runs the committed `alsem-stub.ts`
+ * via the current bun executable in "ok" mode, forwarding all args. Returns the
+ * launcher path — a single resolvable binary the analyze CLI will spawn when we
+ * point AL_SEM_BIN at it (binary-free fusion-on).
+ */
+function makeStubBinary(): string {
+	const tmpDir = mkdtempSync(join(tmpdir(), "al-perf-fuse-stub-"));
+	cleanups.push(() => rmSync(tmpDir, { recursive: true, force: true }));
+	if (process.platform === "win32") {
+		const cmdPath = join(tmpDir, "alsem-stub.cmd");
+		writeFileSync(
+			cmdPath,
+			`@echo off\r\nset "ALSEM_STUB_MODE=ok"\r\n"${BUN_EXE}" "${STUB_TS}" %*\r\n`,
+		);
+		return cmdPath;
+	}
+	const shPath = join(tmpDir, "alsem-stub.sh");
+	writeFileSync(
+		shPath,
+		`#!/bin/sh\nexport ALSEM_STUB_MODE='ok'\nexec "${BUN_EXE}" "${STUB_TS}" "$@"\n`,
+	);
+	chmodSync(shPath, 0o755);
+	return shPath;
+}
+
+/** Spawn the analyze CLI; return { stdout, stderr, exitCode }. */
+async function runAnalyzeCli(
+	args: string[],
+	env: Record<string, string | undefined>,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+	const proc = Bun.spawn([BUN_EXE, "run", CLI, "analyze", ...args], {
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { ...process.env, ...env },
+	});
+	const [stdout, stderr] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	]);
+	await proc.exited;
+	return { stdout, stderr, exitCode: proc.exitCode ?? -1 };
+}
+
+/**
+ * Normalize the analyze JSON stdout for a byte-diff: the only field that varies
+ * between two invocations of the SAME (profile, source) is `meta.analyzedAt`
+ * (a per-run wall-clock timestamp, unrelated to fusion). Blank it so the diff
+ * reflects ONLY fusion's effect on stdout (which must be: none).
+ */
+function normalizeProfileStdout(stdout: string): string {
+	return stdout.replace(
+		/"analyzedAt":\s*"[^"]*"/g,
+		'"analyzedAt": "<normalized>"',
+	);
+}
+
+/** The canonical method key for a method (mirrors aggregator.ts:63). */
+const BLIND_SPOT_KEY = "DanglingProc_Codeunit_50199";
+
 /**
  * Build a realistic set of MethodBreakdowns matching the ws-min fixture:
- *  - ProcessRecords: the hot db-op-in-loop method
- *  - CleanProcedure: a clean routine
- *  - OverloadedProc: triggers the ambiguous status (2 universe routines)
- *  - OnRun (builtin): should be filtered from the attribution map
+ *  - ProcessRecords: the hot db-op-in-loop method        → matched (with findings)
+ *  - CleanProcedure: a clean routine                     → matched-clean
+ *  - OverloadedProc: two universe routines               → ambiguous
+ *  - DanglingProc:   an AL routine ABSENT from the universe (Codeunit 50199 is
+ *                    NOT in the ws-min inventory)         → blind-spot (positive)
+ *  - OnRun (builtin): isBuiltin=true                      → filtered out entirely
  */
 function makeWsMinMethods(): MethodBreakdown[] {
 	const base = {
@@ -106,6 +190,25 @@ function makeWsMinMethods(): MethodBreakdown[] {
 			totalTime: 800,
 			totalTimePercent: 8,
 			hitCount: 4,
+		},
+		{
+			// A genuine AL routine (not builtin, not SQL) on an object that al-sem
+			// never analyzed (Codeunit 50199 is absent from the ws-min universe).
+			// → positive blind-spot.
+			functionName: "DanglingProc",
+			objectType: "Codeunit",
+			objectName: "Ghost",
+			objectId: 50199,
+			appName: "FusionMinimal",
+			selfTime: 300,
+			selfTimePercent: 3,
+			totalTime: 300,
+			totalTimePercent: 3,
+			hitCount: 3,
+			calledBy: [],
+			calls: [],
+			costPerHit: 100,
+			efficiencyScore: 1.0,
 		},
 		{
 			// Builtin — should be excluded (isBuiltin=true)
@@ -207,6 +310,19 @@ describe("fuseProfile: committed-golden path (no binary)", () => {
 		expect(Array.isArray(ovAttr.stableRoutineId)).toBe(true);
 		expect((ovAttr.stableRoutineId as string[]).length).toBe(2);
 
+		// DanglingProc on Codeunit 50199: a real AL routine NOT in the ws-min
+		// universe → POSITIVELY assert status="blind-spot" + a reason (the 4th
+		// status, otherwise unverified).
+		expect(model.attributions.has(BLIND_SPOT_KEY)).toBe(true);
+		const bsAttr = model.attributions.get(BLIND_SPOT_KEY)!;
+		expect(bsAttr.status).toBe("blind-spot");
+		expect(bsAttr.findings).toEqual([]);
+		expect(bsAttr.reason).toBeString();
+		expect((bsAttr.reason ?? "").length).toBeGreaterThan(0);
+		// 50199 was never analyzed → reason names the un-analyzed object, NOT a
+		// "routine absent from inventory" (which would imply the object WAS covered).
+		expect(bsAttr.reason ?? "").toMatch(/was not analyzed/i);
+
 		// Builtin (OnRun) must NOT appear in the attribution map
 		expect(model.attributions.has("OnRun_Codeunit_1")).toBe(false);
 
@@ -217,6 +333,7 @@ describe("fuseProfile: committed-golden path (no binary)", () => {
 		const s = model.correlationSummary;
 		expect(s.matched).toBeGreaterThanOrEqual(1); // ProcessRecords + CleanProcedure
 		expect(s.ambiguous).toBeGreaterThanOrEqual(1); // OverloadedProc
+		expect(s.blindSpot).toBeGreaterThanOrEqual(1); // DanglingProc (positive)
 	});
 
 	test("correlate findings are byte-stable (determinism)", async () => {
@@ -293,7 +410,7 @@ describe("fuseProfile: fusion-off / binary-absent", () => {
 		expect(isDisabled(result)).toBe(true);
 		expect(isFusedModel(result)).toBe(false);
 		// The methods array is untouched (no mutation by fuseProfile).
-		expect(methods.length).toBe(4);
+		expect(methods.length).toBe(makeWsMinMethods().length);
 		expect(methods[0].functionName).toBe("ProcessRecords");
 	});
 
@@ -395,10 +512,138 @@ describe("fuseProfile: real-binary end-to-end (gated: AL_SEM_BIN)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (d) CLI wiring: fuseProfile integration points
+// (d) formatFusionSummary — the exact one-line summary string (unit-testable)
 // ---------------------------------------------------------------------------
 
-describe("fuseProfile: CLI wiring behaviour", () => {
+describe("formatFusionSummary: exact one-line string", () => {
+	test("renders matched/ambiguous/clean/blind-spot counts in the documented format", async () => {
+		const methods = makeWsMinMethods();
+		const engine = await loadGoldenEngineAnalysis();
+		const model = correlate(methods, engine);
+
+		const line = formatFusionSummary(model);
+		const s = model.correlationSummary;
+		const findingsCount = [...model.attributions.values()].reduce(
+			(sum, a) => sum + a.findings.length,
+			0,
+		);
+
+		// Byte-exact format check.
+		expect(line).toBe(
+			`al-sem fusion: ${s.matched + s.ambiguous} hotspots correlated` +
+				` (${findingsCount} findings),` +
+				` ${s.matchedClean} clean,` +
+				` ${s.ambiguous} ambiguous,` +
+				` ${s.blindSpot} blind-spots`,
+		);
+		// And the literal prefix/structure is present (catches a silent regression).
+		expect(line).toStartWith("al-sem fusion: ");
+		expect(line).toContain("hotspots correlated");
+		expect(line).toContain("clean,");
+		expect(line).toContain("ambiguous,");
+		expect(line).toContain("blind-spots");
+	});
+
+	test("N = matched + ambiguous (the correlated headline)", async () => {
+		const methods = makeWsMinMethods();
+		const engine = await loadGoldenEngineAnalysis();
+		const model = correlate(methods, engine);
+		const s = model.correlationSummary;
+
+		const line = formatFusionSummary(model);
+		expect(line).toContain(`${s.matched + s.ambiguous} hotspots correlated`);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// (d') CLI wiring: real `analyze` command spawns (the actual stdout byte-diff)
+// ---------------------------------------------------------------------------
+
+describe("analyze CLI: fusion wiring (real spawn)", () => {
+	test("--no-fusion → no fusion line on stderr; clean exit", async () => {
+		const { stdout, stderr, exitCode } = await runAnalyzeCli(
+			[SAMPLE_PROFILE, "-f", "json", "--source", WS_MIN, "--no-fusion"],
+			// Even with a binary configured, --no-fusion must short-circuit.
+			{ AL_SEM_BIN: makeStubBinary() },
+		);
+		expect(exitCode).toBe(0);
+		expect(stderr).not.toContain("al-sem fusion:");
+		// stdout is the profile JSON.
+		expect(() => JSON.parse(stdout)).not.toThrow();
+	});
+
+	test("fusion-on (stub binary) → summary line on STDERR; stdout byte-IDENTICAL to --no-fusion", async () => {
+		const stubBin = makeStubBinary();
+
+		// Run 1: fusion OFF (explicit --no-fusion).
+		const off = await runAnalyzeCli(
+			[SAMPLE_PROFILE, "-f", "json", "--source", WS_MIN, "--no-fusion"],
+			{ AL_SEM_BIN: stubBin },
+		);
+		// Run 2: fusion ON (binary present via AL_SEM_BIN, no --no-fusion).
+		const on = await runAnalyzeCli(
+			[SAMPLE_PROFILE, "-f", "json", "--source", WS_MIN],
+			{ AL_SEM_BIN: stubBin },
+		);
+
+		expect(off.exitCode).toBe(0);
+		expect(on.exitCode).toBe(0);
+
+		// (i) STDOUT is byte-identical (modulo the per-run analyzedAt timestamp) —
+		// the fused summary is additive on stderr and does NOT perturb stdout.
+		expect(normalizeProfileStdout(on.stdout)).toBe(
+			normalizeProfileStdout(off.stdout),
+		);
+
+		// (ii) The summary line appears on STDERR ONLY when fusion ran.
+		expect(off.stderr).not.toContain("al-sem fusion:");
+		expect(on.stderr).toContain("al-sem fusion:");
+		// The stub emits a valid (empty-findings) envelope → a "correlated" line,
+		// never a "disabled" line.
+		expect(on.stderr).toContain("hotspots correlated");
+		expect(on.stderr).not.toContain("al-sem fusion: disabled");
+	});
+
+	test("zip/non-app.json --source → no fusion attempt, no crash, clean stdout", async () => {
+		// FIXTURE_DIR is a directory WITHOUT an app.json (the goldens live there,
+		// not an AL workspace) → isAlWorkspaceDir() is false → fusion not attempted.
+		const { stdout, stderr, exitCode } = await runAnalyzeCli(
+			[SAMPLE_PROFILE, "-f", "json", "--source", FIXTURE_DIR],
+			{ AL_SEM_BIN: makeStubBinary() },
+		);
+		expect(exitCode).toBe(0);
+		// No fusion line at all (neither summary nor disabled) — the guard skipped it.
+		expect(stderr).not.toContain("al-sem fusion:");
+		expect(() => JSON.parse(stdout)).not.toThrow();
+	});
+
+	test("fusion-on but binary ABSENT → single quiet 'disabled' note on stderr; stdout unchanged", async () => {
+		// No --no-fusion, --source IS a workspace, but the configured binary path
+		// does not exist → fuseProfile returns {disabled} → one stderr note.
+		const off = await runAnalyzeCli(
+			[SAMPLE_PROFILE, "-f", "json", "--source", WS_MIN, "--no-fusion"],
+			{ AL_SEM_BIN: "/nonexistent/alsem-binary" },
+		);
+		const on = await runAnalyzeCli(
+			[SAMPLE_PROFILE, "-f", "json", "--source", WS_MIN],
+			{ AL_SEM_BIN: "/nonexistent/alsem-binary" },
+		);
+		expect(on.exitCode).toBe(0);
+		// stdout still byte-identical (binary-absent must not perturb output;
+		// modulo the per-run analyzedAt timestamp).
+		expect(normalizeProfileStdout(on.stdout)).toBe(
+			normalizeProfileStdout(off.stdout),
+		);
+		// A single quiet disabled note, not a crash.
+		expect(on.stderr).toContain("al-sem fusion: disabled");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// (d'') CLI wiring: library-level integration points
+// ---------------------------------------------------------------------------
+
+describe("fuseProfile: CLI wiring behaviour (library level)", () => {
 	test("--no-fusion equivalent: {fusion:false} → no FusedModel produced", async () => {
 		const methods = makeWsMinMethods();
 		const result = await fuseProfile(methods, WS_MIN, { fusion: false });
@@ -408,17 +653,13 @@ describe("fuseProfile: CLI wiring behaviour", () => {
 		expect(isFusedModel(result)).toBe(false);
 	});
 
-	test("non-workspace source (zip) → disabled (engine would fail/be skipped)", async () => {
-		// When sourcePath is a zip file (not a directory with app.json), the CLI
-		// guards prevent calling fuseProfile. This test verifies the guard logic:
-		// if fusionWorkspace is null (not a workspace dir), fuseProfile is not called.
-		// We simulate this by calling with a clearly non-workspace dir.
+	test("non-workspace source → disabled (engine would fail/be skipped)", async () => {
 		const methods = makeWsMinMethods();
-		// A temp dir without app.json → engine won't find app.json → engine disabled.
+		// A dir without app.json → the CLI guard would skip; at the library level
+		// a missing binary yields disabled.
 		const result = await fuseProfile(methods, FIXTURE_DIR, {
 			engine: "/nonexistent/alsem",
 		});
-		// Should be disabled (binary not found), not a FusedModel
 		expect(isDisabled(result)).toBe(true);
 	});
 
