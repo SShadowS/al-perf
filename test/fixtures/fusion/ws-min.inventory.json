@@ -1,0 +1,164 @@
+{
+	"alsemVersion": "0.0.12",
+	"deterministic": true,
+	"diagnostics": [],
+	"generatedAt": "1970-01-01T00:00:00Z",
+	"kind": "routine-inventory",
+	"payload": {
+		"apps": [
+			{
+				"appGuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+				"name": "FusionMinimal",
+				"publisher": "al-perf-test",
+				"version": "1.0.0.0"
+			}
+		],
+		"coverage": [
+			{
+				"directStatus": "complete",
+				"inheritedStatus": "complete",
+				"reasons": [],
+				"subject": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#19f10db44a02d3ddf1fe1e665faa7b08d65a514e2802138f3b9d38a71a2a8a99",
+				"unknownTargets": []
+			},
+			{
+				"directStatus": "complete",
+				"inheritedStatus": "complete",
+				"reasons": [],
+				"subject": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#299614d535d879f12cb7bf62378e7a2fa161777b4abf63b2113dfdac09cfbc5a",
+				"unknownTargets": []
+			},
+			{
+				"directStatus": "complete",
+				"inheritedStatus": "complete",
+				"reasons": [],
+				"subject": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#586fc0b923483c425d345129585052094241f6fe3146b65cd1030d70b874bfba",
+				"unknownTargets": []
+			},
+			{
+				"directStatus": "complete",
+				"inheritedStatus": "complete",
+				"reasons": [],
+				"subject": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#eea57b1a62fa70408ef36cbcd83eb95584bd4a7c13423c2008a64c186b04ee6f",
+				"unknownTargets": []
+			}
+		],
+		"identities": {
+			"displayNames": [
+				"Foo",
+				"OverloadedProc",
+				"CleanProcedure",
+				"ProcessRecords",
+				"OverloadedProc"
+			],
+			"stableIds": [
+				"a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100",
+				"a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#19f10db44a02d3ddf1fe1e665faa7b08d65a514e2802138f3b9d38a71a2a8a99",
+				"a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#299614d535d879f12cb7bf62378e7a2fa161777b4abf63b2113dfdac09cfbc5a",
+				"a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#586fc0b923483c425d345129585052094241f6fe3146b65cd1030d70b874bfba",
+				"a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#eea57b1a62fa70408ef36cbcd83eb95584bd4a7c13423c2008a64c186b04ee6f"
+			]
+		},
+		"rootClassifications": [
+			{
+				"confidence": "static",
+				"externallyReachable": true,
+				"kinds": ["public-procedure"],
+				"routineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#19f10db44a02d3ddf1fe1e665faa7b08d65a514e2802138f3b9d38a71a2a8a99",
+				"source": "ast",
+				"sourceAnchor": {
+					"enclosingRoutineId": "568ea150213172d2/96f657daab83e137edc1bde9a964693d3cec380d3dead8d53e1058821602b848",
+					"range": {
+						"endColumn": 8,
+						"endLine": 30,
+						"startColumn": 4,
+						"startLine": 27
+					},
+					"sourceUnitId": "ws:src/Foo.Codeunit.al",
+					"syntaxKind": "procedure"
+				}
+			},
+			{
+				"confidence": "static",
+				"externallyReachable": true,
+				"kinds": ["public-procedure"],
+				"routineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#299614d535d879f12cb7bf62378e7a2fa161777b4abf63b2113dfdac09cfbc5a",
+				"source": "ast",
+				"sourceAnchor": {
+					"enclosingRoutineId": "568ea150213172d2/0a04bddb7d7c89cb55c505175c243bbff9a161e18927b282c1510aa948376a4c",
+					"range": {
+						"endColumn": 8,
+						"endLine": 22,
+						"startColumn": 4,
+						"startLine": 19
+					},
+					"sourceUnitId": "ws:src/Foo.Codeunit.al",
+					"syntaxKind": "procedure"
+				}
+			},
+			{
+				"confidence": "static",
+				"externallyReachable": true,
+				"kinds": ["public-procedure"],
+				"routineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#586fc0b923483c425d345129585052094241f6fe3146b65cd1030d70b874bfba",
+				"source": "ast",
+				"sourceAnchor": {
+					"enclosingRoutineId": "568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835",
+					"range": {
+						"endColumn": 8,
+						"endLine": 14,
+						"startColumn": 4,
+						"startLine": 5
+					},
+					"sourceUnitId": "ws:src/Foo.Codeunit.al",
+					"syntaxKind": "procedure"
+				}
+			},
+			{
+				"confidence": "static",
+				"externallyReachable": true,
+				"kinds": ["public-procedure"],
+				"routineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#eea57b1a62fa70408ef36cbcd83eb95584bd4a7c13423c2008a64c186b04ee6f",
+				"source": "ast",
+				"sourceAnchor": {
+					"enclosingRoutineId": "568ea150213172d2/55a895491f86e9904d6289fcbd56fe46c70021a112c6c3198db837cd7bb9f5a1",
+					"range": {
+						"endColumn": 8,
+						"endLine": 38,
+						"startColumn": 4,
+						"startLine": 35
+					},
+					"sourceUnitId": "ws:src/Foo.Codeunit.al",
+					"syntaxKind": "procedure"
+				}
+			}
+		],
+		"routineInventory": [
+			{
+				"objectNumber": 50100,
+				"objectType": "Codeunit",
+				"routineName": "OverloadedProc",
+				"stableRoutineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#19f10db44a02d3ddf1fe1e665faa7b08d65a514e2802138f3b9d38a71a2a8a99"
+			},
+			{
+				"objectNumber": 50100,
+				"objectType": "Codeunit",
+				"routineName": "CleanProcedure",
+				"stableRoutineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#299614d535d879f12cb7bf62378e7a2fa161777b4abf63b2113dfdac09cfbc5a"
+			},
+			{
+				"objectNumber": 50100,
+				"objectType": "Codeunit",
+				"routineName": "ProcessRecords",
+				"stableRoutineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#586fc0b923483c425d345129585052094241f6fe3146b65cd1030d70b874bfba"
+			},
+			{
+				"objectNumber": 50100,
+				"objectType": "Codeunit",
+				"routineName": "OverloadedProc",
+				"stableRoutineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890:Codeunit:50100#eea57b1a62fa70408ef36cbcd83eb95584bd4a7c13423c2008a64c186b04ee6f"
+			}
+		]
+	},
+	"schemaVersion": "1.0.0"
+}

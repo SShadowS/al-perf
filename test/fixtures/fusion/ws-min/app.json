@@ -1,0 +1,15 @@
+{
+	"id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+	"name": "FusionMinimal",
+	"publisher": "al-perf-test",
+	"version": "1.0.0.0",
+	"brief": "Minimal fixture for al-perf × al-sem fusion tests",
+	"platform": "24.0.0.0",
+	"application": "24.0.0.0",
+	"idRanges": [
+		{
+			"from": 50100,
+			"to": 50199
+		}
+	]
+}

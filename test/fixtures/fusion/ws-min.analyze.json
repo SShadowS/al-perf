@@ -1,0 +1,328 @@
+{
+	"alsemVersion": "0.0.12",
+	"deterministic": true,
+	"diagnostics": [],
+	"generatedAt": "1970-01-01T00:00:00Z",
+	"kind": "analyze-report",
+	"payload": {
+		"findings": [
+			{
+				"affectedObjects": [
+					"a1b2c3d4-e5f6-7890-abcd-ef1234567890/Codeunit/50100"
+				],
+				"affectedTables": [],
+				"confidence": {
+					"level": "likely"
+				},
+				"detector": "d1-db-op-in-loop",
+				"fingerprint": "c5f6eeaf350cb8fd",
+				"fixHint": {
+					"description": "Move the database operation outside the loop, or batch it into a set-based operation.",
+					"safety": "medium"
+				},
+				"id": "d1/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/loop0/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/op2",
+				"pathCount": 1,
+				"primaryLocation": {
+					"column": 17,
+					"file": "ws:src/Foo.Codeunit.al",
+					"line": 13,
+					"objectId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890/Codeunit/50100",
+					"objectName": "Foo",
+					"routineId": "568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835",
+					"routineName": "ProcessRecords"
+				},
+				"rootCause": "A loop in ProcessRecords reaches Modify on Customer (type not loaded).",
+				"severity": "high",
+				"title": "Database operation inside a loop"
+			},
+			{
+				"affectedObjects": [
+					"a1b2c3d4-e5f6-7890-abcd-ef1234567890/Codeunit/50100"
+				],
+				"affectedTables": [],
+				"confidence": {
+					"level": "likely"
+				},
+				"detector": "d10-self-modifying-loop",
+				"fingerprint": "b6da943cc98b9c1a",
+				"fixHint": {
+					"description": "Collect the keys first, then iterate a fresh recordset to perform the modifications; or use ModifyAll with a filter.",
+					"safety": "medium"
+				},
+				"id": "d10/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/op1",
+				"pathCount": 1,
+				"primaryLocation": {
+					"column": 17,
+					"file": "ws:src/Foo.Codeunit.al",
+					"line": 12,
+					"objectId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890/Codeunit/50100",
+					"objectName": "Foo",
+					"routineId": "568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835",
+					"routineName": "ProcessRecords"
+				},
+				"rootCause": "ProcessRecords runs Validate on the iterating record Rec inside its own loop — the cursor's snapshot may be corrupted.",
+				"severity": "high",
+				"title": "Self-modifying loop"
+			},
+			{
+				"affectedObjects": [
+					"a1b2c3d4-e5f6-7890-abcd-ef1234567890/Codeunit/50100"
+				],
+				"affectedTables": [],
+				"confidence": {
+					"level": "likely"
+				},
+				"detector": "d10-self-modifying-loop",
+				"fingerprint": "78b6d24623cd066e",
+				"fixHint": {
+					"description": "Collect the keys first, then iterate a fresh recordset to perform the modifications; or use ModifyAll with a filter.",
+					"safety": "medium"
+				},
+				"id": "d10/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835/op2",
+				"pathCount": 1,
+				"primaryLocation": {
+					"column": 17,
+					"file": "ws:src/Foo.Codeunit.al",
+					"line": 13,
+					"objectId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890/Codeunit/50100",
+					"objectName": "Foo",
+					"routineId": "568ea150213172d2/8dde2832baabef2d46a4843cb0da4bef41df5bf25fa2e772da267c3cb9719835",
+					"routineName": "ProcessRecords"
+				},
+				"rootCause": "ProcessRecords runs Modify on the iterating record Rec inside its own loop — the cursor's snapshot may be corrupted.",
+				"severity": "high",
+				"title": "Self-modifying loop"
+			}
+		],
+		"summary": {
+			"byDetector": {
+				"d1-db-op-in-loop": 1,
+				"d10-self-modifying-loop": 2
+			},
+			"bySeverity": {
+				"high": 3
+			},
+			"detectorStats": [
+				{
+					"candidatesConsidered": 4,
+					"detector": "d1-db-op-in-loop",
+					"findingsEmitted": 1,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d2-event-fanout-in-loop",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d3-missing-setloadfields",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d4-repeated-lookup-in-loop",
+					"findingsEmitted": 0,
+					"skipped": {
+						"other": 4
+					}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d5-set-based-opportunity",
+					"findingsEmitted": 0,
+					"skipped": {
+						"other": 4
+					}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d7-recursive-event-expansion",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d8-commit-in-transaction",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d9-transaction-span-summary",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d10-self-modifying-loop",
+					"findingsEmitted": 2,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d11-modify-without-get",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d12-dead-integration-event",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d13-cross-app-internal-call",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d14-dead-routine",
+					"findingsEmitted": 0,
+					"skipped": {
+						"other": 4
+					}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d16-obsolete-routine-call",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d17-min-version-drift",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d18-constant-filter-in-loop",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 1,
+					"detector": "d19-unused-parameter",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d20-unreachable-after-exit",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d21-read-without-load",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d22-flowfield-without-calcfields",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d29-subscriber-modify-on-event-record",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d32-constant-boolean-parameter",
+					"findingsEmitted": 0,
+					"skipped": {
+						"nonLocal": 4
+					}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d33-unfiltered-bulk-write",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 4,
+					"detector": "d34-commit-in-loop",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d35-commit-in-event-subscriber",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d36-late-setloadfields",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 1,
+					"detector": "d37-validate-without-persist",
+					"findingsEmitted": 0,
+					"skipped": {
+						"persisted": 1
+					}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d38-subscriber-to-obsolete-event",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d39-record-left-dirty-across-chain",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d41-transitive-filter-loss",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d42-cross-call-wrong-setloadfields",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d43-event-ishandled-skip",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d44-event-multi-subscriber-overlap",
+					"findingsEmitted": 0,
+					"skipped": {}
+				},
+				{
+					"candidatesConsidered": 0,
+					"detector": "d45-event-transitive-table-exposure",
+					"findingsEmitted": 0,
+					"skipped": {}
+				}
+			],
+			"opaqueApps": [],
+			"routinesAnalyzed": 4,
+			"sourceUnitsParsed": 1,
+			"totalFindings": 3
+		}
+	},
+	"schemaVersion": "1.0.0"
+}
