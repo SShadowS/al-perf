@@ -226,7 +226,9 @@ async function runAnalysis(
 		// Gate so when no workspace, result.fusionViews stays undefined (byte-unchanged).
 		if (sourcePath && isAlWorkspaceDir(sourcePath)) {
 			try {
-				const fuseResult = await fuseProfile(allMethods, sourcePath);
+				const fuseResult = await fuseProfile(allMethods, sourcePath, {
+					patterns: result.patterns,
+				});
 				if (!("disabled" in fuseResult)) {
 					const { weighted, unweighted } = prioritizeFindings(
 						fuseResult,

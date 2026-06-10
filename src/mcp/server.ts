@@ -143,6 +143,9 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 						const fuseResult = await fuseProfile(
 							allMethods,
 							resolvedSourcePath,
+							{
+								patterns: result.patterns,
+							},
 						);
 						if (!("disabled" in fuseResult)) {
 							const { weighted } = prioritizeFindings(fuseResult, allMethods);
@@ -223,9 +226,10 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 				let allMethods: MethodBreakdown[] = [];
 				const resolved = sourcePath ?? options?.defaultSourcePath;
 
-				// Run analyzeProfile only to capture the untruncated method set (R2-7).
-				// We don't need the result itself here; allMethods is the payload.
-				await analyzeProfile(profilePath, {
+				// Run analyzeProfile to capture the untruncated method set (R2-7) and
+				// the detected patterns (P3.1 corroboration). The full result is needed
+				// only for result.patterns; the rest is discarded.
+				const pfResult = await analyzeProfile(profilePath, {
 					includePatterns: true,
 					sourcePath: resolved,
 					onAllMethods: (m) => {
@@ -244,7 +248,9 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					};
 				}
 
-				const fuseResult = await fuseProfile(allMethods, resolved);
+				const fuseResult = await fuseProfile(allMethods, resolved, {
+					patterns: pfResult.patterns,
+				});
 				if ("disabled" in fuseResult) {
 					return {
 						content: [

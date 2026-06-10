@@ -229,7 +229,9 @@ export function registerAnalyzeCommand(program: Command) {
 			if (fusionWorkspace) {
 				try {
 					// R2-7: pass the full untruncated non-idle methods, not result.hotspots
-					const fuseResult = await fuseProfile(allMethods, fusionWorkspace);
+					const fuseResult = await fuseProfile(allMethods, fusionWorkspace, {
+						patterns: result.patterns,
+					});
 					if ("disabled" in fuseResult) {
 						// We only reach here when fusionEnabled is true (--no-fusion was NOT
 						// passed) and --source is a workspace dir, so the user implicitly

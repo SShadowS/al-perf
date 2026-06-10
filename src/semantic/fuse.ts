@@ -12,7 +12,9 @@
 
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { FusedModel } from "../types/fused.js";
+import type { DetectedPattern } from "../types/patterns.js";
 import { correlate } from "./correlate.js";
+import { corroborate } from "./corroborate.js";
 import {
 	type EngineDisabled,
 	type RunEngineOptions,
@@ -36,6 +38,14 @@ export interface FuseOptions {
 	 * Default: `true` (fusion is attempted when a workspace is provided).
 	 */
 	fusion?: boolean;
+	/**
+	 * Runtime-detected patterns from al-perf's own detectors (P3.1 corroboration).
+	 * When provided, `fuseProfile` calls `corroborate` after `correlate` to enrich
+	 * matched attributions with `corroboratingPatterns` for any runtime pattern that
+	 * is anchored to that routine and corroborates one of its al-sem findings.
+	 * When absent (or empty), corroboration is skipped (graceful no-op).
+	 */
+	patterns?: DetectedPattern[];
 }
 
 export type FuseResult = FusedModel | EngineDisabled;
@@ -81,7 +91,13 @@ export async function fuseProfile(
 	}
 
 	// Pure correlation — no I/O, no subprocess.
-	return correlate(methods, engine);
+	const fused = correlate(methods, engine);
+
+	// P3.1 corroboration: enrich matched attributions with runtime pattern ids.
+	// When patterns is absent or empty, corroborate is a no-op (graceful).
+	corroborate(fused, methods, opts?.patterns ?? []);
+
+	return fused;
 }
 
 // ---------------------------------------------------------------------------
