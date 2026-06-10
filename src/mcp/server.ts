@@ -1,4 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { existsSync, statSync } from "fs";
+import { join } from "path";
 import { z } from "zod";
 import pkg from "../../package.json";
 import { aggregateByMethod } from "../core/aggregator.js";
@@ -14,15 +16,39 @@ import { processProfile } from "../core/processor.js";
 import { deepAnalysis } from "../explain/deep-analyzer.js";
 import { HistoryStore } from "../history/store.js";
 import type { AnalysisResult } from "../output/types.js";
+import { fuseProfile } from "../semantic/fuse.js";
+import {
+	annotateHotspots,
+	type HotspotAnnotation,
+	type PrioritizedFinding,
+	prioritizeFindings,
+} from "../semantic/views.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
 import {
 	extractCompanionZip,
 	findCompanionZip,
 } from "../source/zip-extractor.js";
+import type { MethodBreakdown } from "../types/aggregated.js";
 import type { ProfileMetadata } from "../types/batch.js";
+import type { CorrelationSummary } from "../types/fused.js";
 import type { ProcessedProfile } from "../types/processed.js";
 import type { SourceIndex } from "../types/source-index.js";
+
+/**
+ * Return `true` when the given path is a directory that contains an `app.json`
+ * — i.e. it is a valid AL workspace suitable for al-sem fusion.
+ * Mirrors the same guard in src/cli/commands/analyze.ts.
+ */
+function isAlWorkspaceDir(dirPath: string): boolean {
+	try {
+		const st = statSync(dirPath);
+		if (!st.isDirectory()) return false;
+		return existsSync(join(dirPath, "app.json"));
+	} catch {
+		return false;
+	}
+}
 
 export interface McpServerOptions {
 	defaultSourcePath?: string;
@@ -80,6 +106,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 
 				let processedProfile: ProcessedProfile | undefined;
 				let sourceIndex: SourceIndex | undefined;
+				let allMethods: MethodBreakdown[] = [];
 
 				const result = await analyzeProfile(profilePath, {
 					top,
@@ -91,6 +118,9 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					},
 					onSourceIndex: (idx) => {
 						sourceIndex = idx;
+					},
+					onAllMethods: (m) => {
+						allMethods = m;
 					},
 				});
 
@@ -109,13 +139,151 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					}
 				}
 
+				// al-sem fusion: attach a TRIMMED fusion block when a workspace is
+				// available (R2-12: only weighted findings + summary, NO cold/orphan/
+				// unkeyable findings to avoid blowing LLM context).
+				// Gate: no workspace → no fusion key → response byte-unchanged.
+				/** Trimmed fusion block for MCP output (R2-12: no unweightedFindings). */
+				interface McpFusionBlock {
+					hotspotAnnotations: HotspotAnnotation[];
+					prioritizedFindings: PrioritizedFinding[];
+					correlationSummary: CorrelationSummary;
+				}
+				let fusionBlock: McpFusionBlock | undefined;
+
+				if (resolvedSourcePath && isAlWorkspaceDir(resolvedSourcePath)) {
+					try {
+						// R2-7: pass untruncated allMethods (not result.hotspots which is
+						// truncated by top/appFilter).
+						const fuseResult = await fuseProfile(
+							allMethods,
+							resolvedSourcePath,
+						);
+						if (!("disabled" in fuseResult)) {
+							const { weighted } = prioritizeFindings(fuseResult, allMethods);
+							// R2-12: build a TRIMMED object — unweightedFindings is
+							// deliberately excluded from MCP output.
+							fusionBlock = {
+								hotspotAnnotations: annotateHotspots(fuseResult, allMethods),
+								prioritizedFindings: weighted,
+								correlationSummary: fuseResult.correlationSummary,
+							};
+						}
+					} catch {
+						// Fusion failure must never abort the main response.
+						// fusionBlock stays undefined → response is unchanged.
+					}
+				}
+
 				lastAnalysis = result;
 				// Safe to cleanup before return: result is fully materialized in memory (no lazy refs to temp dir)
 				if (cleanup) await cleanup();
 
+				// Build the output JSON: merge the trimmed fusion block (if any) into
+				// the result object without ever including unweightedFindings.
+				const outputJson =
+					fusionBlock !== undefined
+						? { ...result, fusion: fusionBlock }
+						: result;
+
 				return {
 					content: [
-						{ type: "text" as const, text: JSON.stringify(result, null, 2) },
+						{
+							type: "text" as const,
+							text: JSON.stringify(outputJson, null, 2),
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+						},
+					],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- prioritized_findings ---
+	server.registerTool(
+		"prioritized_findings",
+		{
+			title: "Runtime-Prioritized Static Findings",
+			description:
+				"Which al-sem static findings sit on the routines that actually burn CPU. Ranked by self-time. Requires an AL source workspace alongside the profile. Returns only findings with selfTimePercent > 0 (cold/orphan/unkeyable are summarized by count only — R2-12).",
+			inputSchema: {
+				profilePath: z.string().describe("Path to the .alcpuprofile file"),
+				sourcePath: z
+					.string()
+					.optional()
+					.describe("Path to the AL source workspace (must contain app.json)"),
+				top: z
+					.number()
+					.int()
+					.min(1)
+					.max(100)
+					.default(20)
+					.describe("Max findings to return"),
+			},
+		},
+		async ({ profilePath, sourcePath, top }) => {
+			try {
+				let allMethods: MethodBreakdown[] = [];
+				const resolved = sourcePath ?? options?.defaultSourcePath;
+
+				// Run analyzeProfile only to capture the untruncated method set (R2-7).
+				// We don't need the result itself here; allMethods is the payload.
+				await analyzeProfile(profilePath, {
+					includePatterns: true,
+					sourcePath: resolved,
+					onAllMethods: (m) => {
+						allMethods = m;
+					},
+				});
+
+				if (!resolved || !isAlWorkspaceDir(resolved)) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: JSON.stringify({ disabled: "no AL workspace" }, null, 2),
+							},
+						],
+					};
+				}
+
+				const fuseResult = await fuseProfile(allMethods, resolved);
+				if ("disabled" in fuseResult) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: JSON.stringify({ disabled: fuseResult.reason }, null, 2),
+							},
+						],
+					};
+				}
+
+				const { weighted } = prioritizeFindings(fuseResult, allMethods);
+				// R2-12: return only weighted (selfTimePercent > 0) findings.
+				// Cold/orphan/unkeyable counts are available via correlationSummary.
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: JSON.stringify(
+								{
+									prioritizedFindings: weighted.slice(0, top),
+									correlationSummary: fuseResult.correlationSummary,
+								},
+								null,
+								2,
+							),
+						},
 					],
 				};
 			} catch (error) {
