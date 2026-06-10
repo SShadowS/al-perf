@@ -12,6 +12,8 @@ import { deepAnalysis } from "../../explain/deep-analyzer.js";
 import type { ExplainResult } from "../../explain/explainer.js";
 import { type ExplainModel, explainAnalysis } from "../../explain/explainer.js";
 import { formatFusionSummary, fuseProfile } from "../../semantic/fuse.js";
+import { annotateHotspots, prioritizeFindings } from "../../semantic/views.js";
+import type { MethodBreakdown } from "../../types/aggregated.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import {
 	extractCompanionZip,
@@ -127,6 +129,7 @@ export function registerAnalyzeCommand(program: Command) {
 
 			let processedProfile: ProcessedProfile | undefined;
 			let resolvedSourceIndex: SourceIndex | undefined = sourceIndex;
+			let allMethods: MethodBreakdown[] = [];
 			const analyzeStart = Date.now();
 
 			const result = await withStatus("Analyzing profile...", () =>
@@ -147,6 +150,9 @@ export function registerAnalyzeCommand(program: Command) {
 								resolvedSourceIndex = idx;
 							}
 						: undefined,
+					onAllMethods: (m: MethodBreakdown[]) => {
+						allMethods = m;
+					},
 				}),
 			);
 			let explainResult: ExplainResult | undefined;
@@ -236,10 +242,8 @@ export function registerAnalyzeCommand(program: Command) {
 
 			if (fusionWorkspace) {
 				try {
-					const fuseResult = await fuseProfile(
-						result.hotspots,
-						fusionWorkspace,
-					);
+					// R2-7: pass the full untruncated non-idle methods, not result.hotspots
+					const fuseResult = await fuseProfile(allMethods, fusionWorkspace);
 					if ("disabled" in fuseResult) {
 						// We only reach here when fusionEnabled is true (--no-fusion was NOT
 						// passed) and --source is a workspace dir, so the user implicitly
@@ -249,6 +253,16 @@ export function registerAnalyzeCommand(program: Command) {
 							`al-sem fusion: disabled (${fuseResult.reason})\n`,
 						);
 					} else {
+						const { weighted, unweighted } = prioritizeFindings(
+							fuseResult,
+							allMethods,
+						);
+						result.fusionViews = {
+							hotspotAnnotations: annotateHotspots(fuseResult, allMethods),
+							prioritizedFindings: weighted,
+							unweightedFindings: unweighted,
+							correlationSummary: fuseResult.correlationSummary,
+						};
 						// The summary goes to STDERR so stdout (the profile output) stays
 						// byte-identical to a fusion-off run.
 						process.stderr.write(`${formatFusionSummary(fuseResult)}\n`);

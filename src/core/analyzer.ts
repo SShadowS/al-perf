@@ -39,6 +39,8 @@ export interface AnalyzeOptions {
 	onProcessedProfile?: (profile: ProcessedProfile) => void;
 	/** Callback to access the SourceIndex (for deep AI analysis AST summaries) */
 	onSourceIndex?: (index: SourceIndex) => void;
+	/** Callback to access the full non-idle method list (untruncated) for fusion (R2-7). */
+	onAllMethods?: (methods: MethodBreakdown[]) => void;
 }
 
 export interface CompareOptions {
@@ -255,6 +257,7 @@ export async function analyzeProfile(
 			: null;
 
 	const nonIdleMethods = methods.filter((m) => !isIdle(m));
+	options?.onAllMethods?.(nonIdleMethods);
 	const topMethod =
 		nonIdleMethods.length > 0 && nonIdleMethods[0].selfTimePercent > 0
 			? {

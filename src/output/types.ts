@@ -5,6 +5,7 @@ import type {
 } from "../types/aggregated.js";
 import type { AIFinding } from "../types/ai-findings.js";
 import type { DetectedPattern } from "../types/patterns.js";
+import type { FusionViews } from "../semantic/views.js";
 
 export interface AnalysisResult {
 	meta: {
@@ -44,6 +45,8 @@ export interface AnalysisResult {
 	explanation?: string;
 	aiFindings?: AIFinding[];
 	aiNarrative?: string;
+	/** Present ONLY when al-sem fusion ran (opt-in). Absent ⇒ output byte-unchanged. */
+	fusionViews?: FusionViews;
 }
 
 export interface TableBreakdown {

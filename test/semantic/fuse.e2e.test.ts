@@ -128,16 +128,26 @@ async function runAnalyzeCli(
 }
 
 /**
- * Normalize the analyze JSON stdout for a byte-diff: the only field that varies
- * between two invocations of the SAME (profile, source) is `meta.analyzedAt`
- * (a per-run wall-clock timestamp, unrelated to fusion). Blank it so the diff
- * reflects ONLY fusion's effect on stdout (which must be: none).
+ * Normalize the analyze JSON stdout for a byte-diff: strip the per-run
+ * `meta.analyzedAt` timestamp and the P2.0 `fusionViews` block (which is
+ * intentionally additive when fusion runs) so the diff reflects ONLY
+ * fusion's effect on the core profile analysis (which must be: none).
  */
 function normalizeProfileStdout(stdout: string): string {
-	return stdout.replace(
+	let s = stdout.replace(
 		/"analyzedAt":\s*"[^"]*"/g,
 		'"analyzedAt": "<normalized>"',
 	);
+	// P2.0: strip the fusionViews block (present only when fusion ran) so the
+	// core-analysis byte-identity assertion is not perturbed by the new field.
+	try {
+		const parsed = JSON.parse(s);
+		delete parsed.fusionViews;
+		s = JSON.stringify(parsed, null, 2);
+	} catch {
+		// not valid JSON — fall through with original string
+	}
+	return s;
 }
 
 /** The canonical method key for a method (mirrors aggregator.ts:63). */
@@ -572,7 +582,7 @@ describe("analyze CLI: fusion wiring (real spawn)", () => {
 		expect(() => JSON.parse(stdout)).not.toThrow();
 	});
 
-	test("fusion-on (stub binary) → summary line on STDERR; stdout byte-IDENTICAL to --no-fusion", async () => {
+	test("fusion-on (stub binary) → summary line on STDERR; core stdout byte-IDENTICAL to --no-fusion; fusionViews added (P2.0)", async () => {
 		const stubBin = makeStubBinary();
 
 		// Run 1: fusion OFF (explicit --no-fusion).
@@ -589,11 +599,17 @@ describe("analyze CLI: fusion wiring (real spawn)", () => {
 		expect(off.exitCode).toBe(0);
 		expect(on.exitCode).toBe(0);
 
-		// (i) STDOUT is byte-identical (modulo the per-run analyzedAt timestamp) —
-		// the fused summary is additive on stderr and does NOT perturb stdout.
+		// (i) Core profile analysis is byte-identical (modulo analyzedAt and the P2.0
+		// additive fusionViews field). normalizeProfileStdout strips both.
 		expect(normalizeProfileStdout(on.stdout)).toBe(
 			normalizeProfileStdout(off.stdout),
 		);
+
+		// (i-b) P2.0: fusionViews IS present in fusion-on output, absent in fusion-off.
+		const onParsed = JSON.parse(on.stdout);
+		const offParsed = JSON.parse(off.stdout);
+		expect(onParsed.fusionViews).toBeDefined();
+		expect(offParsed.fusionViews).toBeUndefined();
 
 		// (ii) The summary line appears on STDERR ONLY when fusion ran.
 		expect(off.stderr).not.toContain("al-sem fusion:");
