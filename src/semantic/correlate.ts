@@ -22,19 +22,7 @@
  *                   in its own bucket, NEVER folded into cold.
  */
 
-import type {
-	CoverageEntry,
-	FindingSummary,
-	RoutineIdentity,
-} from "./contracts.js";
-import type { EngineAnalysis } from "./engine-runner.js";
-import {
-	canonicalObjectType,
-	isAlRoutineFrame,
-	normalizeTriggerName,
-	parseObjectId,
-} from "./identity.js";
-
+import type { MethodBreakdown } from "../types/aggregated.js";
 // P3 ENHANCEMENT (tracked): precise field/control-level trigger correlation
 // needs al-sem to expose each trigger's enclosing field/control name in the
 // inventory, so the join key can be (objType, num, field, trigger) rather than
@@ -48,7 +36,18 @@ import type {
 	FusedModel,
 	SemanticAttribution,
 } from "../types/fused.js";
-import type { MethodBreakdown } from "../types/aggregated.js";
+import type {
+	CoverageEntry,
+	FindingSummary,
+	RoutineIdentity,
+} from "./contracts.js";
+import type { EngineAnalysis } from "./engine-runner.js";
+import {
+	canonicalObjectType,
+	isAlRoutineFrame,
+	normalizeTriggerName,
+	parseObjectId,
+} from "./identity.js";
 
 // ---------------------------------------------------------------------------
 // Join-key helpers

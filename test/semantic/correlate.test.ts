@@ -19,14 +19,14 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { correlate } from "../../src/semantic/correlate.js";
-import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
-import type { MethodBreakdown } from "../../src/types/aggregated.js";
 import type {
 	CoverageEntry,
 	FindingSummary,
 	RoutineIdentity,
 } from "../../src/semantic/contracts.js";
+import { correlate } from "../../src/semantic/correlate.js";
+import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
+import type { MethodBreakdown } from "../../src/types/aggregated.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

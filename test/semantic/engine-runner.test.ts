@@ -16,8 +16,8 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
-	type EngineAnalysis,
 	clearEngineCache,
+	type EngineAnalysis,
 	runEngine,
 } from "../../src/semantic/engine-runner.js";
 

@@ -17,12 +17,12 @@ import { createHash } from "crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative } from "path";
 import {
-	EXPECTED_ANALYZE_SCHEMA_VERSION,
-	EXPECTED_INVENTORY_SCHEMA_VERSION,
 	type AnalyzeReport,
 	type AppIdentity,
 	type CoverageEntry,
 	type DiagnosticContract,
+	EXPECTED_ANALYZE_SCHEMA_VERSION,
+	EXPECTED_INVENTORY_SCHEMA_VERSION,
 	type FindingSummary,
 	type InventoryDoc,
 	type RoutineIdentity,

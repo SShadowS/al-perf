@@ -11,13 +11,13 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import type { MethodBreakdown } from "../../src/types/aggregated.js";
 import {
 	canonicalObjectType,
 	isAlRoutineFrame,
 	normalizeTriggerName,
 	parseObjectId,
 } from "../../src/semantic/identity.js";
+import type { MethodBreakdown } from "../../src/types/aggregated.js";
 
 // ---------------------------------------------------------------------------
 // parseObjectId
