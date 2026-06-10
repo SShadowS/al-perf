@@ -92,10 +92,18 @@ export interface ComparisonResult {
 	removedMethods: MethodBreakdown[];
 	patternDeltas: PatternDelta[];
 	/**
-	 * Present ONLY when both before/after source paths were supplied (opt-in).
-	 * Absent ⇒ comparison output byte-unchanged.
+	 * Present ONLY when both before/after source paths were supplied (opt-in,
+	 * PR2-6 both-sources tier). Absent ⇒ comparison output byte-unchanged.
 	 */
 	regressionFusion?: RegressionFusion;
+	/**
+	 * Present ONLY when afterSource alone was supplied (PR2-6 after-only fallback).
+	 * Falls back to the single-snapshot P1–P3 fusion on the after-side profile
+	 * (annotate after hotspots with static findings from the after workspace).
+	 * Absent when neither source is supplied (byte-unchanged) OR when both sources
+	 * are supplied (regressionFusion is used instead).
+	 */
+	afterFusionViews?: FusionViews;
 }
 
 export interface CriticalPathStep {

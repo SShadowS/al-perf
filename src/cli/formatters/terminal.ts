@@ -13,6 +13,7 @@ import type {
 } from "../../semantic/regression-correlate.js";
 import type {
 	CausalStep,
+	FusionViews,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../semantic/views.js";
@@ -555,6 +556,49 @@ function renderAnnotatedRegressionTerminal(ar: AnnotatedRegression): string {
 }
 
 /**
+ * Render the after-side single-snapshot fusion views in a comparison context
+ * (PR2-6 after-only fallback, P4.2). Returns "" when absent (byte-unchanged).
+ */
+function renderAfterFusionTerminal(fv: FusionViews | undefined): string {
+	if (!fv || fv.prioritizedFindings.length === 0) return "";
+
+	const lines: string[] = [
+		chalk.bold("After-Side Static Findings (single-snapshot fusion)"),
+	];
+	const table = new Table({
+		head: ["#", "Finding", "Detector", "Routine", "Self%", "Total%", "Sev"].map(
+			(h) => chalk.gray(h),
+		),
+		style: { head: [], border: [] },
+	});
+
+	fv.prioritizedFindings.forEach((p, i) => {
+		const orch = p.efficiencyScore < 0.5 ? chalk.gray(" (orchestrator)") : "";
+		table.push([
+			String(i + 1),
+			renderFusionFindingTitle(p),
+			p.finding.detector,
+			`${p.functionName}${orch}`,
+			p.selfTimePercent.toFixed(1),
+			p.totalTimePercent.toFixed(1),
+			p.finding.severity,
+		]);
+	});
+
+	lines.push(table.toString());
+
+	fv.prioritizedFindings.forEach((p, i) => {
+		const chain = renderCausalChain(p.causalSteps);
+		if (chain) {
+			lines.push(chalk.gray(`  Finding #${i + 1} causal chain:`));
+			lines.push(chain);
+		}
+	});
+
+	return lines.join("\n");
+}
+
+/**
  * Render the full regression-fusion block for terminal output (P4.1).
  * Returns "" when regressionFusion is absent (byte-unchanged).
  */
@@ -812,6 +856,12 @@ export function formatComparisonTerminal(result: ComparisonResult): string {
 	const fusionBlock = renderRegressionFusionTerminal(result.regressionFusion);
 	if (fusionBlock) {
 		lines.push(fusionBlock);
+	}
+
+	// 9. After-side single-snapshot fusion (PR2-6 after-only fallback, P4.2).
+	const afterFusionBlock = renderAfterFusionTerminal(result.afterFusionViews);
+	if (afterFusionBlock) {
+		lines.push(afterFusionBlock);
 	}
 
 	return lines.join("\n");

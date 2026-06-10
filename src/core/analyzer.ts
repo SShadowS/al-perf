@@ -7,6 +7,11 @@ import type {
 	MethodDelta,
 	PatternDelta,
 } from "../output/types.js";
+import { runEngineDiff } from "../semantic/diff-runner.js";
+import { isAlWorkspaceDir } from "../semantic/engine-runner.js";
+import { fuseProfile } from "../semantic/fuse.js";
+import { correlateRegressions } from "../semantic/regression-correlate.js";
+import { annotateHotspots, prioritizeFindings } from "../semantic/views.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { matchAllHotspots } from "../source/locator.js";
 import { extractSnippet } from "../source/snippets.js";
@@ -150,6 +155,33 @@ function computeConfidenceScore(
 
 function isIdle(method: MethodBreakdown): boolean {
 	return method.functionName === "IdleTime" && method.objectId === 0;
+}
+
+/**
+ * Extract the primary app version from a ParsedProfile's node list.
+ * Returns the most frequently occurring non-empty `appVersion` from
+ * `declaringApplication`, or `undefined` when no version is present.
+ * For single-app profiles all nodes carry the same version; for multi-app
+ * profiles the most frequent one is the "primary" app (the one you own).
+ */
+function extractPrimaryAppVersion(parsed: ParsedProfile): string | undefined {
+	const counts = new Map<string, number>();
+	for (const node of parsed.nodes) {
+		const v = node.declaringApplication?.appVersion;
+		if (v) {
+			counts.set(v, (counts.get(v) ?? 0) + 1);
+		}
+	}
+	if (counts.size === 0) return undefined;
+	let best: string | undefined;
+	let bestCount = 0;
+	for (const [v, c] of counts) {
+		if (c > bestCount) {
+			bestCount = c;
+			best = v;
+		}
+	}
+	return best;
 }
 
 /**
@@ -537,7 +569,7 @@ export async function compareProfiles(
 	const sign = deltaTime >= 0 ? "+" : "";
 	const oneLiner = `${sign}${formatTime(deltaTime)} (${sign}${deltaPercent.toFixed(1)}%), ${formatTime(beforeTotalTime)} -> ${formatTime(afterTotalTime)}`;
 
-	return {
+	const baseResult: ComparisonResult = {
 		meta: {
 			beforePath,
 			afterPath,
@@ -558,4 +590,71 @@ export async function compareProfiles(
 		removedMethods,
 		patternDeltas,
 	};
+
+	// -------------------------------------------------------------------------
+	// PR2-6 three-tier fusion:
+	//   both sources → runEngineDiff + correlateRegressions → regressionFusion
+	//   after-only   → fuseProfile on after side → afterFusionViews
+	//   neither      → plain comparison (byte-unchanged)
+	// Wrapped defensively: a fusion failure must never throw out of compareProfiles.
+	// -------------------------------------------------------------------------
+	const { beforeSource, afterSource } = options ?? {};
+
+	if (beforeSource && afterSource) {
+		// Both-sources tier: full regression fusion (P4.2).
+		try {
+			if (isAlWorkspaceDir(beforeSource) && isAlWorkspaceDir(afterSource)) {
+				const diff = await runEngineDiff(beforeSource, afterSource);
+				if (!("disabled" in diff)) {
+					const beforeProfileVersion = extractPrimaryAppVersion(beforeParsed);
+					const afterProfileVersion = extractPrimaryAppVersion(afterParsed);
+					const fusion = correlateRegressions(
+						{
+							regressions: limitedRegressions,
+							newMethods,
+							removedMethods,
+						},
+						diff,
+						{
+							before: beforeProfileVersion,
+							after: afterProfileVersion,
+						},
+					);
+					baseResult.regressionFusion = fusion;
+				}
+			}
+		} catch {
+			// Fusion failure is non-fatal — result stays without regressionFusion.
+		}
+	} else if (afterSource && !beforeSource) {
+		// After-only fallback: single-snapshot P1–P3 fusion on the after profile.
+		try {
+			if (isAlWorkspaceDir(afterSource)) {
+				const afterNonIdleMethods = afterMethods.filter((m) => !isIdle(m));
+				const fuseResult = await fuseProfile(afterNonIdleMethods, afterSource, {
+					patterns: afterPatterns,
+				});
+				if (!("disabled" in fuseResult)) {
+					const { weighted, unweighted } = prioritizeFindings(
+						fuseResult,
+						afterNonIdleMethods,
+					);
+					baseResult.afterFusionViews = {
+						hotspotAnnotations: annotateHotspots(
+							fuseResult,
+							afterNonIdleMethods,
+						),
+						prioritizedFindings: weighted,
+						unweightedFindings: unweighted,
+						correlationSummary: fuseResult.correlationSummary,
+					};
+				}
+			}
+		} catch {
+			// Fusion failure is non-fatal — result stays without afterFusionViews.
+		}
+	}
+	// else: neither source → plain comparison (byte-unchanged, no fusion fields).
+
+	return baseResult;
 }

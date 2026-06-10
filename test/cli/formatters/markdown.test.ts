@@ -750,11 +750,23 @@ describe("formatComparisonMarkdown — regression-fusion annotations (P4.1)", ()
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
 		expect(result.regressionFusion).toBeUndefined();
-		const out = formatComparisonMarkdown(result);
-		expect(out).not.toContain("Regression-Fusion");
-		expect(out).not.toContain("correlated");
-		expect(out).not.toContain("unexplained-static");
-		expect(out).not.toContain("version ≠ source");
+		// Capture the no-fusion output.
+		const noFusionOut = formatComparisonMarkdown(result);
+		// Attach fusion and re-render — must differ (so the gate has teeth).
+		const resultWithFusion = {
+			...result,
+			regressionFusion: SAMPLE_REGRESSION_FUSION_MD,
+		};
+		const withFusionOut = formatComparisonMarkdown(resultWithFusion);
+		// Full-equality assertion: no-fusion must NOT equal with-fusion.
+		expect(noFusionOut).not.toBe(withFusionOut);
+		// Fusion-related sections absent from no-fusion render.
+		expect(noFusionOut).not.toContain("Regression-Fusion");
+		expect(noFusionOut).not.toContain("correlated");
+		expect(noFusionOut).not.toContain("unexplained-static");
+		expect(noFusionOut).not.toContain("version ≠ source");
+		// Optional-field guard: no "undefined" literal.
+		expect(noFusionOut).not.toContain("undefined");
 	});
 
 	test("version-mismatch warning rendered prominently at the top", async () => {
@@ -770,6 +782,34 @@ describe("formatComparisonMarkdown — regression-fusion annotations (P4.1)", ()
 		expect(out).toContain("correlations may be inaccurate");
 	});
 
+	test("after-version-mismatch: after profile version mismatch renders correctly", async () => {
+		// Variant: before versions agree; ONLY the after profile version mismatches the workspace.
+		const afterMismatchFusion: RegressionFusion = {
+			...SAMPLE_REGRESSION_FUSION_MD,
+			correlationSummary: {
+				...SAMPLE_REGRESSION_FUSION_MD.correlationSummary,
+				versionMismatch: {
+					beforeProfileVersion: "1.0.0",
+					beforeWorkspaceVersion: "1.0.0",
+					afterProfileVersion: "1.0.1",
+					afterWorkspaceVersion: "2.0.0",
+				},
+			},
+		};
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = afterMismatchFusion;
+		const out = formatComparisonMarkdown(result);
+		// The after mismatch must be rendered.
+		expect(out).toContain("1.0.1");
+		expect(out).toContain("2.0.0");
+		expect(out).toContain("correlations may be inaccurate");
+		// No "undefined" in the output (optional-field guard).
+		expect(out).not.toContain("undefined");
+	});
+
 	test("correlated tier rendered with delta info", async () => {
 		const result = await compareProfiles(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
@@ -782,6 +822,8 @@ describe("formatComparisonMarkdown — regression-fusion annotations (P4.1)", ()
 		expect(out).toContain("capability-gained-write");
 		expect(out).toContain("Sales Header");
 		expect(out).toContain("strong");
+		// Optional-field guard: no "undefined" literal in output.
+		expect(out).not.toContain("undefined");
 	});
 
 	test("weakly-correlated tier rendered with runtime-neutral wording", async () => {

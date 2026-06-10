@@ -10,6 +10,7 @@ import type {
 } from "../../semantic/regression-correlate.js";
 import type {
 	CausalStep,
+	FusionViews,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../semantic/views.js";
@@ -474,6 +475,39 @@ function renderAnnotatedRegressionMd(ar: AnnotatedRegression): string {
 }
 
 /**
+ * Render the after-side single-snapshot fusion views in a comparison context
+ * (PR2-6 after-only fallback, P4.2). Returns "" when absent (byte-unchanged).
+ */
+function renderAfterFusionMd(fv: FusionViews | undefined): string {
+	if (!fv || fv.prioritizedFindings.length === 0) return "";
+
+	const lines = [
+		"## After-Side Static Findings (single-snapshot fusion)",
+		"",
+		"| # | Finding | Detector | Routine | Self% | Total% | Severity |",
+		"| --- | --- | --- | --- | --- | --- | --- |",
+	];
+
+	fv.prioritizedFindings.forEach((p, i) => {
+		const orch = p.efficiencyScore < 0.5 ? " (orchestrator)" : "";
+		lines.push(
+			`| ${i + 1} | ${renderFusionFindingCell(p)} | ${p.finding.detector} | ${p.functionName}${orch} | ${p.selfTimePercent.toFixed(1)} | ${p.totalTimePercent.toFixed(1)} | ${p.finding.severity} |`,
+		);
+	});
+
+	fv.prioritizedFindings.forEach((p, i) => {
+		const chain = renderCausalChainMd(p.causalSteps);
+		if (chain) {
+			lines.push("");
+			lines.push(`> **Finding #${i + 1} causal chain:**`);
+			lines.push(chain);
+		}
+	});
+
+	return lines.join("\n");
+}
+
+/**
  * Render the full regression-fusion block as markdown (P4.1).
  * Returns "" when regressionFusion is absent (byte-unchanged).
  */
@@ -711,6 +745,12 @@ export function formatComparisonMarkdown(result: ComparisonResult): string {
 	const fusionBlock = renderRegressionFusionMd(result.regressionFusion);
 	if (fusionBlock) {
 		lines.push(fusionBlock);
+	}
+
+	// 9. After-side single-snapshot fusion (PR2-6 after-only fallback, P4.2).
+	const afterFusionBlock = renderAfterFusionMd(result.afterFusionViews);
+	if (afterFusionBlock) {
+		lines.push(afterFusionBlock);
 	}
 
 	return lines.join("\n");
