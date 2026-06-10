@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { resolve } from "path";
+import { existsSync, statSync } from "fs";
+import { join, resolve } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import { initIdCounter, nextId } from "../../debug/ids.js";
 import type { DebugCapture } from "../../debug/types.js";
@@ -10,6 +11,7 @@ import type { DeepExplainResult } from "../../explain/deep-analyzer.js";
 import { deepAnalysis } from "../../explain/deep-analyzer.js";
 import type { ExplainResult } from "../../explain/explainer.js";
 import { type ExplainModel, explainAnalysis } from "../../explain/explainer.js";
+import { fuseProfile } from "../../semantic/fuse.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import {
 	extractCompanionZip,
@@ -19,6 +21,20 @@ import type { ProcessedProfile } from "../../types/processed.js";
 import type { SourceIndex } from "../../types/source-index.js";
 import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
 import { withStatus } from "../status.js";
+
+/**
+ * Return `true` when the given path is a directory that contains an `app.json`
+ * — i.e. it is a valid AL workspace suitable for al-sem fusion.
+ */
+function isAlWorkspaceDir(dirPath: string): boolean {
+	try {
+		const st = statSync(dirPath);
+		if (!st.isDirectory()) return false;
+		return existsSync(join(dirPath, "app.json"));
+	} catch {
+		return false;
+	}
+}
 
 export function registerAnalyzeCommand(program: Command) {
 	program
@@ -55,6 +71,10 @@ export function registerAnalyzeCommand(program: Command) {
 		.option(
 			"--api-key <key>",
 			"Anthropic API key (visible in process listings; prefer ANTHROPIC_API_KEY env var)",
+		)
+		.option(
+			"--no-fusion",
+			"Disable al-sem static-analysis fusion even when --source is a workspace directory",
 		)
 		.option("--save-history", "Save analysis result to history store")
 		.option(
@@ -203,6 +223,53 @@ export function registerAnalyzeCommand(program: Command) {
 				const { HistoryStore } = await import("../../history/store.js");
 				const store = new HistoryStore(opts.historyDir);
 				store.save(result, { gitCommit: opts.gitCommit, label: opts.label });
+			}
+
+			// al-sem fusion: attempt when --source is a workspace directory (app.json
+			// present) and --no-fusion is not set. This is an ADDITIVE extra line;
+			// the existing analysis output below is byte-unchanged when fusion is off.
+			const fusionEnabled = opts.fusion !== false; // commander: --no-fusion sets opts.fusion=false
+			const fusionWorkspace =
+				fusionEnabled && sourcePath && isAlWorkspaceDir(sourcePath)
+					? sourcePath
+					: null;
+
+			if (fusionWorkspace) {
+				try {
+					const fuseResult = await fuseProfile(
+						result.hotspots,
+						fusionWorkspace,
+					);
+					if ("disabled" in fuseResult) {
+						// Only surface the disabled reason when the user explicitly asked
+						// (--source is a workspace but binary not found / fusion opted out
+						// by the runner) — match al-perf's existing verbosity conventions:
+						// a single quiet line at most, never nag when not configured.
+						if (opts.fusion !== false) {
+							// User didn't opt out — surface a minimal note so they know why.
+							process.stderr.write(
+								`al-sem fusion: disabled (${fuseResult.reason})\n`,
+							);
+						}
+					} else {
+						const s = fuseResult.correlationSummary;
+						const findingsCount = [...fuseResult.attributions.values()].reduce(
+							(sum, a) => sum + a.findings.length,
+							0,
+						);
+						process.stderr.write(
+							`al-sem fusion: ${s.matched + s.ambiguous} hotspots correlated` +
+								` (${findingsCount} findings),` +
+								` ${s.matchedClean} clean,` +
+								` ${s.ambiguous} ambiguous,` +
+								` ${s.blindSpot} blind-spots\n`,
+						);
+					}
+				} catch (err: unknown) {
+					// Never crash al-perf — log silently.
+					const msg = err instanceof Error ? err.message : String(err);
+					process.stderr.write(`al-sem fusion: unexpected error: ${msg}\n`);
+				}
 			}
 
 			process.stdout.write(

@@ -1,5 +1,18 @@
 // Core analysis functions (library API)
 
+// al-sem fusion (Phase P1) — opt-in, additive
+export { fuseProfile } from "./semantic/fuse.js";
+export type { FuseOptions, FuseResult } from "./semantic/fuse.js";
+export type {
+	AttributionConfidence,
+	CorrelationStatus,
+	CorrelationSummary,
+	EngineMetadata,
+	FusedModel,
+	MismatchWarning,
+	SemanticAttribution,
+} from "./types/fused.js";
+
 export type { SourceAnalysisResult } from "./cli/commands/analyze-source.js";
 // CLI types
 export type { GateResult } from "./cli/commands/gate.js";
