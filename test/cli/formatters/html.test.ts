@@ -578,3 +578,127 @@ describe("formatAnalysisHtml — runtime-correlated badge (P3.1)", () => {
 		expect(out).not.toContain("runtime-confirmed");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Causal chain render tests (P3.2b)
+// ---------------------------------------------------------------------------
+
+describe("formatAnalysisHtml — causal chain (P3.2b)", () => {
+	test("renders collapsible <details> causal chain when causalSteps present", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const finding: PrioritizedFinding = {
+			...BASE_FINDING_HTML,
+			causalSteps: [
+				{
+					note: "calls",
+					routineName: "OnRun",
+					objectType: "Codeunit",
+					objectId: 50000,
+					file: "ws:src/Cod50000.al",
+					line: 5,
+					selfTimePercent: 0,
+					totalTimePercent: 90,
+					isHot: false,
+				},
+				{
+					note: "for loop",
+					routineName: "ProcessLine",
+					objectType: "Codeunit",
+					objectId: 50000,
+					file: "ws:src/Cod50000.al",
+					line: 10,
+					selfTimePercent: 42,
+					totalTimePercent: 42,
+					isHot: true,
+				},
+			],
+		};
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [finding],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		// Uses a collapsible <details> element
+		expect(out).toContain("<details");
+		expect(out).toContain("Causal chain");
+		// routine names are HTML-escaped and present
+		expect(out).toContain("OnRun");
+		expect(out).toContain("ProcessLine");
+		// hot step has the ⚡ marker (unicode)
+		expect(out).toContain("⚡");
+	});
+
+	test("no <details> rendered when causalSteps absent (byte-unchanged off)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [BASE_FINDING_HTML],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).toContain("Runtime-Prioritized Static Findings");
+		expect(out).not.toContain("Causal chain");
+	});
+
+	test("causal chain HTML-escapes dynamic content", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const finding: PrioritizedFinding = {
+			...BASE_FINDING_HTML,
+			causalSteps: [
+				{
+					note: "<script>xss</script>",
+					routineName: "<img src=x onerror=alert(1)>",
+					objectType: "Codeunit",
+					objectId: 1,
+					file: "ws:src/<xss>.al",
+					line: 1,
+					selfTimePercent: 5,
+					totalTimePercent: 10,
+					isHot: true,
+				},
+			],
+		};
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [finding],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).not.toContain("<script>xss</script>");
+		expect(out).toContain("&lt;script&gt;");
+	});
+});

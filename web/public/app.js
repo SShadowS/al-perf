@@ -571,6 +571,52 @@ function renderFusion(data) {
 	table.appendChild(tbody);
 	wrapper.appendChild(table);
 	section.appendChild(wrapper);
+
+	// P3.2b: render collapsible causal chains under the table for each finding
+	// that carries causalSteps. Gated: nothing rendered when absent (byte-unchanged off).
+	fv.prioritizedFindings.forEach((p, i) => {
+		if (!p.causalSteps || p.causalSteps.length === 0) return;
+		const details = document.createElement("details");
+		details.style.cssText =
+			"margin:4px 0 4px 8px;font-size:0.88em;font-family:monospace";
+		const summary = document.createElement("summary");
+		summary.style.cssText = "cursor:pointer;color:#505C6D";
+		summary.textContent = "Causal chain (finding #" + (i + 1) + ")";
+		details.appendChild(summary);
+		const chainDiv = document.createElement("div");
+		chainDiv.style.cssText = "padding:4px 0";
+		p.causalSteps.forEach((s) => {
+			const stepDiv = document.createElement("div");
+			stepDiv.style.cssText = "margin:2px 0;padding-left:8px";
+			const loc = s.file + ":" + s.line;
+			const hotMark = s.isHot
+				? "⚡ " // ⚡
+				: "";
+			if (s.routineName !== undefined) {
+				const pct =
+					s.selfTimePercent !== undefined && s.totalTimePercent !== undefined
+						? " (" +
+							s.selfTimePercent.toFixed(1) +
+							"%/" +
+							s.totalTimePercent.toFixed(1) +
+							"%)"
+						: "";
+				// Use textContent for safe insertion of user data
+				const arrow = document.createTextNode("↳ " + hotMark + s.note + " @ ");
+				const code = document.createElement("code");
+				code.textContent = s.routineName;
+				const detail = document.createTextNode(pct + " [" + loc + "]");
+				stepDiv.appendChild(arrow);
+				stepDiv.appendChild(code);
+				stepDiv.appendChild(detail);
+			} else {
+				stepDiv.textContent = "↳ " + hotMark + s.note + " [" + loc + "]";
+			}
+			chainDiv.appendChild(stepDiv);
+		});
+		details.appendChild(chainDiv);
+		section.appendChild(details);
+	});
 }
 
 /**

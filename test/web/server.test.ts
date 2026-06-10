@@ -309,6 +309,17 @@ describe("web server", () => {
 			expect(text).toMatch(/runtime-correlated \(/);
 		});
 
+		it("app.js contains causal chain rendering code (P3.2b)", async () => {
+			const res = await fetch(`${BASE}/app.js`);
+			expect(res.status).toBe(200);
+			const text = await res.text();
+			// The causal chain <details> element rendering code must be present
+			expect(text).toContain("causalSteps");
+			expect(text).toContain("Causal chain");
+			// Uses document.createElement for safe DOM construction
+			expect(text).toContain("createElement");
+		});
+
 		it("index.html contains fusion-section div", async () => {
 			const res = await fetch(`${BASE}/`);
 			expect(res.status).toBe(200);

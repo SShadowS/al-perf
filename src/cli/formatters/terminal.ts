@@ -6,6 +6,7 @@ import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
 import type {
+	CausalStep,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../semantic/views.js";
@@ -176,6 +177,35 @@ function renderHotspots(result: AnalysisResult): string {
 	return lines.join("\n");
 }
 
+/**
+ * Render the causal chain for a prioritized finding (P3.2b).
+ * Returns "" when causalSteps is absent or empty (byte-unchanged off).
+ * Format: each step on its own line: `  ↳ <note> @ <routineName> (self%/total%)`
+ * Hot steps are marked with ⚡. Unresolved steps show the file:line only.
+ */
+function renderCausalChain(steps: CausalStep[] | undefined): string {
+	if (!steps || steps.length === 0) return "";
+	const lines = steps.map((s) => {
+		const loc = `${s.file}:${s.line}`;
+		const hotMark = s.isHot ? chalk.yellow("⚡ ") : "";
+		if (s.routineName !== undefined) {
+			const pct =
+				s.selfTimePercent !== undefined && s.totalTimePercent !== undefined
+					? ` (${s.selfTimePercent.toFixed(1)}%/${s.totalTimePercent.toFixed(1)}%)`
+					: "";
+			const routine = `${s.routineName}`;
+			return (
+				chalk.gray(`    ↳ ${hotMark}${s.note} @ `) +
+				chalk.cyan(`${routine}`) +
+				chalk.gray(`${pct} [${loc}]`)
+			);
+		}
+		// Unresolved step — show note and location only
+		return chalk.gray(`    ↳ ${hotMark}${s.note} [${loc}]`);
+	});
+	return lines.join("\n");
+}
+
 function renderFusionFindingTitle(p: PrioritizedFinding): string {
 	const amb =
 		p.frameCount > 1 ? chalk.yellow(` (×${p.frameCount} ambiguous)`) : "";
@@ -212,6 +242,16 @@ function renderFusion(result: AnalysisResult): string {
 	});
 
 	lines.push(table.toString());
+
+	// P3.2b: render causal chains under the table (gated on causalSteps present).
+	fv.prioritizedFindings.forEach((p, i) => {
+		const chain = renderCausalChain(p.causalSteps);
+		if (chain) {
+			lines.push(chalk.gray(`  Finding #${i + 1} causal chain:`));
+			lines.push(chain);
+		}
+	});
+
 	return lines.join("\n");
 }
 

@@ -18,7 +18,7 @@ import type {
 	CorrelationSummary,
 	FusedModel,
 } from "../types/fused.js";
-import type { FindingSummary } from "./contracts.js";
+import type { FindingSummary, RoutineIdentity } from "./contracts.js";
 import { methodAttrKey } from "./correlate.js";
 import { corroboratesDetector } from "./corroboration-map.js";
 
@@ -46,6 +46,47 @@ export interface HotspotAnnotation {
 	stableRoutineId?: string | string[];
 	/** Reserved: P3 cross-signal corroboration (leaf-only per R2-13). */
 	corroboratingPatterns?: string[];
+}
+
+/**
+ * One step in the resolved causal chain attached to a weighted PrioritizedFinding
+ * (P3.2b). Derived from the engine's `evidencePath`, enriched with runtime cost
+ * for the step's routine when it appears in the profile (hot) or cost-resolved.
+ *
+ * HONESTY: percentages are only present when the step's routineId resolved to a
+ * MethodBreakdown in the profile. For cross-app, builtin, or inlined steps the
+ * percentages are `undefined` and `isHot` is `false` — no fabricated cost.
+ */
+export interface CausalStep {
+	/** Diagnostic note from the engine's evidence step (e.g. "for loop", "calls"). */
+	note: string;
+	/** Resolved routine name (from inventory); undefined when routineId not in inventory. */
+	routineName?: string;
+	/** Resolved object type (from inventory); undefined when routineId not in inventory. */
+	objectType?: string;
+	/** Resolved object id (from inventory); undefined when routineId not in inventory. */
+	objectId?: number;
+	/** Source unit id (file) from the evidence step anchor. */
+	file: string;
+	/** Source line from the evidence step anchor. */
+	line: number;
+	/**
+	 * Self-time % from the matched MethodBreakdown (runtime cost of this step's
+	 * routine in this profile). Undefined when the routine has no runtime sample
+	 * in this profile (not hot, cross-app, inlined, or builtin).
+	 */
+	selfTimePercent?: number;
+	/**
+	 * Total-time % from the matched MethodBreakdown. Undefined when unresolved
+	 * (same condition as selfTimePercent).
+	 */
+	totalTimePercent?: number;
+	/**
+	 * `true` when the step's routine appears in the profile with self-time > 0
+	 * (i.e. this step is itself a hot frame). `false` for all unresolved steps
+	 * and for zero-self orchestrators.
+	 */
+	isHot: boolean;
 }
 
 /**
@@ -93,6 +134,15 @@ export interface PrioritizedFinding {
 	 * unweighted/cold rows. Omitted when empty.
 	 */
 	corroboratingPatterns?: string[];
+	/**
+	 * Resolved causal chain (P3.2b, R2-12): present ONLY on weighted findings that
+	 * carry an `evidencePath` from the engine. Each step is the engine's evidence
+	 * step enriched with the matched routine's runtime cost (selfTimePercent /
+	 * totalTimePercent) when available. HONESTY: steps whose routineId has no
+	 * runtime sample carry no percentages + isHot:false — never fabricated.
+	 * Absent on unweighted/cold/orphan/unkeyable rows.
+	 */
+	causalSteps?: CausalStep[];
 }
 
 /**
@@ -164,10 +214,65 @@ export function annotateHotspots(
  * weighted/dropped (R2-12). Drives off the ordered `methods[]` for determinism
  * (R2-14).
  */
+/**
+ * Build a Map from :-form stableRoutineId → MethodBreakdown by cross-indexing
+ * the inventory routines against the profile method breakdowns.
+ *
+ * The join is (canonicalObjectType, objectNumber, routineName) — the same key
+ * correlate uses — which lets us find a method's runtime cost given only a
+ * stableRoutineId. When a stableRoutineId is not in the routines array, or its
+ * corresponding profile method is absent (the routine wasn't hot), the result
+ * is undefined for that key (HONEST — no fabricated cost).
+ *
+ * NOTE: this is a best-effort lookup. An ambiguous match (two inventory routines
+ * sharing the same join key) will map to the first hit — the same behaviour as
+ * the original correlate ambiguous path.
+ */
+function buildStableIdToMethodMap(
+	routines: RoutineIdentity[],
+	methods: MethodBreakdown[],
+): Map<string, MethodBreakdown> {
+	// Index methods by their canonical join key for fast lookup.
+	// methodAttrKey format: `${functionName}_${objectType}_${objectId}`
+	// But we need to join by (objectType, objectNumber, routineName) since the
+	// profile functionName may differ from routineName for member triggers.
+	// Use a simpler index keyed by `${canonicalObjectType}|${objectNumber}|${routineName}`.
+	// We intentionally use the raw join key (not normalizeTriggerName) here because
+	// we're matching against the inventory routineName — which is already normalized.
+	const methodIndex = new Map<string, MethodBreakdown>();
+	for (const m of methods) {
+		const key = `${m.objectType.toLowerCase()}|${m.objectId}|${m.functionName}`;
+		if (!methodIndex.has(key)) {
+			methodIndex.set(key, m);
+		}
+	}
+
+	const result = new Map<string, MethodBreakdown>();
+	for (const r of routines) {
+		const key = `${r.objectType.toLowerCase()}|${r.objectNumber}|${r.routineName}`;
+		const m = methodIndex.get(key);
+		if (m) {
+			result.set(r.stableRoutineId, m);
+		}
+	}
+	return result;
+}
+
 export function prioritizeFindings(
 	fused: FusedModel,
 	methods: MethodBreakdown[],
+	routines?: RoutineIdentity[],
 ): { weighted: PrioritizedFinding[]; unweighted: PrioritizedFinding[] } {
+	// Build the stableRoutineId → MethodBreakdown map for causal-chain enrichment.
+	// Prefer the explicit routines parameter; fall back to fused.allRoutines (set by
+	// fuseProfile); if neither is available the map is empty → all evidence steps
+	// resolve to "no sample" (honest: no fabricated cost).
+	const effectiveRoutines = routines ?? fused.allRoutines;
+	const stableIdToMethod: Map<string, MethodBreakdown> =
+		effectiveRoutines && effectiveRoutines.length > 0
+			? buildStableIdToMethodMap(effectiveRoutines, methods)
+			: new Map();
+
 	// Accumulate per-finding across all hot frames that carry it.
 	interface Acc {
 		finding: FindingSummary;
@@ -237,6 +342,40 @@ export function prioritizeFindings(
 		const perFindingPatterns = [...a.attrCorroboratingPatterns]
 			.filter((pid) => corroboratesDetector(pid, a.finding.detector))
 			.sort((x, y) => x.localeCompare(y));
+
+		// P3.2b: build causalSteps from the engine evidencePath (weighted-only, R2-12).
+		// Preserve evidencePath order (deterministic — the engine emits a fixed order).
+		// HONEST: steps whose routineId has no runtime sample carry no percentages.
+		let causalSteps: CausalStep[] | undefined;
+		if (a.finding.evidencePath && a.finding.evidencePath.length > 0) {
+			const steps: CausalStep[] = a.finding.evidencePath.map((step) => {
+				const m = stableIdToMethod.get(step.routineId);
+				if (m) {
+					return {
+						note: step.note,
+						routineName: m.functionName,
+						objectType: m.objectType,
+						objectId: m.objectId,
+						file: step.file,
+						line: step.line,
+						selfTimePercent: m.selfTimePercent,
+						totalTimePercent: m.totalTimePercent,
+						isHot: m.selfTimePercent > 0,
+					};
+				}
+				// Unresolved step: cross-app, builtin, inlined — no fabricated cost.
+				return {
+					note: step.note,
+					file: step.file,
+					line: step.line,
+					isHot: false,
+				};
+			});
+			if (steps.length > 0) {
+				causalSteps = steps;
+			}
+		}
+
 		return {
 			finding: a.finding,
 			functionName: a.rep.functionName,
@@ -256,6 +395,8 @@ export function prioritizeFindings(
 			...(perFindingPatterns.length > 0
 				? { corroboratingPatterns: perFindingPatterns }
 				: {}),
+			// Weighted-only causal chain (R2-12): omit when evidencePath absent or empty.
+			...(causalSteps !== undefined ? { causalSteps } : {}),
 		};
 	};
 

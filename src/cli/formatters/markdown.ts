@@ -3,6 +3,7 @@ import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
 import type {
+	CausalStep,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../semantic/views.js";
@@ -154,6 +155,30 @@ function renderHotspots(result: AnalysisResult): string {
 	return lines.join("\n");
 }
 
+/**
+ * Render the causal chain for a prioritized finding (P3.2b) as markdown.
+ * Returns "" when causalSteps is absent or empty (byte-unchanged off).
+ * Each step is a blockquote line: `> ↳ <note> @ <routineName> (self%/total%)`
+ * Hot steps are marked with ⚡.
+ */
+function renderCausalChainMd(steps: CausalStep[] | undefined): string {
+	if (!steps || steps.length === 0) return "";
+	return steps
+		.map((s) => {
+			const loc = `${s.file}:${s.line}`;
+			const hotMark = s.isHot ? "⚡ " : "";
+			if (s.routineName !== undefined) {
+				const pct =
+					s.selfTimePercent !== undefined && s.totalTimePercent !== undefined
+						? ` (${s.selfTimePercent.toFixed(1)}%/${s.totalTimePercent.toFixed(1)}%)`
+						: "";
+				return `>     ↳ ${hotMark}${s.note} @ \`${s.routineName}\`${pct} [${loc}]`;
+			}
+			return `>     ↳ ${hotMark}${s.note} [${loc}]`;
+		})
+		.join("\n");
+}
+
 function renderFusionFindingCell(p: PrioritizedFinding): string {
 	const amb = p.frameCount > 1 ? ` (×${p.frameCount})` : "";
 	const badge = runtimeCorrelatedBadge(p.corroboratingPatterns);
@@ -176,6 +201,16 @@ function renderFusion(result: AnalysisResult): string {
 		lines.push(
 			`| ${i + 1} | ${renderFusionFindingCell(p)} | ${p.finding.detector} | ${p.functionName}${orch} | ${p.selfTimePercent.toFixed(1)} | ${p.totalTimePercent.toFixed(1)} | ${p.finding.severity} |`,
 		);
+	});
+
+	// P3.2b: render causal chains under the table (gated on causalSteps present).
+	fv.prioritizedFindings.forEach((p, i) => {
+		const chain = renderCausalChainMd(p.causalSteps);
+		if (chain) {
+			lines.push("");
+			lines.push(`> **Finding #${i + 1} causal chain:**`);
+			lines.push(chain);
+		}
 	});
 
 	return lines.join("\n");

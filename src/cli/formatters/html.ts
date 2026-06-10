@@ -5,6 +5,7 @@ import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult } from "../../output/types.js";
 import type {
+	CausalStep,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../semantic/views.js";
@@ -191,6 +192,40 @@ function renderFusionFindingCell(p: PrioritizedFinding): string {
 	return `${escapeHtml(p.finding.title)}${amb}${badge}`;
 }
 
+/**
+ * Render a collapsible causal chain for a prioritized finding (P3.2b).
+ * Returns "" when causalSteps is absent or empty (byte-unchanged off).
+ * Uses a <details>/<summary> for collapsibility. All dynamic text is HTML-escaped.
+ */
+function renderCausalChainHtml(
+	steps: CausalStep[] | undefined,
+	findingIdx: number,
+): string {
+	if (!steps || steps.length === 0) return "";
+	const rows = steps
+		.map((s) => {
+			const loc = `${escapeHtml(s.file)}:${s.line}`;
+			const hotMark = s.isHot
+				? `<span style="color:#FFB900;font-weight:600">\u26a1 </span>`
+				: "";
+			if (s.routineName !== undefined) {
+				const pct =
+					s.selfTimePercent !== undefined && s.totalTimePercent !== undefined
+						? ` <span style="color:#505C6D">(${s.selfTimePercent.toFixed(1)}%/${s.totalTimePercent.toFixed(1)}%)</span>`
+						: "";
+				return `<div style="margin:2px 0;padding-left:8px">\u21b3 ${hotMark}${escapeHtml(s.note)} @ <code>${escapeHtml(s.routineName)}</code>${pct} <span style="color:#505C6D;font-size:0.85em">[${loc}]</span></div>`;
+			}
+			return `<div style="margin:2px 0;padding-left:8px">\u21b3 ${hotMark}${escapeHtml(s.note)} <span style="color:#505C6D;font-size:0.85em">[${loc}]</span></div>`;
+		})
+		.join("\n");
+	return `<details style="margin:4px 0 4px 8px;font-size:0.88em">
+      <summary style="cursor:pointer;color:#505C6D">Causal chain (finding #${findingIdx + 1})</summary>
+      <div style="font-family:monospace;padding:4px 0">
+        ${rows}
+      </div>
+    </details>`;
+}
+
 function renderFusion(result: AnalysisResult): string {
 	const fv = result.fusionViews;
 	if (!fv || fv.prioritizedFindings.length === 0) return "";
@@ -213,6 +248,12 @@ function renderFusion(result: AnalysisResult): string {
 		})
 		.join("\n");
 
+	// P3.2b: render causal chains (collapsible) after the table (gated on causalSteps).
+	const chains = fv.prioritizedFindings
+		.map((p, i) => renderCausalChainHtml(p.causalSteps, i))
+		.filter((h) => h.length > 0)
+		.join("\n");
+
 	return `<div class="section">
     <h2>Runtime-Prioritized Static Findings</h2>
     <table>
@@ -223,6 +264,7 @@ function renderFusion(result: AnalysisResult): string {
         ${rows}
       </tbody>
     </table>
+    ${chains}
   </div>`;
 }
 

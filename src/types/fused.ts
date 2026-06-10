@@ -219,6 +219,14 @@ export interface FusedModel {
 	correlationSummary: CorrelationSummary;
 
 	/**
+	 * Full routine inventory (all universe routines from the engine).
+	 * Used by views.ts to build the stableRoutineId → MethodBreakdown map for
+	 * causal-chain enrichment (P3.2b). Set by fuseProfile after correlate().
+	 * Optional so that models built directly via correlate() in tests remain valid.
+	 */
+	allRoutines?: RoutineIdentity[];
+
+	/**
 	 * Set when the identity intersection between the profiled methods and the
 	 * analyzed workspace is zero over a non-trivial profile — likely a mismatch
 	 * between the --source workspace and the profiled app.

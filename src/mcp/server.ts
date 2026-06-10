@@ -18,6 +18,7 @@ import { isAlWorkspaceDir } from "../semantic/engine-runner.js";
 import { fuseProfile } from "../semantic/fuse.js";
 import {
 	annotateHotspots,
+	type CausalStep,
 	type HotspotAnnotation,
 	type PrioritizedFinding,
 	prioritizeFindings,
@@ -39,6 +40,48 @@ interface McpFusionBlock {
 	hotspotAnnotations: HotspotAnnotation[];
 	prioritizedFindings: PrioritizedFinding[];
 	correlationSummary: CorrelationSummary;
+}
+
+/**
+ * Cap a causal chain to avoid LLM context blowout (P3.2b).
+ * Strategy: keep the first step + the hottest step (highest selfTimePercent) +
+ * the last step. All others are dropped. A chain of ≤ MCP_CHAIN_CAP steps is
+ * returned unchanged. The chain order is PRESERVED (no reordering).
+ */
+const MCP_CHAIN_CAP = 8;
+
+function capCausalChain(
+	steps: CausalStep[] | undefined,
+): CausalStep[] | undefined {
+	if (!steps || steps.length <= MCP_CHAIN_CAP) return steps;
+	// Find the index of the hottest step (highest selfTimePercent; tiebreak first).
+	let hotIdx = 0;
+	let hotSelf = -1;
+	for (let i = 0; i < steps.length; i++) {
+		const s = steps[i]?.selfTimePercent ?? 0;
+		if (s > hotSelf) {
+			hotSelf = s;
+			hotIdx = i;
+		}
+	}
+	// Always include indices: 0, hotIdx, last. Preserve order, deduplicate.
+	const mustInclude = new Set([0, hotIdx, steps.length - 1]);
+	return steps.filter((_, i) => mustInclude.has(i));
+}
+
+/**
+ * Apply causal-chain capping to a list of prioritized findings (MCP context guard).
+ * Returns a new array with capped causalSteps; other fields unchanged.
+ */
+function capFindingChains(
+	findings: PrioritizedFinding[],
+): PrioritizedFinding[] {
+	return findings.map((p) => {
+		if (!p.causalSteps) return p;
+		const capped = capCausalChain(p.causalSteps);
+		if (capped === p.causalSteps) return p; // no-op (within cap)
+		return { ...p, causalSteps: capped };
+	});
 }
 
 export interface McpServerOptions {
@@ -151,12 +194,13 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 							const { weighted } = prioritizeFindings(fuseResult, allMethods);
 							// R2-12: build a TRIMMED object — unweightedFindings is
 							// deliberately excluded from MCP output.
+							// P3.2b: cap causal chains to avoid LLM context blowout.
 							fusionBlock = {
 								hotspotAnnotations: annotateHotspots(
 									fuseResult,
 									result.hotspots,
 								),
-								prioritizedFindings: weighted,
+								prioritizedFindings: capFindingChains(weighted),
 								correlationSummary: fuseResult.correlationSummary,
 							};
 						}
@@ -265,13 +309,14 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 				const { weighted } = prioritizeFindings(fuseResult, allMethods);
 				// R2-12: return only weighted (selfTimePercent > 0) findings.
 				// Cold/orphan/unkeyable counts are available via correlationSummary.
+				// P3.2b: cap causal chains to avoid LLM context blowout.
 				return {
 					content: [
 						{
 							type: "text" as const,
 							text: JSON.stringify(
 								{
-									prioritizedFindings: weighted.slice(0, top),
+									prioritizedFindings: capFindingChains(weighted).slice(0, top),
 									correlationSummary: fuseResult.correlationSummary,
 								},
 								null,

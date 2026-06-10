@@ -97,6 +97,12 @@ export async function fuseProfile(
 	// When patterns is absent or empty, corroborate is a no-op (graceful).
 	corroborate(fused, methods, opts?.patterns ?? []);
 
+	// P3.2b: attach all inventory routines so views.ts can build the
+	// stableRoutineId → MethodBreakdown map for causal-chain enrichment.
+	// Done here (not in correlate.ts) so correlate stays pure and callers that
+	// build FusedModel directly in tests remain valid.
+	fused.allRoutines = engine.routines;
+
 	return fused;
 }
 

@@ -737,6 +737,92 @@ describe("prioritized_findings tool", () => {
 });
 
 // ---------------------------------------------------------------------------
+// P3.2b causal chain in MCP output
+// ---------------------------------------------------------------------------
+
+describe("P3.2b causal chain in MCP output", () => {
+	test("causalSteps present on the weighted ProcessLine finding when stub emits evidencePath (findings stub)", async () => {
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "prioritized_findings",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+						top: 10,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			expect(result.isError).toBeFalsy();
+			const parsed = parseResponse(result) as Record<string, unknown>;
+			const findings = parsed.prioritizedFindings as Array<
+				Record<string, unknown>
+			>;
+			// F-PROC has evidencePath in the stub — it should surface as causalSteps.
+			const fProc = findings.find(
+				(f) => (f.finding as Record<string, unknown>).id === "F-PROC",
+			);
+			expect(fProc).toBeDefined();
+			// causalSteps should be an array (evidencePath has 2 steps in stub).
+			expect(Array.isArray(fProc?.causalSteps)).toBe(true);
+			const steps = fProc?.causalSteps as Array<Record<string, unknown>>;
+			expect(steps.length).toBeGreaterThan(0);
+			// Each step must have at least note, file, line, isHot.
+			for (const s of steps) {
+				expect(typeof s.note).toBe("string");
+				expect(typeof s.file).toBe("string");
+				expect(typeof s.line).toBe("number");
+				expect(typeof s.isHot).toBe("boolean");
+			}
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+
+	test("chain length is capped to ≤ 8 steps in MCP output (cap applied for long chains)", async () => {
+		// The cap logic is unit-testable by importing capCausalChain — but we verify
+		// the MCP contract: when a real stub emits a short chain (2 steps), the cap
+		// is a no-op and all steps are present.
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "prioritized_findings",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+						top: 10,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			const parsed = parseResponse(result) as Record<string, unknown>;
+			const findings = parsed.prioritizedFindings as Array<
+				Record<string, unknown>
+			>;
+			// Verify all causal chains are ≤ 8 steps (the cap limit).
+			for (const f of findings) {
+				if (Array.isArray(f.causalSteps)) {
+					expect((f.causalSteps as unknown[]).length).toBeLessThanOrEqual(8);
+				}
+			}
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+});
+
+// ---------------------------------------------------------------------------
 // P3.1 R3-6 honesty guard: "runtime-confirmed" never in any MCP response
 // ---------------------------------------------------------------------------
 

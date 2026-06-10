@@ -468,3 +468,118 @@ describe("formatAnalysisTerminal — runtime-correlated badge (P3.1)", () => {
 		expect(out).not.toContain("runtime-confirmed");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Causal chain render tests (P3.2b)
+// ---------------------------------------------------------------------------
+
+describe("formatAnalysisTerminal — causal chain (P3.2b)", () => {
+	function makeBaseFinding(): PrioritizedFinding {
+		return {
+			finding: {
+				id: "F1",
+				fingerprint: "fp1",
+				detector: "d1-db-op-in-loop",
+				title: "DB op in loop",
+				rootCause: "loop",
+				severity: "high",
+				confidence: { level: "likely" },
+				primaryLocation: {
+					file: "src/X.al",
+					line: 5,
+					column: 1,
+					objectId: "g/Codeunit/1",
+					objectName: "X",
+				},
+				affectedObjects: [],
+				affectedTables: [],
+			},
+			functionName: "ProcessLine",
+			objectType: "Codeunit",
+			objectId: 1,
+			appName: "App",
+			selfTimePercent: 42,
+			totalTimePercent: 50,
+			efficiencyScore: 0.84,
+			frameCount: 1,
+			status: "matched",
+			attributionConfidence: "exact",
+		};
+	}
+
+	test("causal chain renders when causalSteps is present", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const finding = makeBaseFinding();
+		finding.causalSteps = [
+			{
+				note: "calls",
+				routineName: "OnRun",
+				objectType: "Codeunit",
+				objectId: 50000,
+				file: "ws:src/Cod50000.al",
+				line: 5,
+				selfTimePercent: 0,
+				totalTimePercent: 90,
+				isHot: false,
+			},
+			{
+				note: "for loop",
+				routineName: "ProcessLine",
+				objectType: "Codeunit",
+				objectId: 50000,
+				file: "ws:src/Cod50000.al",
+				line: 10,
+				selfTimePercent: 42,
+				totalTimePercent: 42,
+				isHot: true,
+			},
+		];
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [finding],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisTerminal(result);
+		expect(out).toContain("causal chain");
+		expect(out).toContain("OnRun");
+		expect(out).toContain("ProcessLine");
+		expect(out).toContain("for loop");
+	});
+
+	test("no causal chain rendered when causalSteps absent (byte-unchanged off)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const finding = makeBaseFinding();
+		// causalSteps intentionally absent
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [finding],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisTerminal(result);
+		// Table still renders but NO causal chain section
+		expect(out).toContain("Runtime-Prioritized Static Findings");
+		expect(out).not.toContain("causal chain");
+	});
+});

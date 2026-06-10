@@ -510,3 +510,85 @@ describe("formatAnalysisMarkdown — runtime-correlated badge (P3.1)", () => {
 		expect(out).not.toContain("runtime-confirmed");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Causal chain render tests (P3.2b)
+// ---------------------------------------------------------------------------
+
+describe("formatAnalysisMarkdown — causal chain (P3.2b)", () => {
+	test("causal chain renders as blockquote under the table when causalSteps present", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const finding: PrioritizedFinding = {
+			...BASE_FINDING_MD,
+			causalSteps: [
+				{
+					note: "calls",
+					routineName: "OnRun",
+					objectType: "Codeunit",
+					objectId: 50000,
+					file: "ws:src/Cod50000.al",
+					line: 5,
+					selfTimePercent: 0,
+					totalTimePercent: 90,
+					isHot: false,
+				},
+				{
+					note: "for loop",
+					routineName: "ProcessLine",
+					objectType: "Codeunit",
+					objectId: 50000,
+					file: "ws:src/Cod50000.al",
+					line: 10,
+					selfTimePercent: 42,
+					totalTimePercent: 42,
+					isHot: true,
+				},
+			],
+		};
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [finding],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("causal chain");
+		expect(out).toContain("OnRun");
+		expect(out).toContain("ProcessLine");
+		// blockquote style
+		expect(out).toContain("> ");
+	});
+
+	test("causal chain absent when causalSteps not set (byte-unchanged off)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [BASE_FINDING_MD],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("Runtime-Prioritized Static Findings");
+		expect(out).not.toContain("causal chain");
+	});
+});

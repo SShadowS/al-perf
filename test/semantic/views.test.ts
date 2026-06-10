@@ -8,6 +8,7 @@ import { correlate } from "../../src/semantic/correlate.js";
 import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
 import {
 	annotateHotspots,
+	type CausalStep,
 	prioritizeFindings,
 } from "../../src/semantic/views.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
@@ -610,5 +611,241 @@ describe("prioritizeFindings — per-finding corroboratingPatterns (P3.1)", () =
 			"repeated-siblings",
 		]);
 		expect(ft2?.corroboratingPatterns).toEqual(ft1?.corroboratingPatterns);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// causalSteps (P3.2b)
+// ---------------------------------------------------------------------------
+
+describe("prioritizeFindings — causalSteps (P3.2b)", () => {
+	/**
+	 * Build an EvidenceStep-like object for use in FindingSummary.evidencePath.
+	 * Uses the :-form stableRoutineId.
+	 */
+	function makeEvidenceStep(
+		routineId: string,
+		file: string,
+		line: number,
+		note: string,
+	) {
+		return { routineId, file, line, note };
+	}
+
+	it("causalSteps: deep callee step has high selfTime + isHot:true, shallow step lower", () => {
+		// Three routines: entry (self 5%), mid (self 10%), leaf (self 40%).
+		// evidencePath: entry → mid → leaf. Causal chain should carry runtime cost.
+		const stableEntry = `${APP_GUID}:Codeunit:100#entry`;
+		const stableMid = `${APP_GUID}:Codeunit:101#mid`;
+		const stableLeaf = `${APP_GUID}:Codeunit:102#leaf`;
+
+		const methodEntry = makeMethod("Entry", "Codeunit", 100, 5, 50);
+		const methodMid = makeMethod("Mid", "Codeunit", 101, 10, 45);
+		const methodLeaf = makeMethod("Leaf", "Codeunit", 102, 40, 40);
+
+		const finding = makeFinding(
+			"FLeaf",
+			"fpLeaf",
+			"d1",
+			"Entry",
+			"Codeunit",
+			100,
+		);
+		// Attach evidencePath
+		(finding as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableEntry, "ws:src/Entry.al", 5, "calls"),
+			makeEvidenceStep(stableMid, "ws:src/Mid.al", 12, "calls"),
+			makeEvidenceStep(stableLeaf, "ws:src/Leaf.al", 30, "for loop"),
+		];
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("Entry", 100, "Codeunit", stableEntry),
+			makeRoutine("Mid", 101, "Codeunit", stableMid),
+			makeRoutine("Leaf", 102, "Codeunit", stableLeaf),
+		];
+
+		const engine = makeEngine(routines, [finding]);
+		const fused = correlate([methodEntry, methodMid, methodLeaf], engine);
+
+		const { weighted } = prioritizeFindings(
+			fused,
+			[methodEntry, methodMid, methodLeaf],
+			routines,
+		);
+		const row = weighted.find((r) => r.finding.id === "FLeaf");
+		expect(row).toBeDefined();
+		expect(row?.causalSteps).toBeDefined();
+		const steps = row?.causalSteps as CausalStep[];
+		expect(steps).toHaveLength(3);
+
+		// Preserve evidencePath order
+		expect(steps[0]?.note).toBe("calls");
+		expect(steps[1]?.note).toBe("calls");
+		expect(steps[2]?.note).toBe("for loop");
+
+		// Leaf step (index 2) is the hot one
+		expect(steps[2]?.selfTimePercent).toBe(40);
+		expect(steps[2]?.isHot).toBe(true);
+		expect(steps[2]?.routineName).toBe("Leaf");
+		expect(steps[2]?.objectType).toBe("Codeunit");
+		expect(steps[2]?.objectId).toBe(102);
+
+		// Entry step (self 5%) is not hot by the callee's standard
+		expect(steps[0]?.selfTimePercent).toBe(5);
+		expect(steps[0]?.isHot).toBe(true); // self > 0 → isHot
+		expect(steps[0]?.routineName).toBe("Entry");
+
+		// Mid step
+		expect(steps[1]?.selfTimePercent).toBe(10);
+		expect(steps[1]?.isHot).toBe(true);
+	});
+
+	it("causalSteps: unresolved step (routineId not in inventory) → no percentages, isHot:false", () => {
+		const stableEntry = `${APP_GUID}:Codeunit:200#entry`;
+		const stableBuiltin = "external-guid:Codeunit:1000#builtin"; // NOT in inventory
+
+		const methodEntry = makeMethod("Entry", "Codeunit", 200, 20, 50);
+
+		const finding = makeFinding("FE", "fpE", "d1", "Entry", "Codeunit", 200);
+		(finding as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableEntry, "ws:src/Entry.al", 5, "calls"),
+			makeEvidenceStep(stableBuiltin, "external:lib.al", 99, "built-in call"),
+		];
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("Entry", 200, "Codeunit", stableEntry),
+			// stableBuiltin intentionally NOT in routines
+		];
+
+		const engine = makeEngine(routines, [finding]);
+		const fused = correlate([methodEntry], engine);
+
+		const { weighted } = prioritizeFindings(fused, [methodEntry], routines);
+		const row = weighted.find((r) => r.finding.id === "FE");
+		expect(row?.causalSteps).toBeDefined();
+		const steps = row?.causalSteps as CausalStep[];
+		expect(steps).toHaveLength(2);
+
+		// Resolved step
+		expect(steps[0]?.routineName).toBe("Entry");
+		expect(steps[0]?.selfTimePercent).toBeDefined();
+		expect(steps[0]?.isHot).toBe(true);
+
+		// Unresolved (builtin) step — HONEST: no fabricated cost
+		expect(steps[1]?.routineName).toBeUndefined();
+		expect(steps[1]?.selfTimePercent).toBeUndefined();
+		expect(steps[1]?.totalTimePercent).toBeUndefined();
+		expect(steps[1]?.isHot).toBe(false);
+		expect(steps[1]?.note).toBe("built-in call");
+		expect(steps[1]?.file).toBe("external:lib.al");
+		expect(steps[1]?.line).toBe(99);
+	});
+
+	it("causalSteps: no evidencePath → causalSteps undefined", () => {
+		const stableR = `${APP_GUID}:Codeunit:300#r`;
+		const method = makeMethod("Proc", "Codeunit", 300, 30, 30);
+		const finding = makeFinding("FP", "fpP", "d1", "Proc", "Codeunit", 300);
+		// No evidencePath set
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("Proc", 300, "Codeunit", stableR),
+		];
+		const engine = makeEngine(routines, [finding]);
+		const fused = correlate([method], engine);
+
+		const { weighted } = prioritizeFindings(fused, [method], routines);
+		const row = weighted.find((r) => r.finding.id === "FP");
+		expect(row).toBeDefined();
+		expect(row?.causalSteps).toBeUndefined();
+	});
+
+	it("causalSteps: cold/unweighted findings NEVER get causalSteps (R2-12)", () => {
+		const stableHot = `${APP_GUID}:Codeunit:400#hot`;
+		const stableCold = `${APP_GUID}:Codeunit:401#cold`;
+
+		const methodHot = makeMethod("Hot", "Codeunit", 400, 50, 50);
+		// ColdRoutine is NOT in methods (not hot in the profile)
+
+		const findingHot = makeFinding("FH", "fpH", "d1", "Hot", "Codeunit", 400);
+		(findingHot as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableHot, "ws:src/Hot.al", 10, "loop"),
+		];
+
+		const findingCold = makeFinding("FC", "fpC", "d1", "Cold", "Codeunit", 401);
+		(findingCold as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableCold, "ws:src/Cold.al", 5, "loop"),
+		];
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("Hot", 400, "Codeunit", stableHot),
+			makeRoutine("Cold", 401, "Codeunit", stableCold),
+		];
+		const engine = makeEngine(routines, [findingHot, findingCold]);
+		const fused = correlate([methodHot], engine);
+
+		const { weighted, unweighted } = prioritizeFindings(
+			fused,
+			[methodHot],
+			routines,
+		);
+
+		// Weighted hot finding DOES get causalSteps
+		const hotRow = weighted.find((r) => r.finding.id === "FH");
+		expect(hotRow?.causalSteps).toBeDefined();
+
+		// Cold unweighted finding NEVER gets causalSteps
+		const coldRow = unweighted.find((r) => r.finding.id === "FC");
+		expect(coldRow).toBeDefined();
+		expect(coldRow?.causalSteps).toBeUndefined();
+	});
+
+	it("causalSteps: deterministic — same result on two calls (R2-14)", () => {
+		const stableR = `${APP_GUID}:Codeunit:500#r`;
+		const method = makeMethod("Stable", "Codeunit", 500, 25, 25);
+		const finding = makeFinding("FS", "fpS", "d1", "Stable", "Codeunit", 500);
+		(finding as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableR, "ws:src/Stable.al", 7, "step"),
+		];
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("Stable", 500, "Codeunit", stableR),
+		];
+		const engine = makeEngine(routines, [finding]);
+		const fused1 = correlate([method], engine);
+		const fused2 = correlate([method], engine);
+
+		const r1 = prioritizeFindings(fused1, [method], routines);
+		const r2 = prioritizeFindings(fused2, [method], routines);
+		expect(JSON.stringify(r1.weighted)).toBe(JSON.stringify(r2.weighted));
+	});
+
+	it("causalSteps: no routines passed → all steps are unresolved (honest)", () => {
+		// When routines is undefined, steps get no runtime info (no fabrication).
+		const stableR = `${APP_GUID}:Codeunit:600#r`;
+		const method = makeMethod("P", "Codeunit", 600, 30, 30);
+		const finding = makeFinding("FF", "fpF", "d1", "P", "Codeunit", 600);
+		(finding as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableR, "ws:src/P.al", 5, "calls"),
+		];
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("P", 600, "Codeunit", stableR),
+		];
+		const engine = makeEngine(routines, [finding]);
+		const fused = correlate([method], engine);
+
+		// Call WITHOUT routines param
+		const { weighted } = prioritizeFindings(fused, [method]);
+		const row = weighted.find((r) => r.finding.id === "FF");
+		// causalSteps may still be present but all steps unresolved
+		const steps = row?.causalSteps;
+		if (steps) {
+			// All steps must be unresolved (no allRoutines on bare FusedModel from correlate)
+			for (const s of steps) {
+				expect(s.routineName).toBeUndefined();
+				expect(s.selfTimePercent).toBeUndefined();
+				expect(s.isHot).toBe(false);
+			}
+		}
 	});
 });
