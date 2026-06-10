@@ -1,0 +1,55 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": {
+        "functionName": "OnRun",
+        "scriptId": "CodeUnit_51000",
+        "url": "al-preview://allang/Codeunit/51000/Codeunit_51000.dal",
+        "lineNumber": 5,
+        "columnNumber": 4
+      },
+      "hitCount": 0,
+      "children": [2],
+      "declaringApplication": {
+        "appName": "Test Extension",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "My Worker",
+        "objectId": 51000
+      },
+      "frameIdentifier": 11111
+    },
+    {
+      "id": 2,
+      "callFrame": {
+        "functionName": "ProcessRecord",
+        "scriptId": "CodeUnit_51000",
+        "url": "al-preview://allang/Codeunit/51000/Codeunit_51000.dal",
+        "lineNumber": 20,
+        "columnNumber": 4
+      },
+      "hitCount": 5,
+      "children": [],
+      "declaringApplication": {
+        "appName": "Test Extension",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "My Worker",
+        "objectId": 51000
+      },
+      "frameIdentifier": 22222
+    }
+  ],
+  "startTime": 63793000000000000,
+  "endTime":   63793000001000000,
+  "samples": [2, 2, 2, 2, 2],
+  "timeDeltas": [0, 100000, 100000, 100000, 100000],
+  "kind": 1
+}

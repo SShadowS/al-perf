@@ -1,3 +1,4 @@
+import type { FusionViews } from "../semantic/views.js";
 import type {
 	AppBreakdown,
 	MethodBreakdown,
@@ -5,7 +6,6 @@ import type {
 } from "../types/aggregated.js";
 import type { AIFinding } from "../types/ai-findings.js";
 import type { DetectedPattern } from "../types/patterns.js";
-import type { FusionViews } from "../semantic/views.js";
 
 export interface AnalysisResult {
 	meta: {
@@ -153,6 +153,10 @@ export interface MethodDelta {
 	afterSelfTime: number;
 	deltaSelfTime: number;
 	deltaPercent: number;
+	beforeTotalTime: number;
+	afterTotalTime: number;
+	deltaTotalTime: number;
+	deltaTotalPercent: number;
 	beforeHitCount: number;
 	afterHitCount: number;
 }

@@ -380,6 +380,14 @@ export async function compareProfiles(
 						? 100
 						: 0;
 
+			const deltaTotalTime = afterMethod.totalTime - beforeMethod.totalTime;
+			const deltaTotalPercent =
+				beforeMethod.totalTime !== 0
+					? (deltaTotalTime / beforeMethod.totalTime) * 100
+					: afterMethod.totalTime > 0
+						? 100
+						: 0;
+
 			const delta: MethodDelta = {
 				functionName: afterMethod.functionName,
 				objectType: afterMethod.objectType,
@@ -390,13 +398,17 @@ export async function compareProfiles(
 				afterSelfTime: afterMethod.selfTime,
 				deltaSelfTime,
 				deltaPercent,
+				beforeTotalTime: beforeMethod.totalTime,
+				afterTotalTime: afterMethod.totalTime,
+				deltaTotalTime,
+				deltaTotalPercent,
 				beforeHitCount: beforeMethod.hitCount,
 				afterHitCount: afterMethod.hitCount,
 			};
 
-			if (deltaSelfTime > 0) {
+			if (deltaSelfTime > 0 || deltaTotalTime > 0) {
 				regressions.push(delta);
-			} else if (deltaSelfTime < 0) {
+			} else if (deltaSelfTime < 0 || deltaTotalTime < 0) {
 				improvements.push(delta);
 			}
 		} else {

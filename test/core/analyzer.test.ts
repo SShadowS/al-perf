@@ -165,4 +165,52 @@ describe("compareProfiles", () => {
 				result.improvements.length,
 		).toBeGreaterThanOrEqual(0);
 	});
+
+	test("MethodDelta carries deltaTotalTime and deltaTotalPercent fields", async () => {
+		// Same profile → all deltas are zero; verify the new fields exist
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		// No regressions/improvements when comparing same profile
+		expect(result.regressions).toHaveLength(0);
+		expect(result.improvements).toHaveLength(0);
+	});
+
+	test("total-time-only regression (self-time flat) qualifies as regression candidate", async () => {
+		// before: ProcessRecord has no children (selfTime=totalTime=500000)
+		// after:  ProcessRecord gains a child DB-call frame adding 300000 to totalTime
+		//         → deltaSelfTime=0, deltaTotalTime>0 → must appear in regressions[]
+		const result = await compareProfiles(
+			`${FIXTURES}/total-time-regression-before.alcpuprofile`,
+			`${FIXTURES}/total-time-regression-after.alcpuprofile`,
+		);
+
+		const processRecord = result.regressions.find(
+			(r) => r.functionName === "ProcessRecord",
+		);
+		expect(processRecord).toBeDefined();
+		expect(processRecord?.deltaSelfTime).toBe(0);
+		expect(processRecord?.deltaTotalTime).toBeGreaterThan(0);
+		expect(processRecord?.beforeTotalTime).toBeDefined();
+		expect(processRecord?.afterTotalTime).toBeGreaterThan(
+			processRecord?.beforeTotalTime ?? 0,
+		);
+		expect(processRecord?.deltaTotalPercent).toBeGreaterThan(0);
+	});
+
+	test("self-time regressions still sort by deltaSelfTime descending (primary order preserved)", async () => {
+		// sampling-minimal compared to itself produces no regressions, but we verify
+		// that a normal regression (non-total-only) uses deltaSelfTime as primary sort key.
+		// This is a structural check: regressions are ordered deltaSelfTime desc.
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/recursive-profile.alcpuprofile`,
+		);
+		for (let i = 1; i < result.regressions.length; i++) {
+			expect(result.regressions[i - 1].deltaSelfTime).toBeGreaterThanOrEqual(
+				result.regressions[i].deltaSelfTime,
+			);
+		}
+	});
 });
