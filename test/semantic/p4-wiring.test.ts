@@ -15,10 +15,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { compareProfiles } from "../../src/core/analyzer.js";
+import {
+	appVersionForApp,
+	compareProfiles,
+	normalizeAppGuid,
+} from "../../src/core/analyzer.js";
+import { parseProfileFromRaw } from "../../src/core/parser.js";
 import type { DiffAnalysis } from "../../src/semantic/diff-runner.js";
 import { runEngineDiff } from "../../src/semantic/diff-runner.js";
 import { correlateRegressions } from "../../src/semantic/regression-correlate.js";
+import type { RawProfile } from "../../src/types/profile.js";
 
 const FIXTURE_DIR = resolve(import.meta.dir, "../fixtures/fusion");
 const WS_MIN = resolve(FIXTURE_DIR, "ws-min");
@@ -80,6 +86,131 @@ describe("compareProfiles — neither source (byte-unchanged)", () => {
 		expect(result.meta.afterPath).toBeTruthy();
 		expect(Array.isArray(result.regressions)).toBe(true);
 		expect(Array.isArray(result.newMethods)).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Version guard — appVersionForApp matches the WORKSPACE app by appId,
+// NOT the globally most-frequent (base/3rd-party) frame (P4.2 soundness fix).
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a synthetic multi-app sampling profile node.
+ * `appId` may be dash-less hex (as real BC profiles emit).
+ */
+function makeNode(
+	id: number,
+	appId: string,
+	appName: string,
+	appVersion: string,
+	children: number[] = [],
+): RawProfile["nodes"][number] {
+	return {
+		id,
+		callFrame: {
+			functionName: `Fn${id}`,
+			scriptId: `CodeUnit_${id}`,
+			url: `al-preview://allang/Codeunit/${id}/x.dal`,
+			lineNumber: 1,
+			columnNumber: 1,
+		},
+		hitCount: 1,
+		children,
+		declaringApplication: {
+			appId,
+			appName,
+			appPublisher: "pub",
+			appVersion,
+		},
+		applicationDefinition: {
+			objectType: "CodeUnit",
+			objectName: `Obj${id}`,
+			objectId: id,
+		},
+		frameIdentifier: id,
+	};
+}
+
+describe("appVersionForApp — version guard matches workspace app by appId", () => {
+	// The dashed workspace app.json id and the dash-less profile appId for the
+	// SAME app (BC profiles often drop dashes).
+	const EXT_ID_DASHED = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+	const EXT_ID_DASHLESS = "437dbf0e84ff417a965ded2bb9650972";
+	const BASE_APP_ID = "63ca2fa4-4f03-4f2b-a480-172fef340d3f"; // Base Application
+
+	test("multi-app profile: picks the EXTENSION's version, NOT the most-frequent base-app version", () => {
+		// Base Application dominates by frequency (3 frames) — the extension is
+		// low-frequency (1 frame). The OLD most-frequent logic would have returned
+		// the Base Application version ("24.0.0.0"); the appId-matched guard MUST
+		// return the extension's version ("2.1.0.0").
+		const raw: RawProfile = {
+			nodes: [
+				makeNode(1, BASE_APP_ID, "Base Application", "24.0.0.0", [2]),
+				makeNode(2, BASE_APP_ID, "Base Application", "24.0.0.0", [3]),
+				makeNode(3, BASE_APP_ID, "Base Application", "24.0.0.0", [4]),
+				// The target extension — low frequency, matches the workspace id.
+				makeNode(4, EXT_ID_DASHLESS, "My Extension", "2.1.0.0"),
+			],
+			startTime: 0,
+			endTime: 1000,
+		};
+		const parsed = parseProfileFromRaw(raw);
+
+		// Match by the dashed workspace app.json id (GUID-normalized on both sides).
+		const version = appVersionForApp(parsed, EXT_ID_DASHED);
+		expect(version).toBe("2.1.0.0");
+		expect(version).not.toBe("24.0.0.0");
+	});
+
+	test("GUID normalization: dash-less profile appId matches dashed app.json id", () => {
+		const raw: RawProfile = {
+			nodes: [makeNode(1, EXT_ID_DASHLESS, "My Extension", "3.0.0.0")],
+			startTime: 0,
+			endTime: 100,
+		};
+		const parsed = parseProfileFromRaw(raw);
+		// Workspace id has dashes; profile appId does not — normalization bridges them.
+		expect(appVersionForApp(parsed, EXT_ID_DASHED)).toBe("3.0.0.0");
+		// And the reverse (dashed profile, dash-less workspace id) also matches.
+		const raw2: RawProfile = {
+			nodes: [makeNode(1, EXT_ID_DASHED, "My Extension", "3.0.0.0")],
+			startTime: 0,
+			endTime: 100,
+		};
+		const parsed2 = parseProfileFromRaw(raw2);
+		expect(appVersionForApp(parsed2, EXT_ID_DASHLESS)).toBe("3.0.0.0");
+	});
+
+	test("no matching frame → undefined (NOT a fallback to most-frequent)", () => {
+		const raw: RawProfile = {
+			nodes: [
+				makeNode(1, BASE_APP_ID, "Base Application", "24.0.0.0", [2]),
+				makeNode(2, BASE_APP_ID, "Base Application", "24.0.0.0"),
+			],
+			startTime: 0,
+			endTime: 100,
+		};
+		const parsed = parseProfileFromRaw(raw);
+		// The workspace app simply isn't present in the profile → undefined,
+		// NOT the (most-frequent) Base Application version.
+		expect(appVersionForApp(parsed, EXT_ID_DASHED)).toBeUndefined();
+	});
+
+	test("undefined workspace id → undefined (never matches anything)", () => {
+		const raw: RawProfile = {
+			nodes: [makeNode(1, EXT_ID_DASHLESS, "My Extension", "3.0.0.0")],
+			startTime: 0,
+			endTime: 100,
+		};
+		const parsed = parseProfileFromRaw(raw);
+		expect(appVersionForApp(parsed, undefined)).toBeUndefined();
+	});
+
+	test("normalizeAppGuid: strips dashes + lowercases; empty for undefined", () => {
+		expect(normalizeAppGuid(EXT_ID_DASHED)).toBe(EXT_ID_DASHLESS);
+		expect(normalizeAppGuid("ABC-DEF")).toBe("abcdef");
+		expect(normalizeAppGuid(undefined)).toBe("");
+		expect(normalizeAppGuid("")).toBe("");
 	});
 });
 

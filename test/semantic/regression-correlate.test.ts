@@ -246,6 +246,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: "1.0.0.0",
 			afterAppVersion: "2.0.0.0",
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -299,6 +301,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -325,6 +329,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -372,6 +378,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -413,6 +421,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -448,6 +458,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -499,6 +511,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routineA, routineB],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -525,6 +539,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: "1.0.0.0",
 			afterAppVersion: "2.0.0.0",
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -550,6 +566,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [],
 			beforeAppVersion: "1.0.0.0",
 			afterAppVersion: "2.0.0.0",
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -612,6 +630,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routineA, routineB, routineC],
 			beforeAppVersion: "1.0.0.0",
 			afterAppVersion: "2.0.0.0",
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -658,6 +678,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -699,6 +721,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routineA, routineB],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 
@@ -730,6 +754,8 @@ describe("correlateRegressions", () => {
 			afterInventory: [routine],
 			beforeAppVersion: undefined,
 			afterAppVersion: undefined,
+			beforeAppId: undefined,
+			afterAppId: undefined,
 			alsemVersion: "0.0.0-test",
 		};
 

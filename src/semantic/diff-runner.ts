@@ -71,6 +71,14 @@ export interface DiffAnalysis {
 	beforeAppVersion: string | undefined;
 	/** Version string from the after-workspace app.json (`version` field). */
 	afterAppVersion: string | undefined;
+	/**
+	 * `id` GUID from the before-workspace app.json. Used to match the profile's
+	 * declaringApplication.appId so the version guard compares the RIGHT app
+	 * (not the globally most-frequent third-party/base-app frame).
+	 */
+	beforeAppId: string | undefined;
+	/** `id` GUID from the after-workspace app.json (see beforeAppId). */
+	afterAppId: string | undefined;
 	/** Engine version string from the diff envelope. */
 	alsemVersion: string;
 }
@@ -159,28 +167,36 @@ function degradeExit(label: string, res: SpawnResult): EngineDisabled | null {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace app.json version reader
+// Workspace app.json identity reader
 // ---------------------------------------------------------------------------
 
+/** The `id` GUID + `version` read from a workspace `app.json`. */
+export interface AppJsonIdentity {
+	/** The app's `id` GUID (used to match profile declaringApplication.appId). */
+	id: string | undefined;
+	/** The app's `version` string. */
+	version: string | undefined;
+}
+
 /**
- * Read the `version` field from `<wsDir>/app.json`.
- * Returns `undefined` if the file is missing or malformed.
+ * Read the `id` and `version` fields from `<wsDir>/app.json`.
+ * Either may be `undefined` if the file is missing/malformed or the field is
+ * absent. Defensive — never throws.
  */
-function readAppJsonVersion(wsDir: string): string | undefined {
+function readAppJsonIdentity(wsDir: string): AppJsonIdentity {
 	try {
 		const raw = readFileSync(join(wsDir, "app.json"), "utf-8");
 		const obj = JSON.parse(raw);
-		if (
-			typeof obj === "object" &&
-			obj !== null &&
-			typeof obj.version === "string"
-		) {
-			return obj.version;
+		if (typeof obj === "object" && obj !== null) {
+			return {
+				id: typeof obj.id === "string" ? obj.id : undefined,
+				version: typeof obj.version === "string" ? obj.version : undefined,
+			};
 		}
 	} catch {
-		// missing / malformed — return undefined
+		// missing / malformed — return undefined identity
 	}
-	return undefined;
+	return { id: undefined, version: undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -471,11 +487,16 @@ async function runEngineDiffUnsafe(
 	const invParsed = parseInventoryEnvelope(invRes.stdout);
 	if (!invParsed.ok) return { disabled: true, reason: invParsed.reason };
 
+	const beforeIdentity = readAppJsonIdentity(beforeWs);
+	const afterIdentity = readAppJsonIdentity(afterWs);
+
 	return {
 		findings: projectFindings(diffParsed.doc.payload.findings),
 		afterInventory: invParsed.doc.payload.routineInventory,
-		beforeAppVersion: readAppJsonVersion(beforeWs),
-		afterAppVersion: readAppJsonVersion(afterWs),
+		beforeAppVersion: beforeIdentity.version,
+		afterAppVersion: afterIdentity.version,
+		beforeAppId: beforeIdentity.id,
+		afterAppId: afterIdentity.id,
 		alsemVersion: diffParsed.doc.alsemVersion,
 	};
 }

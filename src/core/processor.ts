@@ -114,7 +114,16 @@ function createProcessedNode(raw: RawProfileNode): ProcessedNode {
 			...raw.applicationDefinition,
 			objectType: normalizeObjectType(raw.applicationDefinition.objectType),
 		},
-		declaringApplication: raw.declaringApplication,
+		// Carry declaringApplication through verbatim, including the appId GUID
+		// (used by the version guard to match the workspace app — P4.2 fix).
+		declaringApplication: raw.declaringApplication
+			? {
+					appId: raw.declaringApplication.appId,
+					appName: raw.declaringApplication.appName,
+					appPublisher: raw.declaringApplication.appPublisher,
+					appVersion: raw.declaringApplication.appVersion,
+				}
+			: undefined,
 		hitCount: raw.hitCount,
 		children: [],
 		depth: 0,

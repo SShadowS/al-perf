@@ -158,30 +158,45 @@ function isIdle(method: MethodBreakdown): boolean {
 }
 
 /**
- * Extract the primary app version from a ParsedProfile's node list.
- * Returns the most frequently occurring non-empty `appVersion` from
- * `declaringApplication`, or `undefined` when no version is present.
- * For single-app profiles all nodes carry the same version; for multi-app
- * profiles the most frequent one is the "primary" app (the one you own).
+ * Normalize an app GUID for comparison: strip dashes + lowercase.
+ * BC profile appIds are often dash-less hex (e.g. "437dbf0e84ff417a965ded2bb9650972")
+ * while app.json `id` carries dashes (e.g. "437dbf0e-84ff-417a-965d-ed2bb9650972").
+ * Returns "" for undefined/empty so a missing id never spuriously matches another.
+ * Exported for unit testing.
  */
-function extractPrimaryAppVersion(parsed: ParsedProfile): string | undefined {
-	const counts = new Map<string, number>();
+export function normalizeAppGuid(id: string | undefined): string {
+	if (!id) return "";
+	return id.replace(/-/g, "").toLowerCase();
+}
+
+/**
+ * Find the `appVersion` of the frames belonging to the WORKSPACE app
+ * (matched by `declaringApplication.appId` against the workspace app.json `id`,
+ * GUID-normalized on both sides). Returns `undefined` when no frame matches the
+ * workspace appId (do NOT fall back to most-frequent — a real BC profile is
+ * dominated by third-party/base-app frames, so most-frequent would compare the
+ * WRONG app's version and produce spurious version-mismatch noise).
+ *
+ * Tie-break: when multiple matching frames disagree on version (should not
+ * happen for one app in one profile), the FIRST-SEEN version wins.
+ *
+ * Exported for unit testing.
+ */
+export function appVersionForApp(
+	parsed: ParsedProfile,
+	workspaceAppId: string | undefined,
+): string | undefined {
+	const targetGuid = normalizeAppGuid(workspaceAppId);
+	if (!targetGuid) return undefined;
 	for (const node of parsed.nodes) {
-		const v = node.declaringApplication?.appVersion;
-		if (v) {
-			counts.set(v, (counts.get(v) ?? 0) + 1);
+		const da = node.declaringApplication;
+		if (!da?.appVersion) continue;
+		if (normalizeAppGuid(da.appId) === targetGuid) {
+			// First-seen version for the matched app wins (see tie-break note).
+			return da.appVersion;
 		}
 	}
-	if (counts.size === 0) return undefined;
-	let best: string | undefined;
-	let bestCount = 0;
-	for (const [v, c] of counts) {
-		if (c > bestCount) {
-			bestCount = c;
-			best = v;
-		}
-	}
-	return best;
+	return undefined;
 }
 
 /**
@@ -606,8 +621,17 @@ export async function compareProfiles(
 			if (isAlWorkspaceDir(beforeSource) && isAlWorkspaceDir(afterSource)) {
 				const diff = await runEngineDiff(beforeSource, afterSource);
 				if (!("disabled" in diff)) {
-					const beforeProfileVersion = extractPrimaryAppVersion(beforeParsed);
-					const afterProfileVersion = extractPrimaryAppVersion(afterParsed);
+					// Version guard: compare the WORKSPACE app's version (matched by
+					// appId against the profile's declaringApplication.appId) — never
+					// the globally most-frequent frame (which is base/3rd-party app).
+					const beforeProfileVersion = appVersionForApp(
+						beforeParsed,
+						diff.beforeAppId,
+					);
+					const afterProfileVersion = appVersionForApp(
+						afterParsed,
+						diff.afterAppId,
+					);
 					const fusion = correlateRegressions(
 						{
 							regressions: limitedRegressions,
@@ -639,6 +663,11 @@ export async function compareProfiles(
 						fuseResult,
 						afterNonIdleMethods,
 					);
+					// DELIBERATE: annotate over the FULL non-idle method set (not a
+					// top-N truncated slice as analyze.ts uses for its hotspots arg).
+					// A comparison has no `top` limit on the after side here, so the
+					// after-fusion view annotates every method that fused — the
+					// broadest honest coverage for the regression context.
 					baseResult.afterFusionViews = {
 						hotspotAnnotations: annotateHotspots(
 							fuseResult,
@@ -654,7 +683,10 @@ export async function compareProfiles(
 			// Fusion failure is non-fatal — result stays without afterFusionViews.
 		}
 	}
-	// else: neither source → plain comparison (byte-unchanged, no fusion fields).
+	// else: neither source, OR before-only (no afterSource) → plain comparison,
+	// byte-unchanged, no fusion fields. Before-only intentionally falls through to
+	// no-fusion: a diff needs both workspaces, and there is no "before-side"
+	// single-snapshot fallback (the regression context is the AFTER state).
 
 	return baseResult;
 }

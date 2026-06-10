@@ -9,6 +9,15 @@ export interface RawCallFrame {
 }
 
 export interface RawDeclaringApplication {
+	/**
+	 * The declaring app's `id` GUID. Present on every declaringApplication in a
+	 * real BC profile (keys: appId/appName/appPublisher/appVersion). Optional
+	 * because synthetic/test fixtures may omit it. Used to match the workspace
+	 * app.json `id` so the version guard compares the RIGHT app (not the
+	 * globally most-frequent third-party/base-app frame). BC profile appIds are
+	 * often dash-less hex (e.g. "437dbf0e84ff417a965ded2bb9650972").
+	 */
+	appId?: string;
 	appName: string;
 	appPublisher: string;
 	appVersion: string;
