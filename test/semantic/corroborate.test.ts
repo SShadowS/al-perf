@@ -23,6 +23,22 @@ function makeRoutine(
 	return { stableRoutineId, objectType, objectNumber, routineName };
 }
 
+function makeRoutineWithMember(
+	routineName: string,
+	objectNumber: number,
+	objectType: string,
+	stableRoutineId: string,
+	enclosingMember: string,
+): RoutineIdentity {
+	return {
+		stableRoutineId,
+		objectType,
+		objectNumber,
+		routineName,
+		enclosingMember,
+	};
+}
+
 function makeFinding(
 	id: string,
 	fingerprint: string,
@@ -46,6 +62,37 @@ function makeFinding(
 			objectId: `${APP_GUID}/${objectType}/${objectNumber}`,
 			objectName: "TestObject",
 			routineName,
+		},
+		affectedObjects: [`${APP_GUID}/${objectType}/${objectNumber}`],
+		affectedTables: [],
+	};
+}
+
+function makeFindingWithMember(
+	id: string,
+	fingerprint: string,
+	detector: string,
+	routineName: string | undefined,
+	objectType: string,
+	objectNumber: number,
+	enclosingMember: string,
+): FindingSummary {
+	return {
+		id,
+		fingerprint,
+		detector,
+		title: `Finding ${id}`,
+		rootCause: "test",
+		severity: "high",
+		confidence: { level: "likely" },
+		primaryLocation: {
+			file: "ws:src/Test.al",
+			line: 10,
+			column: 1,
+			objectId: `${APP_GUID}/${objectType}/${objectNumber}`,
+			objectName: "TestObject",
+			routineName,
+			enclosingMember,
 		},
 		affectedObjects: [`${APP_GUID}/${objectType}/${objectNumber}`],
 		affectedTables: [],
@@ -478,5 +525,146 @@ describe("corroborate", () => {
 
 		const attr = fused.attributions.get("ProcessRecords_Codeunit_50100");
 		expect(attr?.corroboratingPatterns).toEqual(["repeated-siblings"]); // deduplicated
+	});
+
+	// -----------------------------------------------------------------------
+	// P3.2c: field-trigger corroboration tests
+	//
+	// Previously, two OnValidate routines on the same table collided → ambiguous
+	// → no corroboration. P3.2a (Task 2) resolves them precisely via enclosingMember
+	// → matched. P3.2c (Task 4) verifies that the matched-only gate in corroborate.ts
+	// now NATURALLY includes these precise field triggers.
+	// -----------------------------------------------------------------------
+
+	it("P3.2c: field-trigger routine (now matched via enclosingMember) + repeated-siblings → corroborated", () => {
+		// A single field trigger: Table 72100, "Quantity" field OnValidate.
+		// Only ONE universe routine with enclosingMember="Quantity" → bare join key
+		// resolves to exactly one entry → status: "matched" (simple branch, not precise).
+		// The corroborate anchor (profile functionName in involvedMethods) must match
+		// formatMethodRef(m) = "Quantity - OnValidate (Table 72100)".
+		const fieldMethod = makeMethod("Quantity - OnValidate", "Table", 72100);
+		const methods = [fieldMethod];
+
+		const engine = makeEngine(
+			[
+				makeRoutineWithMember(
+					"OnValidate",
+					72100,
+					"Table",
+					"rt-qty",
+					"Quantity",
+				),
+			],
+			[
+				makeFindingWithMember(
+					"FQ",
+					"fp-qty",
+					"d1-db-op-in-loop",
+					"OnValidate",
+					"Table",
+					72100,
+					"Quantity",
+				),
+			],
+		);
+		const fused = correlate(methods, engine);
+
+		// Confirm the attribution resolved to matched (not ambiguous).
+		const attrKey = "Quantity - OnValidate_Table_72100";
+		const attr = fused.attributions.get(attrKey);
+		expect(attr).toBeDefined();
+		expect(attr?.status).toBe("matched");
+		expect(attr?.findings.some((f) => f.detector === "d1-db-op-in-loop")).toBe(
+			true,
+		);
+
+		// Anchor repeated-siblings to "Quantity - OnValidate (Table 72100)".
+		// anchorIndex 0 = parent (the field trigger is the loop owner here).
+		const patterns = [
+			makePattern("repeated-siblings", [
+				fmt("Quantity - OnValidate", "Table", 72100), // anchorIndex 0
+				fmt("GetRecord", "Codeunit", 99999),
+			]),
+		];
+
+		corroborate(fused, methods, patterns);
+
+		// P3.2c: matched field trigger → corroborated (previously was ambiguous → not corroborated).
+		expect(attr?.corroboratingPatterns).toEqual(["repeated-siblings"]);
+	});
+
+	it("P3.2c: two-field precise match — only the anchored field gets corroborated", () => {
+		// Two fields on Table 50100 each have an OnValidate trigger.
+		// Their inventory routines carry distinct enclosingMember → precise disambiguation
+		// resolves each profile frame to its own `matched` attribution.
+		// The repeated-siblings pattern is anchored to "Sell-to Customer No. - OnValidate"
+		// only → only that attribution gets corroborated; the Bill-to attribution does NOT.
+		const sellToMethod = makeMethod(
+			"Sell-to Customer No. - OnValidate",
+			"Table",
+			50100,
+		);
+		const billToMethod = makeMethod(
+			"Bill-to Customer No. - OnValidate",
+			"Table",
+			50100,
+		);
+		const methods = [sellToMethod, billToMethod];
+
+		const engine = makeEngine(
+			[
+				makeRoutineWithMember(
+					"OnValidate",
+					50100,
+					"Table",
+					"rt-sellto",
+					"Sell-to Customer No.",
+				),
+				makeRoutineWithMember(
+					"OnValidate",
+					50100,
+					"Table",
+					"rt-billto",
+					"Bill-to Customer No.",
+				),
+			],
+			[
+				// Finding for Sell-to field (enclosingMember discriminates).
+				makeFindingWithMember(
+					"F-SELL",
+					"fp-sell",
+					"d1-db-op-in-loop",
+					"OnValidate",
+					"Table",
+					50100,
+					"Sell-to Customer No.",
+				),
+			],
+		);
+		const fused = correlate(methods, engine);
+
+		// Both fields should be status: "matched" via precise disambiguation.
+		const sellKey = "Sell-to Customer No. - OnValidate_Table_50100";
+		const billKey = "Bill-to Customer No. - OnValidate_Table_50100";
+		const attrSell = fused.attributions.get(sellKey);
+		const attrBill = fused.attributions.get(billKey);
+		expect(attrSell?.status).toBe("matched");
+		expect(attrBill?.status).toBe("matched");
+
+		// Anchor repeated-siblings only to the Sell-to field.
+		const patterns = [
+			makePattern("repeated-siblings", [
+				fmt("Sell-to Customer No. - OnValidate", "Table", 50100), // anchorIndex 0
+				fmt("GetRecord", "Codeunit", 99999),
+			]),
+		];
+
+		corroborate(fused, methods, patterns);
+
+		// Sell-to: anchored + d1 finding → corroborated.
+		expect(attrSell?.corroboratingPatterns).toEqual(["repeated-siblings"]);
+
+		// Bill-to: NOT anchored (pattern anchors to sell-to only) → NOT corroborated.
+		expect(attrBill?.corroboratingPatterns).toBeUndefined();
 	});
 });
