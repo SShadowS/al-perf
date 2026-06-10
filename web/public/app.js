@@ -569,6 +569,10 @@ function renderFusion(data) {
  * Build the honest fusion annotation text for a hotspot row.
  * Returns null when no annotation exists for the given key.
  * Implements the R2-9/R2-10 honest-state semantics verbatim.
+ *
+ * SECURITY: returns RAW, UNESCAPED text (al-sem finding titles/rootCause derive
+ * from user AL source). The caller MUST insert it via `textContent`, NEVER via
+ * innerHTML — see the sole call site, which assigns `annCell.textContent`.
  */
 function fusionAnnotationText(fv, attrKey) {
 	if (!fv?.hotspotAnnotations) return null;
@@ -586,7 +590,8 @@ function fusionAnnotationText(fv, attrKey) {
 	}
 	// status === "matched"
 	if (ann.findings.length > 0) {
-		// Show first finding inline; escape all dynamic text
+		// Show first finding inline. Raw text — safe only because the caller
+		// inserts via textContent (see the SECURITY note on this function).
 		const f = ann.findings[0];
 		return (
 			"[" +
