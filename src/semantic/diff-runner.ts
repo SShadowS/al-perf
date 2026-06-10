@@ -45,6 +45,12 @@ export interface DiffDelta {
 	normalizedStableId: string;
 	/** Present for renamed routines — the new after-WS stableId. */
 	newStableId?: string;
+	/**
+	 * Present for renamed routines — the original before-WS stableId.
+	 * DISPLAY-ONLY (shows rename provenance — "renamed from X").
+	 * NOT used as a join key (PR2-3: join on newStableId ?? normalizedStableId).
+	 */
+	oldOriginalStableId?: string;
 	/** Display-friendly routine name. */
 	displayName: string;
 	/** From `details.resourceKind` (e.g. "table", "http"). */
@@ -196,6 +202,7 @@ interface DiffEnvelope {
 			subject: {
 				normalizedStableId: string;
 				newStableId?: string;
+				oldOriginalStableId?: string;
 				displayName: string;
 			};
 			details?: {
@@ -319,6 +326,9 @@ function projectFindings(
 		};
 		if (typeof subj.newStableId === "string") {
 			delta.newStableId = subj.newStableId;
+		}
+		if (typeof subj.oldOriginalStableId === "string") {
+			delta.oldOriginalStableId = subj.oldOriginalStableId;
 		}
 		if (f.details) {
 			if (typeof f.details.resourceKind === "string") {

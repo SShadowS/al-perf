@@ -3,6 +3,12 @@ import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
 import type {
+	AnnotatedRegression,
+	DiffDeltaSummary,
+	MethodMatch,
+	RegressionFusion,
+} from "../../semantic/regression-correlate.js";
+import type {
 	CausalStep,
 	HotspotAnnotation,
 	PrioritizedFinding,
@@ -415,6 +421,165 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
 	return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Regression-fusion render helpers (P4.1) — markdown
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a single DiffDeltaSummary line as markdown (inline under regression).
+ * NEVER says "caused by" (PR2-2 honesty).
+ */
+function renderDeltaSummaryMd(d: DiffDeltaSummary): string {
+	const resource = d.resourceId
+		? ` on ${d.resourceId}${d.resourceKind ? ` (${d.resourceKind})` : ""}`
+		: d.resourceKind
+			? ` (${d.resourceKind})`
+			: "";
+	const op = d.op ? ` [${d.op}]` : "";
+	const renamed = d.oldOriginalStableId
+		? ` — renamed from \`${d.oldOriginalStableId}\``
+		: "";
+	const ambig = d.ambiguous
+		? " _(ambiguous — multiple routines share this signature)_"
+		: "";
+	return `  > **[${d.category}]** ${d.kind}${resource}${op} *(${d.strength})*${renamed}${ambig}`;
+}
+
+/**
+ * Render all annotations for an AnnotatedRegression as markdown blockquotes.
+ */
+function renderAnnotatedRegressionMd(ar: AnnotatedRegression): string {
+	const lines: string[] = [];
+	if (ar.status === "correlated" || ar.status === "weakly-correlated") {
+		for (const d of ar.staticDeltas) {
+			if (ar.status === "weakly-correlated") {
+				const resource = d.resourceId ? ` on ${d.resourceId}` : "";
+				const renamed = d.oldOriginalStableId
+					? ` — renamed from \`${d.oldOriginalStableId}\``
+					: "";
+				lines.push(
+					`  > _(runtime-neutral capability — unlikely to explain the regression: [${d.category}] ${d.kind}${resource}${renamed})_`,
+				);
+			} else {
+				lines.push(renderDeltaSummaryMd(d));
+			}
+		}
+	} else {
+		// unexplained-static (PR2-2 honest wording)
+		lines.push(
+			"  > _no static change in this routine — cause is runtime/data/config or a callee; al-sem cannot explain it_",
+		);
+	}
+	return lines.join("\n");
+}
+
+/**
+ * Render the full regression-fusion block as markdown (P4.1).
+ * Returns "" when regressionFusion is absent (byte-unchanged).
+ */
+function renderRegressionFusionMd(
+	fusion: RegressionFusion | undefined,
+): string {
+	if (!fusion) return "";
+
+	const lines: string[] = [];
+
+	// 1. Version-mismatch warning — PROMINENTLY at the top (PR2-4).
+	if (fusion.correlationSummary.versionMismatch) {
+		const vm = fusion.correlationSummary.versionMismatch;
+		const beforeMsg =
+			vm.beforeProfileVersion && vm.beforeWorkspaceVersion
+				? `before profile \`${vm.beforeProfileVersion}\` ≠ source \`${vm.beforeWorkspaceVersion}\``
+				: "";
+		const afterMsg =
+			vm.afterProfileVersion && vm.afterWorkspaceVersion
+				? `after profile \`${vm.afterProfileVersion}\` ≠ source \`${vm.afterWorkspaceVersion}\``
+				: "";
+		const detail = [beforeMsg, afterMsg].filter(Boolean).join("; ");
+		lines.push(
+			`> ⚠ **profile version ≠ source version**${detail ? `: ${detail}` : ""}; correlations may be inaccurate`,
+		);
+		lines.push("");
+	}
+
+	// 2. Annotated regressions section.
+	if (fusion.annotatedRegressions.length > 0) {
+		lines.push("## Regression-Fusion Annotations");
+		lines.push("");
+		const cs = fusion.correlationSummary;
+		lines.push(
+			`_correlated: ${cs.correlated} | weakly-correlated: ${cs.weaklyCorrelated} | unexplained: ${cs.unexplained}_`,
+		);
+		lines.push("");
+		for (const ar of fusion.annotatedRegressions) {
+			const statusLabel =
+				ar.status === "correlated"
+					? "**[correlated]**"
+					: ar.status === "weakly-correlated"
+						? "_[weakly-correlated]_"
+						: "_[unexplained-static]_";
+			lines.push(
+				`- ${statusLabel} \`${ar.method.functionName}\` (${ar.method.objectType} ${ar.method.objectId})`,
+			);
+			const annotation = renderAnnotatedRegressionMd(ar);
+			if (annotation) lines.push(annotation);
+		}
+		lines.push("");
+	}
+
+	// 3. New/removed hot methods (PR2-5 headline).
+	const renderMethodMatchMd = (m: MethodMatch, action: string): string => {
+		const delta = m.delta;
+		const resource = delta.resourceId ? ` on ${delta.resourceId}` : "";
+		const renamed = delta.oldOriginalStableId
+			? ` — renamed from \`${delta.oldOriginalStableId}\``
+			: "";
+		const ambig = delta.ambiguous ? " _(ambiguous)_" : "";
+		return `- ✚ ${action} **${m.method.functionName}** (${m.method.objectType} ${m.method.objectId}) — [${delta.category}] ${delta.kind}${resource}${renamed}${ambig}`;
+	};
+
+	if (
+		fusion.newMethodCorrelations.length > 0 ||
+		fusion.removedMethodCorrelations.length > 0
+	) {
+		lines.push("## New / Removed Hot Methods");
+		lines.push("");
+		for (const m of fusion.newMethodCorrelations) {
+			lines.push(renderMethodMatchMd(m, "new hot method"));
+		}
+		for (const m of fusion.removedMethodCorrelations) {
+			lines.push(
+				`- ✖ removed hot method **${m.method.functionName}** (${m.method.objectType} ${m.method.objectId}) — [${m.delta.category}] ${m.delta.kind}`,
+			);
+		}
+		lines.push("");
+	}
+
+	// 4. Static-only changes summary.
+	if (fusion.staticOnlyChanges.length > 0) {
+		lines.push("## Static-Only Changes");
+		lines.push("");
+		lines.push(
+			"_No matching runtime regression — may be cost-neutral or externalized._",
+		);
+		lines.push("");
+		for (const d of fusion.staticOnlyChanges) {
+			const resource = d.resourceId ? ` on ${d.resourceId}` : "";
+			const crossBoundary =
+				d.basis === "none" ? " — _externalized cost, see subscribers_" : "";
+			const renamed = d.oldOriginalStableId
+				? ` — renamed from \`${d.oldOriginalStableId}\``
+				: "";
+			lines.push(
+				`- **[${d.category}]** ${d.kind}${resource} *(${d.strength})*${crossBoundary}${renamed} — ${d.displayName}`,
+			);
+		}
+		lines.push("");
+	}
+
+	return lines.join("\n");
+}
+
 /**
  * Format a comparison result as markdown.
  */
@@ -540,6 +705,12 @@ export function formatComparisonMarkdown(result: ComparisonResult): string {
 			);
 		}
 		lines.push("");
+	}
+
+	// 8. Regression-fusion annotations (P4.1 \u2014 absent when no sources supplied).
+	const fusionBlock = renderRegressionFusionMd(result.regressionFusion);
+	if (fusionBlock) {
+		lines.push(fusionBlock);
 	}
 
 	return lines.join("\n");

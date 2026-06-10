@@ -4,6 +4,7 @@ import {
 	formatComparisonJson,
 } from "../../../src/cli/formatters/json.js";
 import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
+import type { RegressionFusion } from "../../../src/semantic/regression-correlate.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -57,5 +58,40 @@ describe("formatComparisonJson", () => {
 		const parsed = JSON.parse(output);
 		expect(parsed.meta.beforePath).toBeTruthy();
 		expect(parsed.summary.deltaTime).toBeDefined();
+	});
+
+	test("regressionFusion absent => field not present in JSON (byte-unchanged, PR2-8)", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.regressionFusion).toBeUndefined();
+		const output = formatComparisonJson(result);
+		const parsed = JSON.parse(output);
+		expect(parsed.regressionFusion).toBeUndefined();
+	});
+
+	test("regressionFusion present => serialised in JSON when set", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const fusion: RegressionFusion = {
+			annotatedRegressions: [],
+			newMethodCorrelations: [],
+			removedMethodCorrelations: [],
+			staticOnlyChanges: [],
+			correlationSummary: {
+				correlated: 0,
+				weaklyCorrelated: 0,
+				unexplained: 0,
+			},
+		};
+		result.regressionFusion = fusion;
+		const output = formatComparisonJson(result);
+		const parsed = JSON.parse(output);
+		expect(parsed.regressionFusion).toBeDefined();
+		expect(parsed.regressionFusion.annotatedRegressions).toBeArray();
+		expect(parsed.regressionFusion.correlationSummary.correlated).toBe(0);
 	});
 });

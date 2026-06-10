@@ -46,6 +46,10 @@ export interface AnalyzeOptions {
 export interface CompareOptions {
 	top?: number;
 	threshold?: number;
+	/** Path to the AL workspace for the 'before' version (enables regression fusion). */
+	beforeSource?: string;
+	/** Path to the AL workspace for the 'after' version (enables regression fusion). */
+	afterSource?: string;
 }
 
 /**

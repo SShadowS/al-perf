@@ -4,6 +4,7 @@ import {
 	formatComparisonMarkdown,
 } from "../../../src/cli/formatters/markdown.js";
 import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
+import type { RegressionFusion } from "../../../src/semantic/regression-correlate.js";
 import type {
 	FusionViews,
 	HotspotAnnotation,
@@ -590,5 +591,321 @@ describe("formatAnalysisMarkdown — causal chain (P3.2b)", () => {
 		const out = formatAnalysisMarkdown(result);
 		expect(out).toContain("Runtime-Prioritized Static Findings");
 		expect(out).not.toContain("causal chain");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Regression-fusion render tests (P4.1, PR2-1..PR2-8) — markdown
+// ---------------------------------------------------------------------------
+
+/**
+ * Hand-crafted RegressionFusion fixture covering all tiers:
+ * - correlated (strong total-basis delta)
+ * - weakly-correlated (weak self-basis delta)
+ * - unexplained-static (no matching delta)
+ * - a new-method correlation
+ * - a version mismatch
+ */
+const SAMPLE_REGRESSION_FUSION_MD: RegressionFusion = {
+	annotatedRegressions: [
+		{
+			method: {
+				functionName: "ProcessSales",
+				objectType: "Codeunit",
+				objectName: "Sales Processor",
+				objectId: 50001,
+				appName: "My App",
+				beforeSelfTime: 100000,
+				afterSelfTime: 105000,
+				deltaSelfTime: 5000,
+				deltaPercent: 5,
+				beforeTotalTime: 200000,
+				afterTotalTime: 280000,
+				deltaTotalTime: 80000,
+				deltaTotalPercent: 40,
+				beforeHitCount: 10,
+				afterHitCount: 10,
+			},
+			staticDeltas: [
+				{
+					category: "capabilities",
+					kind: "capability-gained-write",
+					severity: "warning",
+					displayName: "ProcessSales",
+					basis: "total",
+					strength: "strong",
+					resourceKind: "table",
+					resourceId: "Sales Header",
+					op: "insert",
+				},
+			],
+			status: "correlated",
+		},
+		{
+			method: {
+				functionName: "LogEvent",
+				objectType: "Codeunit",
+				objectName: "Logger",
+				objectId: 50002,
+				appName: "My App",
+				beforeSelfTime: 50000,
+				afterSelfTime: 55000,
+				deltaSelfTime: 5000,
+				deltaPercent: 10,
+				beforeTotalTime: 60000,
+				afterTotalTime: 65000,
+				deltaTotalTime: 5000,
+				deltaTotalPercent: 8.3,
+				beforeHitCount: 5,
+				afterHitCount: 5,
+			},
+			staticDeltas: [
+				{
+					category: "capabilities",
+					kind: "capability-gained-telemetry",
+					severity: "info",
+					displayName: "LogEvent",
+					basis: "self",
+					strength: "weak",
+				},
+			],
+			status: "weakly-correlated",
+		},
+		{
+			method: {
+				functionName: "ValidateItem",
+				objectType: "Codeunit",
+				objectName: "Item Validator",
+				objectId: 50003,
+				appName: "My App",
+				beforeSelfTime: 30000,
+				afterSelfTime: 45000,
+				deltaSelfTime: 15000,
+				deltaPercent: 50,
+				beforeTotalTime: 35000,
+				afterTotalTime: 50000,
+				deltaTotalTime: 15000,
+				deltaTotalPercent: 43,
+				beforeHitCount: 3,
+				afterHitCount: 3,
+			},
+			staticDeltas: [],
+			status: "unexplained-static",
+		},
+	],
+	newMethodCorrelations: [
+		{
+			method: {
+				functionName: "NewHotProcedure",
+				objectType: "Codeunit",
+				objectName: "New Logic",
+				objectId: 50010,
+				appName: "My App",
+				selfTime: 80000,
+				selfTimePercent: 8,
+				totalTime: 80000,
+				totalTimePercent: 8,
+				hitCount: 4,
+				calledBy: [],
+				calls: [],
+			},
+			delta: {
+				category: "abi",
+				kind: "procedure-added",
+				severity: "info",
+				displayName: "NewHotProcedure",
+				basis: "self",
+				strength: "strong",
+			},
+		},
+	],
+	removedMethodCorrelations: [],
+	staticOnlyChanges: [
+		{
+			category: "events",
+			kind: "capability-gained-event-publish",
+			severity: "info",
+			displayName: "PublishOrderEvent",
+			basis: "none",
+			strength: "weak",
+		},
+	],
+	correlationSummary: {
+		correlated: 1,
+		weaklyCorrelated: 1,
+		unexplained: 1,
+		versionMismatch: {
+			beforeProfileVersion: "1.0.0",
+			beforeWorkspaceVersion: "0.9.0",
+			afterProfileVersion: "1.0.1",
+			afterWorkspaceVersion: "1.0.1",
+		},
+	},
+};
+
+describe("formatComparisonMarkdown — regression-fusion annotations (P4.1)", () => {
+	test("byte-unchanged when regressionFusion absent", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.regressionFusion).toBeUndefined();
+		const out = formatComparisonMarkdown(result);
+		expect(out).not.toContain("Regression-Fusion");
+		expect(out).not.toContain("correlated");
+		expect(out).not.toContain("unexplained-static");
+		expect(out).not.toContain("version ≠ source");
+	});
+
+	test("version-mismatch warning rendered prominently at the top", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("profile version ≠ source version");
+		expect(out).toContain("1.0.0");
+		expect(out).toContain("0.9.0");
+		expect(out).toContain("correlations may be inaccurate");
+	});
+
+	test("correlated tier rendered with delta info", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("[correlated]");
+		expect(out).toContain("ProcessSales");
+		expect(out).toContain("capability-gained-write");
+		expect(out).toContain("Sales Header");
+		expect(out).toContain("strong");
+	});
+
+	test("weakly-correlated tier rendered with runtime-neutral wording", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("[weakly-correlated]");
+		expect(out).toContain("runtime-neutral capability");
+		expect(out).toContain("unlikely to explain the regression");
+	});
+
+	test("unexplained-static tier rendered with honest wording", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("[unexplained-static]");
+		expect(out).toContain("no static change in this routine");
+		expect(out).toContain("al-sem cannot explain it");
+	});
+
+	test("NEVER uses the word 'caused by' (PR2-2 honesty guard)", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).not.toContain("caused by");
+		expect(out).not.toContain("Caused by");
+	});
+
+	test("NEVER uses the word 'runtime-confirmed' (honesty guard)", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).not.toContain("runtime-confirmed");
+	});
+
+	test("new-method headline rendered", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("## New / Removed Hot Methods");
+		expect(out).toContain("new hot method");
+		expect(out).toContain("NewHotProcedure");
+		expect(out).toContain("procedure-added");
+	});
+
+	test("static-only changes rendered with cross-boundary note for event deltas", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.regressionFusion = SAMPLE_REGRESSION_FUSION_MD;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("## Static-Only Changes");
+		expect(out).toContain("externalized cost");
+		expect(out).toContain("see subscribers");
+		expect(out).toContain("capability-gained-event-publish");
+	});
+
+	test("oldOriginalStableId rendered as rename provenance when present", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const fusionWithRename: RegressionFusion = {
+			annotatedRegressions: [
+				{
+					method: {
+						functionName: "NewName",
+						objectType: "Codeunit",
+						objectName: "Obj",
+						objectId: 50020,
+						appName: "My App",
+						beforeSelfTime: 10000,
+						afterSelfTime: 20000,
+						deltaSelfTime: 10000,
+						deltaPercent: 100,
+						beforeTotalTime: 10000,
+						afterTotalTime: 20000,
+						deltaTotalTime: 10000,
+						deltaTotalPercent: 100,
+						beforeHitCount: 1,
+						afterHitCount: 1,
+					},
+					staticDeltas: [
+						{
+							category: "abi",
+							kind: "procedure-signature-changed",
+							severity: "warning",
+							displayName: "NewName",
+							basis: "self",
+							strength: "moderate",
+							oldOriginalStableId: "OldName:Codeunit:50020:abc123",
+						},
+					],
+					status: "correlated",
+				},
+			],
+			newMethodCorrelations: [],
+			removedMethodCorrelations: [],
+			staticOnlyChanges: [],
+			correlationSummary: {
+				correlated: 1,
+				weaklyCorrelated: 0,
+				unexplained: 0,
+			},
+		};
+		result.regressionFusion = fusionWithRename;
+		const out = formatComparisonMarkdown(result);
+		expect(out).toContain("renamed from");
+		expect(out).toContain("OldName:Codeunit:50020:abc123");
 	});
 });

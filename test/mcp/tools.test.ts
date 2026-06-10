@@ -575,6 +575,43 @@ describe("MCP Tool: compare_profiles (extended)", () => {
 		const text = (result.content as TextContent)[0].text;
 		expect(text).toContain("Error");
 	});
+
+	test("regressionFusion absent in output when no sources provided (byte-unchanged, PR2-8)", async () => {
+		const { client } = await createTestClient();
+		const result = await client.callTool({
+			name: "compare_profiles",
+			arguments: {
+				beforePath: "test/fixtures/sampling-minimal.alcpuprofile",
+				afterPath: "test/fixtures/sampling-minimal.alcpuprofile",
+			},
+		});
+		const text = (result.content as TextContent)[0].text;
+		const parsed = JSON.parse(text);
+		// No sources supplied → regressionFusion must be absent
+		expect(parsed.regressionFusion).toBeUndefined();
+	});
+
+	test("accepts beforeSource and afterSource optional inputs without error", async () => {
+		const { client } = await createTestClient();
+		// Pass non-existent source paths — the engine will be disabled (no binary),
+		// but the tool must never throw and must return a plain comparison result.
+		const result = await client.callTool({
+			name: "compare_profiles",
+			arguments: {
+				beforePath: "test/fixtures/sampling-minimal.alcpuprofile",
+				afterPath: "test/fixtures/sampling-minimal.alcpuprofile",
+				beforeSource: "/non/existent/before",
+				afterSource: "/non/existent/after",
+			},
+		});
+		// Should return a valid result (not an error) — engine disabled degrades gracefully
+		const text = (result.content as TextContent)[0].text;
+		// Must parse as valid JSON (no crash)
+		const parsed = JSON.parse(text);
+		expect(parsed.meta).toBeDefined();
+		// regressionFusion absent when engine is disabled (P4.2 wiring is not yet connected; graceful)
+		// In P4.1 (surface only) the field is absent since wiring is deferred to P4.2.
+	});
 });
 
 describe("MCP Tool: analyze_source (extended)", () => {

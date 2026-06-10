@@ -65,6 +65,11 @@ export interface DiffDeltaSummary {
 	 * Signals UNION attribution — not precise to a single routine (PR2-3).
 	 */
 	ambiguous?: boolean;
+	/**
+	 * The before-WS stableId for renamed routines (DISPLAY-ONLY — shows rename
+	 * provenance "renamed from X"; NOT used as a join key per PR2-3).
+	 */
+	oldOriginalStableId?: string;
 }
 
 /** An annotated regression: the MethodDelta + its correlated static deltas. */
@@ -203,6 +208,9 @@ function toDeltaSummary(
 	if (delta.resourceId !== undefined) s.resourceId = delta.resourceId;
 	if (delta.op !== undefined) s.op = delta.op;
 	if (ambiguous === true) s.ambiguous = true;
+	// Carry rename provenance (DISPLAY-ONLY — PR2-3 warns against using as join key).
+	if (delta.oldOriginalStableId !== undefined)
+		s.oldOriginalStableId = delta.oldOriginalStableId;
 	return s;
 }
 

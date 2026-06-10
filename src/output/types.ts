@@ -1,3 +1,4 @@
+import type { RegressionFusion } from "../semantic/regression-correlate.js";
 import type { FusionViews } from "../semantic/views.js";
 import type {
 	AppBreakdown,
@@ -90,6 +91,11 @@ export interface ComparisonResult {
 	newMethods: MethodBreakdown[];
 	removedMethods: MethodBreakdown[];
 	patternDeltas: PatternDelta[];
+	/**
+	 * Present ONLY when both before/after source paths were supplied (opt-in).
+	 * Absent ⇒ comparison output byte-unchanged.
+	 */
+	regressionFusion?: RegressionFusion;
 }
 
 export interface CriticalPathStep {

@@ -519,7 +519,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 		{
 			title: "Compare Profiles",
 			description:
-				"Compare two AL CPU profiles (before/after) to find regressions and improvements. Returns methods that got slower, faster, appeared, or disappeared between the two runs.",
+				"Compare two AL CPU profiles (before/after) to find regressions and improvements. Returns methods that got slower, faster, appeared, or disappeared between the two runs. Supply beforeSource + afterSource (AL workspace paths) to enable regression-fusion annotations — each regression annotated with static capability/ABI changes from alsem diff.",
 			inputSchema: {
 				beforePath: z
 					.string()
@@ -531,12 +531,26 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					.number()
 					.default(0)
 					.describe("Minimum delta in microseconds to report (default: 0)"),
+				beforeSource: z
+					.string()
+					.optional()
+					.describe(
+						"Path to the AL workspace for the 'before' version. Required together with afterSource to enable regression-fusion (alsem diff) annotations.",
+					),
+				afterSource: z
+					.string()
+					.optional()
+					.describe(
+						"Path to the AL workspace for the 'after' version. Required together with beforeSource to enable regression-fusion (alsem diff) annotations.",
+					),
 			},
 		},
-		async ({ beforePath, afterPath, threshold }) => {
+		async ({ beforePath, afterPath, threshold, beforeSource, afterSource }) => {
 			try {
 				const result = await compareProfiles(beforePath, afterPath, {
 					threshold,
+					beforeSource,
+					afterSource,
 				});
 				return {
 					content: [
