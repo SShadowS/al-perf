@@ -88,6 +88,25 @@ Changing the engine (originatingObject is already emitted). The display polish b
 Re-keying the profile aggregation by appId IF the review finds it unnecessary (but see risk #3 — if
 aggregation collapses cross-app same-number objects, that's the real bug to surface).
 
+## VERIFIED crux (risk #3 confirmed)
+`aggregateByMethod` (`core/aggregator.ts:62`) keys by `${functionName}_${objectType}_${objectId}` — NO
+appId. BC object numbers are APP-SCOPED, so two different apps' `Table 36 OnValidate` collapse into ONE
+`MethodBreakdown` (times summed, first-seen appName kept). This is a latent cross-app CONFLATION bug
+independent of fusion. Consequence for R3-8: carrying "one appId" on a conflated method is lossy. The
+DESIGN FORK the review must resolve:
+- **Option A (de-conflate):** re-key `aggregateByMethod` (+ `compareProfiles`' delta key) by appId
+  (`functionName_objectType_objectId_appId`). Correct base behavior; each method gets a well-defined
+  appId; R3-8's app-scope join becomes sound. BLAST RADIUS: changes the method breakdown for any profile
+  with a cross-app object-number collision (splits a previously-merged row) → hotspots/comparison output
+  shifts; snapshot updates; every aggregateByMethod consumer. How common is the collision in practice
+  (AppSource apps get unique ranges; PTEs share 50000-99999 — a real but uncommon collision)?
+- **Option B (best-effort):** keep aggregation; carry first-seen/dominant appId; the app-scope gate is
+  best-effort (correct in the common no-collision case, lossy in the rare collision). Smaller, no base
+  output change.
+The review must recommend A or B (and if A, scope the blast radius). The user values correctness ("best
+solution") — A is likely right IF the blast radius is contained, but the empirical collision frequency
+governs whether it's worth the base-output churn.
+
 ## Self-review notes
 - The HEADLINE value is app-scoping (risk #1/#3), not the rare two-extensions edge — the design must
   confirm the real collision class before implementing.
