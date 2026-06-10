@@ -11,11 +11,12 @@ import type {
 	MethodMatch,
 	RegressionFusion,
 } from "../../semantic/regression-correlate.js";
-import type {
-	CausalStep,
-	FusionViews,
-	HotspotAnnotation,
-	PrioritizedFinding,
+import {
+	type CausalStep,
+	type FusionViews,
+	formatOriginatingObjectNote,
+	type HotspotAnnotation,
+	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
@@ -100,20 +101,23 @@ function fusionAnnotationLine(
 	}
 	// matched
 	const badge = runtimeCorrelatedBadge(annotation.corroboratingPatterns);
+	const provenanceNote = formatOriginatingObjectNote(annotation);
 	if (annotation.findings.length === 0) {
 		// R2-9: never imply clean unless matchedClean === true
 		if (annotation.matchedClean === true) {
-			return chalk.green(`    ↳ analyzed, no static findings${badge}`);
+			return chalk.green(
+				`    ↳ analyzed, no static findings${provenanceNote}${badge}`,
+			);
 		}
 		return chalk.gray(
-			`    ↳ matched; ${annotation.reason ?? "coverage incomplete"}${badge}`,
+			`    ↳ matched; ${annotation.reason ?? "coverage incomplete"}${provenanceNote}${badge}`,
 		);
 	}
 	const findingLines = annotation.findings
 		.map((f) =>
 			chalk.cyan(
 				`    ↳ [${f.detector}] ${f.title} @ ${f.primaryLocation.file}:${f.primaryLocation.line}` +
-					` (${f.severity}/${f.confidence.level})`,
+					` (${f.severity}/${f.confidence.level})${provenanceNote}`,
 			),
 		)
 		.join("\n");

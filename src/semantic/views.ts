@@ -25,6 +25,7 @@ import {
 	methodAttrKey,
 } from "./correlate.js";
 import { corroboratesDetector } from "./corroboration-map.js";
+import { canonicalObjectType, normalizeAppGuid } from "./identity.js";
 
 // ---------------------------------------------------------------------------
 // Output types (defined once here; reused by AnalysisResult + renderers)
@@ -50,6 +51,18 @@ export interface HotspotAnnotation {
 	stableRoutineId?: string | string[];
 	/** Reserved: P3 cross-signal corroboration (leaf-only per R2-13). */
 	corroboratingPatterns?: string[];
+	/**
+	 * The matched routine's `originatingObject` (the declaring object's
+	 * `:`-form StableObjectId: `appGuid:Type:Num`). Present ONLY for
+	 * member-trigger routines (schema 1.1.0+) that resolved to an exact match.
+	 * Absent for blind-spot, ambiguous, base-object members, or old engine.
+	 *
+	 * Used by renderers to emit "(declared in <X>)" when the originatingObject
+	 * names a DIFFERENT object than the hotspot's own (extension-declared member).
+	 * Renderers MUST suppress the note when this field equals the hotspot's own
+	 * identity (Type:Num) — only emit when they differ.
+	 */
+	originatingObject?: string;
 }
 
 /**
@@ -182,12 +195,84 @@ export interface FusionViews {
 // ---------------------------------------------------------------------------
 
 /**
+ * Extract the `originatingObject` from the matched routine when the
+ * attribution is an exact match (status="matched", attributionConfidence="exact",
+ * stableRoutineId is a single string). Looks up the routine in `allRoutines`
+ * by stableRoutineId and returns its `originatingObject` if present.
+ *
+ * Returns `undefined` when:
+ *  - The attribution is ambiguous or a blind-spot.
+ *  - stableRoutineId is an array (ambiguous) or absent.
+ *  - The routine is not found in `allRoutines` (old model / no allRoutines).
+ *  - The matched routine has no `originatingObject` (non-member-trigger or old engine).
+ */
+function resolveOriginatingObject(
+	stableRoutineId: string | string[] | undefined,
+	allRoutines: RoutineIdentity[] | undefined,
+): string | undefined {
+	if (typeof stableRoutineId !== "string") return undefined;
+	if (!allRoutines || allRoutines.length === 0) return undefined;
+	const routine = allRoutines.find(
+		(r) => r.stableRoutineId === stableRoutineId,
+	);
+	return routine?.originatingObject;
+}
+
+/**
+ * Return `true` when the `originatingObject` (`:` form `appGuid:Type:Num`)
+ * names a DIFFERENT object than the hotspot's own (objectType + objectId).
+ *
+ * The comparison is on the `Type:Num` portion (segments [1] and [2] of the
+ * colon-split), normalized via `canonicalObjectType`. When `hotspotAppId`
+ * is provided, the app-GUID segment [0] is also compared (normalized) so
+ * that a same-number routine in a different app also counts as external.
+ * When `hotspotAppId` is absent, only Type:Num is compared (graceful for
+ * methods without appId — avoids false positives).
+ *
+ * Returns `false` when `originatingObject` is absent, malformed (< 3 segments),
+ * or is identical to the hotspot's own identity — no note emitted.
+ */
+export function originatingObjectDiffersFromHotspot(
+	originatingObject: string | undefined,
+	hotspotObjectType: string,
+	hotspotObjectId: number,
+	hotspotAppId?: string,
+): boolean {
+	if (!originatingObject) return false;
+	const parts = originatingObject.split(":");
+	if (parts.length < 3) return false;
+	// parts[0] = appGuid, parts[1] = Type, parts[2] = Num (may have #hash suffix)
+	const origAppGuid = parts[0] ?? "";
+	const origType = canonicalObjectType(parts[1] ?? "");
+	const origNumStr = (parts[2] ?? "").split("#")[0];
+	const origNum = Number.parseInt(origNumStr, 10);
+	if (!origType || !Number.isFinite(origNum)) return false;
+
+	const hotType = canonicalObjectType(hotspotObjectType);
+	if (origType !== hotType || origNum !== hotspotObjectId) return true;
+
+	// Type:Num matches — additionally compare app GUIDs when hotspotAppId is present.
+	if (hotspotAppId) {
+		const normHot = normalizeAppGuid(hotspotAppId);
+		const normOrig = normalizeAppGuid(origAppGuid);
+		// Both must be non-empty for the comparison to fire.
+		if (normHot && normOrig && normHot !== normOrig) return true;
+	}
+
+	return false;
+}
+
+/**
  * One annotation per AL hotspot in the SAME order as `methods` (R2-14).
  *
  * Carries the P1 honesty signals verbatim — `matchedClean` is true ONLY
  * when the P1 gate set it true; `reason` surfaces "coverage incomplete" /
  * blind-spot text (R2-9/R2-10). Methods with no attribution (non-AL frames
  * that the join skipped) are omitted.
+ *
+ * R3-8: for exact matches, threads the matched routine's `originatingObject`
+ * onto the annotation so renderers can emit "(declared in <X>)" for
+ * extension-declared members.
  */
 export function annotateHotspots(
 	fused: FusedModel,
@@ -198,6 +283,27 @@ export function annotateHotspots(
 		const key = methodAttrKey(m);
 		const attr = fused.attributions.get(key);
 		if (!attr) continue; // non-AL / unjoined frame → no annotation
+
+		// R3-8: resolve originatingObject from the matched routine (exact match only).
+		// Only set when the originatingObject names a DIFFERENT object than the hotspot
+		// (extension-declared member) — suppress when same or absent (base-object members
+		// and old-engine routines). This gates the annotation field so renderers can do
+		// a simple truthiness check without re-parsing the :-form.
+		const rawOriginating = resolveOriginatingObject(
+			attr.stableRoutineId,
+			fused.allRoutines,
+		);
+		const originatingObject =
+			rawOriginating !== undefined &&
+			originatingObjectDiffersFromHotspot(
+				rawOriginating,
+				m.objectType,
+				m.objectId,
+				m.appId,
+			)
+				? rawOriginating
+				: undefined;
+
 		out.push({
 			attrKey: key,
 			status: attr.status,
@@ -207,9 +313,45 @@ export function annotateHotspots(
 			reason: attr.reason,
 			stableRoutineId: attr.stableRoutineId,
 			corroboratingPatterns: attr.corroboratingPatterns,
+			...(originatingObject !== undefined ? { originatingObject } : {}),
 		});
 	}
 	return out;
+}
+
+// ---------------------------------------------------------------------------
+// Provenance display helper (R3-8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Format the "(declared in <X>)" provenance note for renderers.
+ *
+ * Returns a non-empty string when `annotation.originatingObject` is present
+ * (already pre-filtered in `annotateHotspots` to only those that differ from
+ * the hotspot's own object). Returns `""` when absent.
+ *
+ * The display form uses the `:` notation from the StableObjectId:
+ *   `"<Type>:<Num>"` (the app-GUID prefix is stripped for brevity since the
+ *   context is already within the hotspot's report, and the Type:Num uniquely
+ *   identifies the declaring object within the workspace).
+ *
+ * Callers that need HTML-safe output MUST escape the returned string themselves.
+ */
+export function formatOriginatingObjectNote(
+	annotation: Pick<HotspotAnnotation, "originatingObject">,
+): string {
+	if (!annotation.originatingObject) return "";
+	// Strip the leading appGuid: segment for a compact display form.
+	// originatingObject is `appGuid:Type:Num` (possibly `appGuid:Type:Num#hash`).
+	const parts = annotation.originatingObject.split(":");
+	// parts[0]=appGuid, parts[1]=Type, parts[2]=Num[#hash...]
+	const displayParts = parts.slice(1); // ["Type", "Num"]
+	if (displayParts.length < 2) return "";
+	// Strip any #hash suffix from the Num segment.
+	const numPart = (displayParts[displayParts.length - 1] ?? "").split("#")[0];
+	const typePart = displayParts.slice(0, -1).join(":");
+	const display = `${typePart}:${numPart}`;
+	return ` (declared in ${display})`;
 }
 
 // ---------------------------------------------------------------------------

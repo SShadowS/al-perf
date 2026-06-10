@@ -659,6 +659,10 @@ function fusionAnnotationText(fv, attrKey) {
 	// status === "matched"
 	// Attribution-level badge (P3.1, R3-6): appended to annotation text
 	const badge = runtimeCorrelatedBadgeText(ann);
+	// R3-8: provenance note — "(declared in Type:Num)" when originatingObject is present.
+	// annotateHotspots already pre-filters: field is only set when it differs from the
+	// hotspot's own object. Caller inserts via textContent — no escaping needed here.
+	const provenanceNote = formatOriginatingObjectNoteText(ann);
 	if (ann.findings.length > 0) {
 		// Show first finding inline. Raw text — safe only because the caller
 		// inserts via textContent (see the SECURITY note on this function).
@@ -680,16 +684,37 @@ function fusionAnnotationText(fv, attrKey) {
 			(ann.findings.length > 1
 				? " (+" + (ann.findings.length - 1) + " more)"
 				: "") +
+			provenanceNote +
 			badge
 		);
 	}
 	// matched, 0 findings
 	if (ann.matchedClean === true) {
 		// R2-10: ONLY say clean when matchedClean===true (full coverage verified)
-		return "analyzed, no static findings" + badge;
+		return "analyzed, no static findings" + provenanceNote + badge;
 	}
 	// R2-9: matched but coverage incomplete — never imply clean
-	return "matched; " + (ann.reason ?? "coverage incomplete") + badge;
+	return (
+		"matched; " + (ann.reason ?? "coverage incomplete") + provenanceNote + badge
+	);
+}
+
+/**
+ * Format the "(declared in Type:Num)" provenance note for a hotspot annotation.
+ * Returns "" when originatingObject is absent (field only present when it differs
+ * from the hotspot — annotateHotspots pre-filters it).
+ * Output is raw text, safe for textContent insertion.
+ */
+function formatOriginatingObjectNoteText(ann) {
+	if (!ann.originatingObject) return "";
+	// originatingObject is `appGuid:Type:Num` (possibly `appGuid:Type:Num#hash`).
+	// Strip leading appGuid for compact display.
+	const parts = ann.originatingObject.split(":");
+	const displayParts = parts.slice(1); // ["Type", "Num"]
+	if (displayParts.length < 2) return "";
+	const numPart = (displayParts[displayParts.length - 1] ?? "").split("#")[0];
+	const typePart = displayParts.slice(0, -1).join(":");
+	return " (declared in " + typePart + ":" + numPart + ")";
 }
 
 /**

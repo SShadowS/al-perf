@@ -4,10 +4,11 @@ import { truncateFunctionName } from "../../core/display-utils.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult } from "../../output/types.js";
-import type {
-	CausalStep,
-	HotspotAnnotation,
-	PrioritizedFinding,
+import {
+	type CausalStep,
+	formatOriginatingObjectNote,
+	type HotspotAnnotation,
+	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
@@ -101,18 +102,19 @@ function fusionAnnotationHtml(
 	}
 	// matched
 	const badge = runtimeCorrelatedBadgeHtml(annotation.corroboratingPatterns);
+	const provenanceNote = escapeHtml(formatOriginatingObjectNote(annotation));
 	if (annotation.findings.length === 0) {
 		// R2-9: never imply clean unless matchedClean === true
 		if (annotation.matchedClean === true) {
-			return `<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 analyzed, no static findings${badge}</td></tr>`;
+			return `<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 analyzed, no static findings${provenanceNote}${badge}</td></tr>`;
 		}
 		const reason = escapeHtml(annotation.reason ?? "coverage incomplete");
-		return `<tr class="fusion-annotation"><td colspan="8" style="color:#505C6D;font-size:0.85em;padding-left:24px">\u21b3 matched; ${reason}${badge}</td></tr>`;
+		return `<tr class="fusion-annotation"><td colspan="8" style="color:#505C6D;font-size:0.85em;padding-left:24px">\u21b3 matched; ${reason}${provenanceNote}${badge}</td></tr>`;
 	}
 	// Render all finding rows; append the badge to the last finding row inline
 	const rows = annotation.findings.map(
 		(f) =>
-			`\u21b3 [${escapeHtml(f.detector)}] ${escapeHtml(f.title)} @ ${escapeHtml(f.primaryLocation.file)}:${f.primaryLocation.line} (${escapeHtml(f.severity)}/${escapeHtml(f.confidence.level)})`,
+			`\u21b3 [${escapeHtml(f.detector)}] ${escapeHtml(f.title)} @ ${escapeHtml(f.primaryLocation.file)}:${f.primaryLocation.line} (${escapeHtml(f.severity)}/${escapeHtml(f.confidence.level)})${provenanceNote}`,
 	);
 	if (badge && rows.length > 0) {
 		rows[rows.length - 1] += badge;

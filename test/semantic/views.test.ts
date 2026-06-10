@@ -9,6 +9,8 @@ import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
 import {
 	annotateHotspots,
 	type CausalStep,
+	formatOriginatingObjectNote,
+	originatingObjectDiffersFromHotspot,
 	prioritizeFindings,
 } from "../../src/semantic/views.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
@@ -957,5 +959,273 @@ describe("prioritizeFindings — causalSteps (P3.2b)", () => {
 		expect(steps[0]?.routineName).toBe("DoWork");
 		expect(steps[0]?.selfTimePercent).toBe(33);
 		expect(steps[0]?.isHot).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// R3-8: originatingObject provenance display
+// ---------------------------------------------------------------------------
+
+const EXT_APP_GUID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+
+describe("originatingObjectDiffersFromHotspot", () => {
+	it("returns false when originatingObject is undefined", () => {
+		expect(
+			originatingObjectDiffersFromHotspot(undefined, "Codeunit", 50100),
+		).toBe(false);
+	});
+
+	it("returns false when originatingObject is malformed (< 3 segments)", () => {
+		expect(
+			originatingObjectDiffersFromHotspot("onlyone", "Codeunit", 50100),
+		).toBe(false);
+		expect(
+			originatingObjectDiffersFromHotspot("two:parts", "Codeunit", 50100),
+		).toBe(false);
+	});
+
+	it("returns false when originatingObject matches the hotspot (same Type:Num)", () => {
+		// Same object → base-object member, no note.
+		const originating = `${APP_GUID}:Codeunit:50100`;
+		expect(
+			originatingObjectDiffersFromHotspot(originating, "Codeunit", 50100),
+		).toBe(false);
+	});
+
+	it("returns false when originatingObject matches despite canonicalization of objectType", () => {
+		// Inventory carries alias "CodeUnit"; hotspot method uses "Codeunit" — same object.
+		const originating = `${APP_GUID}:CodeUnit:50100`;
+		expect(
+			originatingObjectDiffersFromHotspot(originating, "Codeunit", 50100),
+		).toBe(false);
+	});
+
+	it("returns true when originatingObject has different objectNumber (extension-declared member)", () => {
+		// A TableExtension 70000 extends Table 50100; the member's originatingObject
+		// is the base Table 50100, but the hotspot is the extension 70000.
+		const originating = `${APP_GUID}:Table:50100`;
+		expect(
+			originatingObjectDiffersFromHotspot(originating, "Table", 70000),
+		).toBe(true);
+	});
+
+	it("returns true when originatingObject has different objectType", () => {
+		const originating = `${APP_GUID}:Table:50100`;
+		expect(
+			originatingObjectDiffersFromHotspot(originating, "Codeunit", 50100),
+		).toBe(true);
+	});
+
+	it("returns true when originatingObject has different app GUID (hotspotAppId provided)", () => {
+		// Routine declared in a different app than the hotspot (cross-app extension).
+		// hotspotAppId must be provided for the app-GUID comparison to fire.
+		const originating = `${EXT_APP_GUID}:Table:50100`;
+		expect(
+			originatingObjectDiffersFromHotspot(
+				originating,
+				"Table",
+				50100,
+				APP_GUID,
+			),
+		).toBe(true);
+	});
+
+	it("returns false when originatingObject has different app GUID but hotspotAppId is absent (graceful)", () => {
+		// Without hotspotAppId the app-GUID comparison is skipped — only Type:Num compared.
+		// Prevents false positives for methods without appId (System frames, old profiles).
+		const originating = `${EXT_APP_GUID}:Table:50100`;
+		expect(
+			originatingObjectDiffersFromHotspot(originating, "Table", 50100),
+		).toBe(false);
+	});
+});
+
+describe("formatOriginatingObjectNote", () => {
+	it("returns empty string when originatingObject is absent", () => {
+		expect(formatOriginatingObjectNote({})).toBe("");
+	});
+
+	it("formats Type:Num display (strips leading appGuid segment)", () => {
+		const ann = { originatingObject: `${APP_GUID}:Table:50100` };
+		expect(formatOriginatingObjectNote(ann)).toBe(" (declared in Table:50100)");
+	});
+
+	it("strips #hash suffix from the Num segment", () => {
+		const ann = {
+			originatingObject: `${APP_GUID}:Table:50100#aabbcc0011223344556677889900112233445566778899001122334455667788ff`,
+		};
+		expect(formatOriginatingObjectNote(ann)).toBe(" (declared in Table:50100)");
+	});
+
+	it("returns empty string for malformed originatingObject (< 3 segments)", () => {
+		expect(formatOriginatingObjectNote({ originatingObject: "only:two" })).toBe(
+			"",
+		);
+	});
+});
+
+describe("annotateHotspots — R3-8 originatingObject", () => {
+	const EXT_STABLE_ID = `${APP_GUID}:Table:70000#trigger01`;
+
+	it("carries originatingObject when the matched routine names a DIFFERENT object (extension-declared member)", () => {
+		// TableExtension 70000 has an OnValidate that originates in Table 50100.
+		// The hotspot is the extension (Table 70000); originatingObject says Table 50100.
+		const originating = `${APP_GUID}:Table:50100`;
+		const routine: RoutineIdentity = {
+			stableRoutineId: EXT_STABLE_ID,
+			objectType: "Table",
+			objectNumber: 70000,
+			routineName: "OnValidate",
+			enclosingMember: "Quantity",
+			originatingObject: originating,
+		};
+		const method = makeMethod("Quantity - OnValidate", "Table", 70000, 30, 30);
+		const engine = makeEngine([routine], []);
+		const fused = correlate([method], engine);
+		// Manually set allRoutines (as fuseProfile does).
+		fused.allRoutines = [routine];
+
+		const ann = annotateHotspots(fused, [method]);
+		expect(ann).toHaveLength(1);
+		expect(ann[0]?.originatingObject).toBe(originating);
+	});
+
+	it("does NOT carry originatingObject when the matched routine's originatingObject equals the hotspot (base-object member)", () => {
+		// OnValidate on Table 50100; originatingObject is also Table 50100.
+		const originating = `${APP_GUID}:Table:50100`;
+		const stableId = `${APP_GUID}:Table:50100#trigger01`;
+		const routine: RoutineIdentity = {
+			stableRoutineId: stableId,
+			objectType: "Table",
+			objectNumber: 50100,
+			routineName: "OnValidate",
+			enclosingMember: "Quantity",
+			originatingObject: originating,
+		};
+		const method = makeMethod("Quantity - OnValidate", "Table", 50100, 30, 30);
+		const engine = makeEngine([routine], []);
+		const fused = correlate([method], engine);
+		fused.allRoutines = [routine];
+
+		const ann = annotateHotspots(fused, [method]);
+		expect(ann).toHaveLength(1);
+		expect(ann[0]?.originatingObject).toBeUndefined();
+	});
+
+	it("does NOT carry originatingObject when the routine has no originatingObject (old engine / procedure)", () => {
+		const stableId = `${APP_GUID}:Codeunit:50100#proc01`;
+		const routine: RoutineIdentity = {
+			stableRoutineId: stableId,
+			objectType: "Codeunit",
+			objectNumber: 50100,
+			routineName: "ProcessRecords",
+			// originatingObject absent — old engine or non-member-trigger
+		};
+		const method = makeMethod("ProcessRecords", "Codeunit", 50100, 30, 30);
+		const engine = makeEngine([routine], []);
+		const fused = correlate([method], engine);
+		fused.allRoutines = [routine];
+
+		const ann = annotateHotspots(fused, [method]);
+		expect(ann).toHaveLength(1);
+		expect(ann[0]?.originatingObject).toBeUndefined();
+	});
+
+	it("does NOT carry originatingObject when allRoutines is absent (no fuseProfile call)", () => {
+		// Simulates a FusedModel built directly from correlate() without fuseProfile.
+		const originating = `${APP_GUID}:Table:50100`;
+		const routine: RoutineIdentity = {
+			stableRoutineId: EXT_STABLE_ID,
+			objectType: "Table",
+			objectNumber: 70000,
+			routineName: "OnValidate",
+			enclosingMember: "Quantity",
+			originatingObject: originating,
+		};
+		const method = makeMethod("Quantity - OnValidate", "Table", 70000, 30, 30);
+		const engine = makeEngine([routine], []);
+		const fused = correlate([method], engine);
+		// Do NOT set fused.allRoutines → simulates old model.
+
+		const ann = annotateHotspots(fused, [method]);
+		expect(ann).toHaveLength(1);
+		expect(ann[0]?.originatingObject).toBeUndefined(); // graceful
+	});
+});
+
+describe("fusionAnnotationNote rendering — R3-8 (per-surface spot checks)", () => {
+	// These tests verify that the provenance note text is correctly produced
+	// by the shared helper, which all surfaces (terminal/markdown/html/web) use.
+	// Surface-specific rendering is covered by the formatter integration tests;
+	// here we focus on the model + note helper contract.
+
+	it("formatOriginatingObjectNote: extension member → note present", () => {
+		const ann = { originatingObject: `${APP_GUID}:Table:50100` };
+		const note = formatOriginatingObjectNote(ann);
+		expect(note).toContain("declared in");
+		expect(note).toContain("Table:50100");
+		// Must not contain the appGuid
+		expect(note).not.toContain(APP_GUID);
+	});
+
+	it("formatOriginatingObjectNote: absent → empty (graceful)", () => {
+		expect(formatOriginatingObjectNote({})).toBe("");
+	});
+
+	it("annotateHotspots + formatOriginatingObjectNote: end-to-end note appears for extension member", () => {
+		const originating = `${APP_GUID}:Table:50100`;
+		const stableId = `${APP_GUID}:Table:70000#trigger01`;
+		const routine: RoutineIdentity = {
+			stableRoutineId: stableId,
+			objectType: "Table",
+			objectNumber: 70000,
+			routineName: "OnValidate",
+			enclosingMember: "Qty",
+			originatingObject: originating,
+		};
+		const method = makeMethod("Qty - OnValidate", "Table", 70000, 25, 25);
+		const engine = makeEngine([routine], []);
+		const fused = correlate([method], engine);
+		fused.allRoutines = [routine];
+
+		const ann = annotateHotspots(fused, [method]);
+		const note = formatOriginatingObjectNote(ann[0] ?? {});
+		expect(note).toBe(" (declared in Table:50100)");
+	});
+
+	it("annotateHotspots + formatOriginatingObjectNote: base member → no note", () => {
+		const originating = `${APP_GUID}:Table:50100`;
+		const stableId = `${APP_GUID}:Table:50100#trigger01`;
+		const routine: RoutineIdentity = {
+			stableRoutineId: stableId,
+			objectType: "Table",
+			objectNumber: 50100,
+			routineName: "OnValidate",
+			enclosingMember: "Qty",
+			originatingObject: originating,
+		};
+		const method = makeMethod("Qty - OnValidate", "Table", 50100, 25, 25);
+		const engine = makeEngine([routine], []);
+		const fused = correlate([method], engine);
+		fused.allRoutines = [routine];
+
+		const ann = annotateHotspots(fused, [method]);
+		const note = formatOriginatingObjectNote(ann[0] ?? {});
+		expect(note).toBe(""); // no note — same object
+	});
+
+	it("fusion-off (fusionViews absent): no annotation surfaced (byte-unchanged)", () => {
+		// When there are no fusionViews, annotation list is empty.
+		// This tests that the provenance path is strictly additive.
+		const method = makeMethod("ProcessRecords", "Codeunit", 50100, 50, 50);
+		const engine = makeEngine(
+			[makeRoutine("ProcessRecords", 50100, "Codeunit", "r0")],
+			[makeFinding("F1", "fp1", "d1", "ProcessRecords", "Codeunit", 50100)],
+		);
+		const fused = correlate([method], engine);
+		// No allRoutines set — no provenance note.
+		const ann = annotateHotspots(fused, [method]);
+		expect(ann[0]?.originatingObject).toBeUndefined();
+		expect(formatOriginatingObjectNote(ann[0] ?? {})).toBe("");
 	});
 });

@@ -8,11 +8,12 @@ import type {
 	MethodMatch,
 	RegressionFusion,
 } from "../../semantic/regression-correlate.js";
-import type {
-	CausalStep,
-	FusionViews,
-	HotspotAnnotation,
-	PrioritizedFinding,
+import {
+	type CausalStep,
+	type FusionViews,
+	formatOriginatingObjectNote,
+	type HotspotAnnotation,
+	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
@@ -101,17 +102,18 @@ function fusionAnnotationMd(annotation: HotspotAnnotation | undefined): string {
 	}
 	// matched
 	const badge = runtimeCorrelatedBadge(annotation.corroboratingPatterns);
+	const provenanceNote = formatOriginatingObjectNote(annotation);
 	if (annotation.findings.length === 0) {
 		// R2-9: never imply clean unless matchedClean === true
 		if (annotation.matchedClean === true) {
-			return `> ↳ analyzed, no static findings${badge}`;
+			return `> ↳ analyzed, no static findings${provenanceNote}${badge}`;
 		}
-		return `> ↳ matched; ${annotation.reason ?? "coverage incomplete"}${badge}`;
+		return `> ↳ matched; ${annotation.reason ?? "coverage incomplete"}${provenanceNote}${badge}`;
 	}
 	const findingLines = annotation.findings
 		.map(
 			(f) =>
-				`> ↳ [${f.detector}] ${f.title} @ ${f.primaryLocation.file}:${f.primaryLocation.line} (${f.severity}/${f.confidence.level})`,
+				`> ↳ [${f.detector}] ${f.title} @ ${f.primaryLocation.file}:${f.primaryLocation.line} (${f.severity}/${f.confidence.level})${provenanceNote}`,
 		)
 		.join("\n");
 	return badge ? findingLines + badge : findingLines;
