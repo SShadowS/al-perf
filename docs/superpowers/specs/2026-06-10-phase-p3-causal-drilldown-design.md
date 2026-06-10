@@ -260,3 +260,149 @@ al-perf's pattern detectors (P3c only CORRELATES existing signals). Full call-gr
   fusion-off byte-unchanged.
 - **Reuses** the P1/P2 substrate (correlate/views/fused, the stableRoutineId↔method resolution, the
   per-surface render pattern, the `corroboratingPatterns` slot reserved in P2).
+
+---
+
+## Revision 2 — folded from the three-reviewer adversarial pass (2× opus + gemini-3.1-pro)
+
+The original design above is SUPERSEDED where it conflicts with this block. Three independent reviewers
+converged on findings that invalidate two of the spec's core premises (P3b's data source; P3a's
+finding-split) and a category error in P3c's corroboration. All findings were verified against actual
+alch-engine/al-perf code (including empirical `alsem` CLI runs). Implement P3 to THIS revision.
+
+### R3-1 — P3b's premise is FALSE: `evidencePath` is NOT emitted by `analyze` (MUST) [opus×2]
+`alsem analyze --format json` emits only scalar `pathCount` — NOT `evidencePath`. Verified in
+`alch-engine/src/engine/gate/format_json.rs` (the emitted key set) + `gate/projection.rs` (the gate
+`FindingSummary` has `path_count`, no `evidence_path`); the al-sem TS oracle agrees
+(`finding-summary.ts`: `pathCount?` only). The full `evidencePath` (routineId/operationId/loopId)
+exists ONLY on `StableFinding` (snapshot / R4 test projection / SARIF), and SARIF's threadFlow drops
+`routineId`. So P3b is NOT "additive parsing of already-emitted data" — it requires an ENGINE change to
+add `evidencePath` to the analyze report.
+
+### R3-2 — The parity-migration bomb: `analyze` IS under byte-parity (MUST) [gemini; opus missed]
+Unlike `routine-inventory` (Rust-only — safe), `analyze` is a CORE command under TS↔Rust byte-parity in
+the migration. Adding `evidencePath` to the Rust `analyze` output breaks the parity harness instantly
+(the TS oracle lacks it; KNOWN_DIVERGENCES must stay []). Therefore the P3b engine change MUST be a
+NEW OPT-IN flag — `alsem analyze --format json --with-evidence` — that the parity harness explicitly
+does NOT exercise (the default `analyze` output stays byte-identical to the TS oracle). al-perf's
+fusion runner opts in. (Alternative — add evidencePath to BOTH al-sem TS + Rust and rebaseline — is
+heavier and pointless given al-sem TS is slated for deprecation; the opt-in flag is the path.)
+
+### R3-3 — P3a cannot split FINDINGS; the signature hash collapses field triggers (MUST) [opus×2, gemini]
+Both field `OnValidate` triggers collapse to ONE `stableRoutineId` AND one internal `routineId` —
+`canonical_routine_signature` (`alch-engine/src/engine/ids.rs:130-147`) hashes only
+`name(params):ret`, ignoring the enclosing member and source position (verified empirically: a
+two-field fixture emits two inventory rows with byte-identical stableRoutineId, and analyze findings
+from both field bodies carry the same routineId, distinguished only by source `line`). Consequences:
+- Adding `enclosingMember` to the inventory splits the METHOD-side universe map (P3a's method
+  attribution works), BUT `project_finding` (`gate/projection.rs`) still gives both fields' findings
+  the same bare `routineName`/`routineId` → the FINDINGS remain field-ambiguous. P3a as originally
+  specified would flip the method to `matched` while the findings under it stay unsplit — a QUIETER
+  honesty regression than today's explicit `ambiguous`. **Unacceptable.**
+- **Do NOT fix this by changing the `StableRoutineId` signature hash** — that would change every
+  routine id in every parity golden (analyze/fingerprint/digest/snapshot) → a migration-wide
+  rebaseline AND a TS-oracle change. Instead the engine emits an ADDITIVE finding-side discriminator:
+  a `enclosingMember?` (and `originatingObject?`, see R3-6) field on the finding's primaryLocation in
+  the `--with-evidence` analyze projection (R3-2), leaving stableRoutineId untouched and parity intact.
+- `digest` does NOT sidestep this (gemini): it keys via-paths by the same stableRoutineId → it rolls
+  both fields' effects into one bucket. digest inherits the collision. So digest is not a P3b shortcut.
+
+### R3-4 — `enclosingMember` is an L3 MODEL addition, not a projection read (MUST→cost) [opus-1, gemini]
+The enclosing field/control name is recoverable from the syntax tree (`trigger_declaration`'s parent
+`field_declaration`/`page_field`/`action`) BUT is NOT on `L3Routine` today — L3 assembly
+(`alch-engine/src/engine/l3/l3_workspace.rs`) reads only `child_by_field_name("name")` (the bare
+trigger) and never `routine.parent()`. So P3a's engine side = capture `routine.parent()`'s member
+identifier during L3 assembly → new `L3Routine` field → surfaced in BOTH the inventory projection AND
+the `--with-evidence` finding discriminator. Single-repo Rust + golden-safe (L3Routine is not
+golden-serialized; inventory is Rust-only; analyze change is behind the opt-in flag), but budget it as
+L3 model work, not a one-line projection tweak. **Verify the L2 indexer preserves enough parent context
+at L3-assembly time before committing** (the residual #1, now confirmed real).
+
+### R3-5 — Corroboration is a CATEGORY ERROR; split by detector PROVENANCE (MUST) [opus-2, gemini]
+al-perf's 17 detectors are THREE shapes, and only one is runtime evidence:
+- **(A) runtime call-tree** (`patterns.ts`): `repeated-siblings`, `high-hit-count`, `deep-call-stack`,
+  `recursive-call`, `event-subscriber-hotspot`, `event-chain`, `single-method-dominance` — real
+  measured time.
+- **(B) source-correlated/lexical** (`source-patterns.ts`, impact BORROWED from method.selfTime):
+  `modify-in-loop`, `record-op-in-loop`, `calcfields-in-loop`, `missing/incomplete-setloadfields`.
+- **(C) source-only** (`source-only-patterns.ts`, `impact: 0`, NO runtime input): `nested-loops`,
+  `unfiltered-findset`, `dangerous-call-in-loop`, `unindexed-filter`, `event-subscriber-with-*`.
+The original spec's named corroboration pairs are MOSTLY B/C — al-perf's OWN static scans. Badging a
+B/C agreement "runtime-confirmed" is a false-confidence LIE (two static analyses concurring is not
+runtime evidence). **Only A-shape patterns may earn a runtime badge.** The map MUST be keyed by
+detector PROVENANCE (`runtime` | `source-static` | `source-only`) — provenance is derived from which
+detector array produced the pattern (`runDetectors` vs `runSourceDetectors` vs `runSourceOnlyDetectors`),
+NOT recoverable from `DetectedPattern.id` alone, so `corroboration-map.ts` cannot be keyed on the id
+string as the original spec implied. Conservative default: unmapped or non-runtime = NOT corroborated.
+- **SAFE to map (runtime, same phenomenon):** `repeated-siblings` ↔ al-sem N+1 (d1/d4);
+  `high-hit-count` ↔ al-sem N+1 (with the parent-anchor fix, R3-7); `recursive-call` ↔ d7
+  (recursive-event-expansion) — a genuinely-safe pair the original spec OMITTED.
+- **NEVER map:** all B/C pairs (`modify/record-op/calcfields/setloadfields-in-loop`,
+  `dangerous-call-in-loop`, `nested-loops`, `unfiltered-findset`, `unindexed-filter`); and the
+  runtime-shape-but-no-correspondence patterns (`deep-call-stack`, `single-method-dominance`,
+  `event-chain`). **Hard-exclude `event-subscriber-hotspot`** — it is inclusive aggregate time across
+  ALL subscribers, keyed to no single routine, so it can never be leaf-gated.
+- B/C agreements MAY be surfaced as a separate, honestly-weaker "also statically flagged by al-perf"
+  signal — NOT the runtime badge. (Optional; default is to omit them.)
+
+### R3-6 — "runtime-confirmed" → "runtime-CORRELATED"; routine-level co-occurrence ≠ causation (MUST) [gemini; deeper than opus]
+Even for the SAFE A-shape pairs, same-routine co-occurrence is CORRELATION, not causal confirmation: a
+routine with Loop A (runtime `repeated-siblings`) and Loop B (static N+1 about a DIFFERENT loop) would
+be falsely "confirmed" — a within-routine false positive the leaf-gate does NOT catch. Therefore:
+- Rename the badge/concept "runtime-confirmed" → **"runtime-correlated"** (honest: co-occurring, not
+  proven-same). No surface may claim runtime PROOF of a static finding without a positional join.
+- STRONGER (where data permits): join on `loopId`/source line — al-sem findings carry a `loopId`/anchor
+  (in the `--with-evidence` projection) and al-perf's runtime patterns carry the parent node + line;
+  when both resolve to the SAME loop/line, THEN a stronger "runtime-confirmed" is earned. Absent the
+  positional match, it stays "runtime-correlated."
+
+### R3-7 — Corroboration join: provenance + anchor-method + P3a-key reconciliation (MUST) [opus-2]
+- `DetectedPattern.involvedMethods` entries are display strings `"FunctionName (ObjectType ObjectId)"`.
+  Do NOT round-trip-parse them; match against the live `MethodBreakdown` set using the SAME
+  `formatMethodRef`/`methodAttrKey` the detectors used to produce them.
+- Multi-method patterns need an explicit ANCHOR (which involved method carries the finding): the
+  loop-owning PARENT — `involvedMethods[0]` for `repeated-siblings`, `involvedMethods[1]` for
+  `high-hit-count` (the parent is the second entry there). A flat-membership match is unsound (would
+  corroborate a finding on the callee).
+- P3c's join key MUST reconcile with P3a's field-qualified precise key (R3-3): patterns carry only the
+  bare profile `functionName`; reuse P3a's member-extraction so a field-trigger finding corroborates
+  the RIGHT field. Until P3a's finding-split lands, P3c MUST REFUSE to corroborate field/control-
+  trigger routines (only object-level/procedure routines, which don't collide) — else the badge can
+  attach to the wrong field.
+
+### R3-8 — `enclosingMember` insufficient for multi-extension triggers; add `originatingObject` (SHOULD) [gemini]
+Two extensions (`Ext1`, `Ext2`) adding a trigger to the SAME base field collide on
+`(Table, 50100, FieldA, OnValidate)`. The inventory/finding discriminator needs `originatingObject`
+(the app/extension object that declares the trigger), not just `enclosingMember`, to be genuinely
+precise. Add it alongside `enclosingMember` in R3-3/R3-4. (Residual ambiguity beyond this — genuine
+overloads — stays honestly `ambiguous`.)
+
+### R3-9 — RESHAPED DECOMPOSITION & SEQUENCING (MUST) [all three]
+The original "one phase, P3a→P3b→P3c" bundles three components atop an engine that emits NEITHER
+`enclosingMember` NOR `evidencePath` today. Re-sequence into three shippable stages:
+
+- **P3.1 — al-perf-only, ZERO engine work, ship FIRST.** Runtime-correlation corroboration: the
+  provenance-split map (R3-5), A-shape runtime pairs ONLY, "runtime-correlated" badge (R3-6),
+  parent-anchor (R3-7), on the EXISTING (possibly-ambiguous) join keys — gated to object-level/
+  procedure routines and to ambiguous-cluster matches that are honest at today's precision (R3-7). No
+  engine dependency, immediate value, fully additive. This is the MVP.
+- **Engine fix-then-freeze — alch-engine, ONE parity-aware change set, separate step.**
+  (i) L3 model: capture trigger enclosing member + originating object (R3-4, R3-8);
+  (ii) inventory projection: emit `enclosingMember?`/`originatingObject?` (Rust-only, safe);
+  (iii) analyze: add `--with-evidence` opt-in flag emitting `evidencePath` + the finding-side
+  member/object discriminator (R3-1, R3-2, R3-3) — parity harness skips it, default output unchanged;
+  (iv) prove + freeze. NO `StableRoutineId` hash change. One schema bump on the opt-in projection only.
+- **P3.2 — al-perf, AFTER the engine freeze.** P3a (precise method AND finding attribution, using the
+  new discriminator) + P3b (surface `evidencePath` from `--with-evidence`, join to cost, honest
+  degradation) + extend P3.1 corroboration to field-trigger routines (now precise) + optional
+  loopId/line positional join for the stronger "runtime-confirmed" (R3-6).
+
+### R3 — testing additions
+- P3.1: provenance-split (a B/C pattern agreement → NOT badged; an A pattern same-phenomenon → badged
+  "runtime-correlated"); parent-anchor (finding on callee → not corroborated); event-subscriber-hotspot
+  hard-excluded; determinism (sorted, byte-stable); fusion-off byte-unchanged.
+- Engine step: `analyze` default output byte-identical (parity), `--with-evidence` carries evidencePath
+  + member/object discriminator; inventory carries enclosingMember/originatingObject; the two-field
+  fixture now splits both method AND finding sides.
+- P3.2: field-trigger finding attributed to the correct field; causal chain steps with honest
+  no-percentage degradation on unresolved/builtin/cross-app steps; within-routine loop join (if built).
