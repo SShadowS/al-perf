@@ -124,3 +124,136 @@ with al-perf's own patterns on the same routine, that cross-link is P3+).
   carried verbatim into every rendered view; no surface may upgrade "ambiguous"/"clean" claims.
 - **Reuses** P1's FusedModel + `formatFusionSummary`; al-perf's section system, MCP tool pattern, web
   handlers — following each surface's established pattern, not restructuring.
+
+---
+
+## Revision 2 — folded from the three-reviewer adversarial pass (2× opus + gemini-3.1-pro)
+
+The original design above is superseded where it conflicts with this block. Three reviewers converged on
+data-integrity and surface-mechanics holes that are corpus-invisible (they don't fail any current test).
+Implement P2 to THIS revision.
+
+### R2-1 — Carrier is derived view ARRAYS, never the raw FusedModel (MUST) [opus×2]
+`FusedModel.attributions` is a `Map` → `JSON.stringify(result)` (the `--format json` path; MCP
+`server.ts`; web `server.ts`) silently emits `"attributions": {}`, losing ALL fusion data. **Do NOT put
+the raw `FusedModel` on `AnalysisResult`.** Instead `analyze.ts` attaches a derived, JSON-safe tree:
+```ts
+AnalysisResult.fusionViews?: {
+  hotspotAnnotations: HotspotAnnotation[];   // P2.0 annotateHotspots output (plain arrays/objects)
+  prioritizedFindings: PrioritizedFinding[]; // P2.0 prioritizeFindings output
+  unweightedFindings: PrioritizedFinding[];  // cold/blind/unkeyable bucket (weight 0), kept separate
+  correlationSummary: CorrelationSummary;    // already a plain object on FusedModel
+}
+```
+Every field is plain arrays/objects — no `Map`, no `Set`. The raw `FusedModel` stays the P1 in-memory
+sidecar inside `analyze.ts`; only `fusionViews` crosses to renderers/JSON/MCP/web. The optional field is
+absent when fusion is off → existing JSON byte-unchanged (additivity preserved).
+
+### R2-2 — `SectionRenderers<T>` has exactly 3 impls incl. html; html CANNOT be deferred (MUST) [opus-1]
+The impls are `terminal.ts`, `markdown.ts`, `html.ts` — NOT json (json is plain `JSON.stringify`). Adding
+`"fusion"` to `AnalysisSectionType` breaks `html.ts` compilation the instant the union changes. Therefore
+**P2.1 ships the terminal + markdown + html renderers together** (the original "html is P2.3" split is
+void). P2.3 (web) is the *client-side* `app.js` rendering — a separate concern from the server-side
+`SectionRenderers<string>` html impl (see R2-6).
+
+### R2-3 — Rank by `selfTimePercent` primary, not `totalTimePercent` (MUST) [opus-1, gemini]
+`totalTimePercent` is INCLUSIVE (routine + callees), the per-method sum far exceeds 100%, and orchestrators
+/roots dominate so a thin wrapper outranks the hot leaf it calls. **`prioritizeFindings` ranks by
+`selfTimePercent` desc primary**, with `totalTimePercent` + `gapTime` shown alongside as secondary context.
+Surface `efficiencyScore` (= selfTime/totalTime) on each row so a low score flags an orchestrator (its cost
+is its callees', not its own code). Tiebreak: `(totalTimePercent desc, efficiencyScore desc,
+finding.fingerprint, finding.id)`.
+
+### R2-4 — Annotate hotspots IN PLACE; the new `"fusion"` section is prioritized-findings ONLY (MUST) [opus-2, gemini]
+The original P2.1 (a) duplicated the hotspots table inside a new section. Instead:
+- **View (a) annotations render IN PLACE**: extend the EXISTING `hotspots` renderer (in all 3
+  `SectionRenderers` impls) to accept the side-map and render each hotspot's static cause inline,
+  conditionally (nothing extra when `fusionViews` absent → hotspots output byte-unchanged when off).
+- **The new `"fusion"` section carries ONLY view (b)**: the `PrioritizedFinding[]` inversion table. Placed
+  in `SECTION_ORDER` after `hotspots`, before `patterns`.
+
+### R2-5 — JSON additivity by a separate tree, NOT by mutating `result.hotspots[i]` (MUST) [gemini-S2]
+Implementing R2-4's in-place annotation must NOT inject keys into the existing `result.hotspots[]` element
+objects (that mutates al-perf's core JSON API schema for downstream consumers). The annotation join lives
+ONLY in the renderer (terminal/markdown/html read `fusionViews.hotspotAnnotations` and correlate to the
+hotspot row at render time). The JSON path emits `result.hotspots` strictly unchanged + the additive
+`result.fusionViews` tree. `result.hotspots[i]` schema is invariant.
+
+### R2-6 — Web is a hand-written `app.js` client renderer; P2.3 is bigger than the original spec (MUST) [opus-2, gemini]
+`web/public/app.js` is a hand-written client-side JS renderer (`renderHotspots`/`renderPatterns`/…) that
+mirrors `SECTION_ORDER` with NO TypeScript enforcement — a server-side section does NOT appear in the live
+web UI automatically. P2.3 MUST: (a) add `renderFusion` (prioritized-findings table) + inline hotspot
+annotation into `renderHotspots` in `app.js`; (b) add the markup/sidebar entry in `web/public/index.html`;
+(c) ensure `web/server.ts` ships `fusionViews` in its JSON payload (depends on R2-1). `batch-html.ts` —
+see R2-11.
+
+### R2-7 — Truncation Libel: feed `fuseProfile` the UNTRUNCATED methods (MUST) [gemini]
+`--top`/`--appFilter` truncate `result.hotspots` in `analyze.ts` BEFORE rendering. If the truncated array
+reaches `fuseProfile`/`correlate`, every method below the UI cutoff is treated as zero-runtime → its valid
+static findings are mislabeled `coldFindings` and its routines `coldRoutines`. That LIBELS hot executing
+code as "not hot / no runtime sample." **`fuseProfile` MUST receive the full untruncated `MethodBreakdown[]`**
+so `cold`/`orphan`/`matched` are computed against global runtime truth. Truncation (`top`/`appFilter`)
+applies ONLY in `views.ts` when building the view arrays for display — and that display cap MUST be
+`log()`/noted, never silent (a dropped hot finding must not read as "covered").
+
+### R2-8 — Ambiguous de-dup SUMS CPU, does not keep-highest (MUST) [gemini]
+P2.0's "keep the highest-CPU occurrence" UNDER-COUNTS: when `Field A - OnValidate` and `Field B - OnValidate`
+are both hot they normalize to the same join key and map to the SAME finding; keeping only the max drops the
+other's CPU. **A finding spanning N ambiguous method frames is ONE prioritized row whose `selfTimePercent`
+and `totalTimePercent` are the SUM across those frames**, listing the multiple execution entry points. The
+winning `method` reference shown is tiebroken by `method.functionName` string-compare for determinism.
+
+### R2-9 — Render the honest `matched`-but-not-clean state (MUST) [gemini]
+`correlate.ts` (≈ L351-363) emits `status: "matched"`, `findings: []`, `matchedClean: undefined`, with a
+populated `reason` ("matched; coverage incomplete …") when a routine matched but its body was not fully
+analyzed. The original renderer plan handled only `ambiguous`/`matched-clean`/`blind-spot` and would emit
+confusing whitespace here. **Renderers (all surfaces) encountering `status === "matched" &&
+findings.length === 0 && !matchedClean` MUST render the `reason` as a distinct "matched; coverage
+incomplete" state** — never blank, never implied-clean. `annotateHotspots` carries `matchedClean` +
+`reason` through verbatim (this is also R2-10's coverage-honesty requirement).
+
+### R2-10 — `HotspotAnnotation` carries a coverage-degraded flag (MUST) [opus-2]
+`matched-clean` must not read as "verified clean" when coverage was degraded. Coverage lives on
+`FusedModel` (per-app), which a single annotation can't see. `annotateHotspots` MUST stamp each annotation
+with the P1 honesty signals it needs locally — `matchedClean` (already gated in P1) PLUS the `reason`
+string — so no renderer can upgrade an incomplete-coverage match to a clean claim. The matched-clean label
+is shown ONLY when `matchedClean === true`.
+
+### R2-11 — Out-of-scope, stated explicitly (MUST note) [opus-2, gemini]
+- **Batch mode** (`batch-analyzer.ts`) never calls `fuseProfile` → `result.fusionViews` is absent → the
+  batch SectionRenderers/`batch-html.ts` render nothing for fusion. This is intended; state it. Batch
+  fusion is a later phase, not P2.
+- The display cap from R2-7 is the ONLY truncation; never silently drop a hot finding.
+
+### R2-12 — MCP must not blow the LLM context with cold findings (MUST) [gemini]
+Legacy BC workspaces produce thousands of static findings. The `prioritized_findings` MCP tool and the
+`analyze_profile` fusion block MUST return ONLY the runtime-weighted findings (`selfTimePercent > 0`), plus
+the aggregate `correlationSummary` counts so the model knows what it isn't seeing. `unweightedFindings`
+(cold/blind/unkeyable) are NOT inlined into MCP output — they're summarized by count only. (CLI/web MAY
+show the unweighted bucket; MCP must not.)
+
+### R2-13 — `corroboratingPatterns` cross-signal: leaf-only in P2, else false causality (MUST→SHOULD) [gemini, refines opus-2 M6]
+Filling `corroboratingPatterns` from al-perf's own `patterns.ts` (M6) is high-value BUT unsound if matched
+by method id alone: al-perf patterns trigger on INCLUSIVE behavior (a heavy orchestrator's whole subtree),
+while al-sem findings are LEXICAL line items — intersecting them on a shared `MethodBreakdown` falsely
+"runtime-confirms" an unrelated finding (an N+1 deep in the call graph corroborating a top-of-orchestrator
+static line). **P2 cross-signal corroboration is limited to LEAF routines (`efficiencyScore > 0.8`)** where
+inclusive ≈ exclusive; broader call-graph-aware corroboration waits for P3. If leaf-gating proves too thin
+to be useful, DEFER `corroboratingPatterns` entirely to P3 rather than ship false causality.
+
+### R2-14 — Determinism beyond Map iteration (MUST) [opus-2, gemini]
+`prioritizeFindings`/`annotateHotspots` drive off the ORDERED `methods[]` array, never `Map` iteration
+order. All sorts have a total tiebreak chain ending in `finding.id` (unique) so output is byte-stable.
+Ambiguous-frame winner selection (R2-8) and any "representative method" pick use `functionName`
+string-compare as the final tiebreak. Add a byte-stability test (run twice, assert identical) per view.
+
+### R2 testing additions
+- A test feeding `fuseProfile` a method array then truncating in `views.ts` — assert a below-cutoff method
+  with findings is NOT labeled cold (R2-7).
+- A test: two hot ambiguous frames + one shared finding → one row, summed CPU (R2-8).
+- A test: matched, zero findings, degraded coverage → renders the "coverage incomplete" state, never blank
+  and never "clean" (R2-9/R2-10), across terminal/markdown/html.
+- A test: `result.fusionViews` absent → terminal/markdown/html/json output byte-identical to pre-P2; and
+  `result.hotspots[i]` schema unchanged when fusion IS on (R2-1/R2-5).
+- A test: MCP output excludes cold/orphan findings, includes the summary counts (R2-12).
+- Byte-stability (run-twice-identical) for both views (R2-14).
