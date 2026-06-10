@@ -550,13 +550,17 @@ export function runEngine(
 
 /**
  * The engine emits each evidencePath step as
- * `{ routineId, sourceAnchor: { file, line, … }, note, operationId?, callsiteId?, loopId? }`.
- * al-perf's EvidenceStep flattens sourceAnchor to `{ file, line }` at the top level.
- * primaryLocation.enclosingMember + originatingObject are passed through verbatim
- * (they are already in FindingLocation's optional fields).
+ * `{ routineId, note, sourceAnchor: { sourceUnitId, range: { startLine, startColumn,
+ * endLine, endColumn }, enclosingRoutineId, syntaxKind }, operationId?, loopId?, callsiteId? }`.
+ *
+ * al-perf's EvidenceStep flattens the anchor to top-level `{ file, line }`:
+ * file = `sourceAnchor.sourceUnitId`, line = `sourceAnchor.range.startLine`.
+ * `callsiteId` is dropped (not part of EvidenceStep). primaryLocation's
+ * enclosingMember + originatingObject (which ARE flat on the finding) pass through
+ * verbatim — they are already in FindingLocation's optional fields.
  *
  * All new fields are defensive: if the engine omits them (old 1.0.0 engine), the
- * result is gracefully undefined.
+ * result is gracefully undefined; missing anchor fields degrade to "" / 0.
  */
 function mapFindingEvidencePath(raw: FindingSummary): FindingSummary {
 	const rawAny = raw as unknown as Record<string, unknown>;
@@ -572,18 +576,10 @@ function mapFindingEvidencePath(raw: FindingSummary): FindingSummary {
 				| Record<string, unknown>
 				| undefined
 				| null;
+			const range = anchor?.range as Record<string, unknown> | undefined | null;
 			const file =
-				typeof anchor?.file === "string"
-					? anchor.file
-					: typeof step.file === "string"
-						? step.file
-						: "";
-			const line =
-				typeof anchor?.line === "number"
-					? anchor.line
-					: typeof step.line === "number"
-						? step.line
-						: 0;
+				typeof anchor?.sourceUnitId === "string" ? anchor.sourceUnitId : "";
+			const line = typeof range?.startLine === "number" ? range.startLine : 0;
 			const mapped: EvidenceStep = {
 				routineId: typeof step.routineId === "string" ? step.routineId : "",
 				file,

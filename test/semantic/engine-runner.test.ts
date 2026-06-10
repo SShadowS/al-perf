@@ -450,6 +450,8 @@ describe("engine-runner: schema 1.1.0 new fields", () => {
 		expect(Array.isArray(procFinding?.evidencePath)).toBe(true);
 		expect(procFinding?.evidencePath?.length).toBe(2);
 
+		// file = sourceAnchor.sourceUnitId, line = sourceAnchor.range.startLine
+		// (the REAL engine shape — NOT a flat sourceAnchor.file/line).
 		const step0 = procFinding?.evidencePath?.[0];
 		expect(step0?.routineId).toMatch(/Codeunit:50000#onrun/);
 		expect(step0?.file).toBe("ws:src/Cod50000.al");
@@ -458,12 +460,15 @@ describe("engine-runner: schema 1.1.0 new fields", () => {
 		// callsiteId is NOT in EvidenceStep — only operationId + loopId.
 		expect(step0?.operationId).toBeUndefined();
 		expect(step0?.loopId).toBeUndefined();
+		expect(
+			(step0 as unknown as Record<string, unknown>).callsiteId,
+		).toBeUndefined();
 
 		const step1 = procFinding?.evidencePath?.[1];
 		expect(step1?.routineId).toMatch(/Codeunit:50000#proc/);
 		expect(step1?.file).toBe("ws:src/Cod50000.al");
 		expect(step1?.line).toBe(10);
-		expect(step1?.note).toBe("DB read inside loop");
+		expect(step1?.note).toBe("for loop");
 		expect(step1?.operationId).toMatch(/op1/);
 		expect(step1?.loopId).toMatch(/loop1/);
 	});

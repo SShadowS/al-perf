@@ -142,8 +142,10 @@ export interface FindingLocation {
 
 /**
  * One step in an evidence path as emitted by `alsem analyze --with-evidence`.
- * The engine emits `sourceAnchor` (file/line/range); al-perf maps it to `{file, line}`.
- * `routineId` is in `:`-form (StableRoutineId).
+ * The engine emits `sourceAnchor: { sourceUnitId, range: { startLine, … },
+ * enclosingRoutineId, syntaxKind }`; al-perf flattens it to top-level
+ * `file` (= `sourceAnchor.sourceUnitId`) + `line` (= `sourceAnchor.range.startLine`).
+ * `routineId` is in `:`-form (StableRoutineId). `callsiteId` is dropped on mapping.
  */
 export interface EvidenceStep {
 	routineId: string;

@@ -212,31 +212,43 @@ function findingsAnalyze() {
 		"DB operation inside a loop",
 		"ProcessLine",
 	);
-	// Schema 1.1.0: add evidencePath (with sourceAnchor as the engine emits it)
-	// to the ProcessLine finding. Two steps: the outer caller and the inner op.
+	// Schema 1.1.0: add evidencePath with the REAL engine sourceAnchor shape
+	// ({ sourceUnitId, range: { startLine, startColumn, endLine, endColumn },
+	// enclosingRoutineId, syntaxKind }) to the ProcessLine finding. Two steps:
+	// the outer caller and the inner loop op.
 	const procFindingWithEvidence = {
 		...procFinding,
 		evidencePath: [
 			{
 				routineId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
-				sourceAnchor: {
-					file: "ws:src/Cod50000.al",
-					line: 5,
-					startColumn: 3,
-					endColumn: 20,
-				},
 				note: "calls",
+				sourceAnchor: {
+					sourceUnitId: "ws:src/Cod50000.al",
+					range: {
+						startLine: 5,
+						startColumn: 3,
+						endLine: 5,
+						endColumn: 20,
+					},
+					enclosingRoutineId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
+					syntaxKind: "call_statement",
+				},
 				callsiteId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun/cs1`,
 			},
 			{
 				routineId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
+				note: "for loop",
 				sourceAnchor: {
-					file: "ws:src/Cod50000.al",
-					line: 10,
-					startColumn: 5,
-					endColumn: 40,
+					sourceUnitId: "ws:src/Cod50000.al",
+					range: {
+						startLine: 10,
+						startColumn: 5,
+						endLine: 13,
+						endColumn: 40,
+					},
+					enclosingRoutineId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
+					syntaxKind: "for_statement",
 				},
-				note: "DB read inside loop",
 				operationId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc/op1`,
 				loopId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc/loop1`,
 			},
