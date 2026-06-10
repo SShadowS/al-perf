@@ -395,24 +395,27 @@ describe("corroborate", () => {
 		// Re-correlate with the updated findings
 		const fused2 = correlate(methods, engine);
 
-		// Both patterns anchor to ProcessRecords
+		// Both patterns anchor to ProcessRecords. Feed them in REVERSE-sorted order
+		// ("repeated-siblings" before "recursive-call") so the Set's insertion order is
+		// reverse-sorted — this actually exercises `.sort()` rather than being a tautology.
 		const patterns = [
-			makePattern("recursive-call", [
-				fmt("ProcessRecords", "Codeunit", 50100), // anchorIndex 0 = self
-			]),
 			makePattern("repeated-siblings", [
 				fmt("ProcessRecords", "Codeunit", 50100), // anchorIndex 0 = parent
 				fmt("Child", "Codeunit", 50101),
+			]),
+			makePattern("recursive-call", [
+				fmt("ProcessRecords", "Codeunit", 50100), // anchorIndex 0 = self
 			]),
 		];
 
 		corroborate(fused2, methods, patterns);
 
 		const attr = fused2.attributions.get("ProcessRecords_Codeunit_50100");
-		expect(attr?.corroboratingPatterns).toBeDefined();
-		// Must be sorted
-		const patterns2 = attr?.corroboratingPatterns ?? [];
-		expect(patterns2).toEqual([...patterns2].sort());
+		// EXACT sorted order, despite reverse-sorted insertion → proves `.sort()` runs.
+		expect(attr?.corroboratingPatterns).toEqual([
+			"recursive-call",
+			"repeated-siblings",
+		]);
 	});
 
 	it("empty patterns → no corroborating patterns set", () => {

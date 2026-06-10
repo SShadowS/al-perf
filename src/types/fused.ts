@@ -110,9 +110,17 @@ export interface SemanticAttribution {
 	reason?: string;
 
 	/**
-	 * Reserved for P2: al-perf's own `patterns.ts` `runDetectors` flags on the
-	 * same routine as al-sem (the highest-value "static cause + runtime confirmation"
-	 * signal). Unfilled in P1 so P2 is not blocked.
+	 * Runtime-correlation corroboration (P3.1, spec Revision-2 R3-5/R3-6/R3-7).
+	 *
+	 * The ids of al-perf's OWN runtime-shape pattern detectors (`src/core/patterns.ts`)
+	 * that fire on THIS routine AND describe the SAME phenomenon as one of this
+	 * attribution's al-sem findings (per the curated `corroboration-map.ts`). Populated
+	 * by `corroborate()` — sorted + deduped — ONLY for `status === "matched"`
+	 * attributions; absent when no runtime pattern corroborates.
+	 *
+	 * This is CORRELATION, not causation (R3-6): co-occurrence on one routine earns the
+	 * "runtime-correlated" badge, never "runtime-confirmed". ONLY runtime-provenance
+	 * patterns appear here — al-perf's source-static/source-only scans never corroborate.
 	 */
 	corroboratingPatterns?: string[];
 }

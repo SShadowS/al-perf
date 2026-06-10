@@ -17,13 +17,13 @@
  */
 
 import type { MethodBreakdown } from "../types/aggregated.js";
-import type { DetectedPattern } from "../types/patterns.js";
 import type { FusedModel } from "../types/fused.js";
+import type { DetectedPattern } from "../types/patterns.js";
+import { methodAttrKey } from "./correlate.js";
 import {
 	CORROBORATION_MAP,
 	corroboratesDetector,
 } from "./corroboration-map.js";
-import { methodAttrKey } from "./correlate.js";
 
 // ---------------------------------------------------------------------------
 // Method ref formatting
@@ -56,6 +56,11 @@ function formatMethodRef(m: MethodBreakdown): string {
  *
  * Skips attributions with `status !== "matched"` (R3-7 gate).
  * Omits `corroboratingPatterns` entirely when no corroboration applies.
+ *
+ * PRECONDITION: this is a single enriching pass over FRESH `correlate` output,
+ * where `corroboratingPatterns` is unset. It only ever SETS the field (never
+ * clears it), so calling it twice or on a model whose field is already populated
+ * would NOT reset stale values — callers must invoke it exactly once.
  *
  * @param fused    The FusedModel to enrich (mutated in place).
  * @param methods  The MethodBreakdown[] used to build the fused model.
@@ -92,7 +97,12 @@ export function corroborate(
 				} else {
 					corroborationByKey.set(key, new Set([pattern.id]));
 				}
-				break; // first match wins; each pattern has exactly one anchor method
+				// First match wins. SAFE because two methods that format identically
+				// (same functionName/objectType/objectId) collide on the same join key
+				// in correlate → status="ambiguous", which the matched-only gate below
+				// filters out. Do NOT remove that gate without revisiting this: it would
+				// reintroduce order-dependent (nondeterministic) anchor resolution.
+				break;
 			}
 		}
 	}
