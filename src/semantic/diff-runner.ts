@@ -2,8 +2,11 @@
  * diff-runner.ts — Invoke `alsem diff` + `alsem fingerprint --inventory-only`
  * for a before/after workspace pair and return a typed `DiffAnalysis`.
  *
- * Pattern mirrors engine-runner.ts: never throws → returns
- * `DiffAnalysis | EngineDisabled`. Schema-pinned to EXPECTED_DIFF_SCHEMA_VERSION.
+ * Mirrors engine-runner's spawn/parse/schema-gate pattern: never throws →
+ * returns `DiffAnalysis | EngineDisabled`. Schema-pinned to
+ * EXPECTED_DIFF_SCHEMA_VERSION. NO result cache — unlike engine-runner (which
+ * caches the in-flight promise per content-hash+schema), diff is a one-shot
+ * before/after compare with no repeated-call hot path, so caching buys nothing.
  *
  * P4.0b — Revision 2 spec (PR2-1..PR2-8).
  */
@@ -360,11 +363,30 @@ function resolveBinary(opts: RunEngineOptions): string | null {
  *
  * Returns `DiffAnalysis` on success or `{ disabled, reason }` — NEVER throws.
  * Also reads both workspace `app.json` files for the version guard (PR2-4).
+ *
+ * The body is wrapped in an outer try/catch (defense-in-depth parity with
+ * engine-runner's `.catch` net) so any unforeseen throw degrades to a disabled
+ * result instead of propagating.
  */
 export async function runEngineDiff(
 	beforeWs: string,
 	afterWs: string,
 	opts: RunEngineOptions = {},
+): Promise<DiffResult> {
+	try {
+		return await runEngineDiffUnsafe(beforeWs, afterWs, opts);
+	} catch (e) {
+		return {
+			disabled: true,
+			reason: `unexpected diff engine error: ${String(e)}`,
+		};
+	}
+}
+
+async function runEngineDiffUnsafe(
+	beforeWs: string,
+	afterWs: string,
+	opts: RunEngineOptions,
 ): Promise<DiffResult> {
 	const bin = resolveBinary(opts);
 	if (!bin) {

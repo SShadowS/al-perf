@@ -341,6 +341,19 @@ export function correlateRegressions(
 
 		for (const idx of indices) {
 			const delta = findings[idx];
+
+			// procedure-added / procedure-removed are structural-existence deltas
+			// handled by the new/removed-method correlation (PR2-5). Skip them here
+			// so a delta can never be double-attributed (annotated on a regression
+			// AND matched in the new/removed loop). Implausible in practice (a
+			// removed proc being a live regression) but cheap to rule out.
+			if (
+				delta.kind === "procedure-added" ||
+				delta.kind === "procedure-removed"
+			) {
+				continue;
+			}
+
 			const { basis } = classifyDelta(delta.category, delta.kind);
 
 			// Cross-boundary deltas are NOT local annotations (PR2-7).

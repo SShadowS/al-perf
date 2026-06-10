@@ -562,35 +562,64 @@ describe("correlateRegressions", () => {
 	});
 
 	// ---- Test 9: determinism ----
-	test("determinism — two identical calls produce the same output", () => {
-		const method = makeMethodDelta(
-			"DeterminismTest",
-			"Codeunit",
-			58000,
-			150,
-			300,
-		);
-		const stableId = `${APP_GUID}:Codeunit:58000#hashI`;
-		const routine = makeRoutine("DeterminismTest", 58000, "Codeunit", stableId);
-		const delta = makeDelta(
-			"d9",
-			"capabilities",
-			"capability-gained-write",
-			stableId,
-			{
-				newStableId: stableId,
-			},
-		);
+	test("determinism — multi-element ordering is stable across runs", () => {
+		// TWO regressions, each carrying MULTIPLE matching-basis deltas, PLUS
+		// several static-only + cross-boundary deltas — so annotatedRegressions[],
+		// staticDeltas[], and staticOnlyChanges[] are ALL multi-element lists. A
+		// 1-element fixture would pass even if the code leaked Map iteration order;
+		// this exercises the engine-order filtering that guards PR2-8.
+
+		// Regression 1: ProcessA (total regression) — two total-basis deltas.
+		const methodA = makeMethodDelta("ProcessA", "Codeunit", 58000, 0, 300);
+		const stableA = `${APP_GUID}:Codeunit:58000#hashA`;
+		const routineA = makeRoutine("ProcessA", 58000, "Codeunit", stableA);
+
+		// Regression 2: ProcessB (self regression) — one self-basis delta.
+		const methodB = makeMethodDelta("ProcessB", "Codeunit", 58001, 200, 0);
+		const stableB = `${APP_GUID}:Codeunit:58001#hashB`;
+		const routineB = makeRoutine("ProcessB", 58001, "Codeunit", stableB);
+
+		// A routine with a static-only delta (not regressed).
+		const stableC = `${APP_GUID}:Codeunit:58002#hashC`;
+		const routineC = makeRoutine("ProcessC", 58002, "Codeunit", stableC);
+
+		// Findings in a deliberate engine order; correlate must preserve it.
+		const findings: DiffDelta[] = [
+			makeDelta("dA1", "capabilities", "capability-gained-write", stableA, {
+				newStableId: stableA,
+			}),
+			makeDelta("dC1", "capabilities", "capability-gained-http", stableC, {
+				newStableId: stableC,
+			}),
+			makeDelta("dB1", "abi", "procedure-signature-changed", stableB, {
+				newStableId: stableB,
+			}),
+			makeDelta("dA2", "capabilities", "capability-gained-commit", stableA, {
+				newStableId: stableA,
+			}),
+			// A cross-boundary event delta on A — always staticOnlyChanges.
+			makeDelta(
+				"dA3",
+				"capabilities",
+				"capability-gained-event-publish",
+				stableA,
+				{ newStableId: stableA },
+			),
+		];
 
 		const diff: DiffAnalysis = {
-			findings: [delta],
-			afterInventory: [routine],
+			findings,
+			afterInventory: [routineA, routineB, routineC],
 			beforeAppVersion: "1.0.0.0",
 			afterAppVersion: "2.0.0.0",
 			alsemVersion: "0.0.0-test",
 		};
 
-		const comp = { regressions: [method], newMethods: [], removedMethods: [] };
+		const comp = {
+			regressions: [methodA, methodB],
+			newMethods: [],
+			removedMethods: [],
+		};
 		const r1 = correlateRegressions(comp, diff, {
 			before: "1.0.0.0",
 			after: "2.0.0.0",
@@ -600,6 +629,12 @@ describe("correlateRegressions", () => {
 			after: "2.0.0.0",
 		});
 
+		// Sanity: the lists are genuinely multi-element so this test has teeth.
+		expect(r1.annotatedRegressions).toHaveLength(2);
+		expect(r1.annotatedRegressions[0].staticDeltas).toHaveLength(2);
+		expect(r1.staticOnlyChanges.length).toBeGreaterThanOrEqual(2);
+
+		// Full structural identity across runs (would break on any Map-order leak).
 		expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));
 	});
 
