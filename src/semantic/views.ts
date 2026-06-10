@@ -196,26 +196,48 @@ export interface FusionViews {
 
 /**
  * Extract the `originatingObject` from the matched routine when the
- * attribution is an exact match (status="matched", attributionConfidence="exact",
- * stableRoutineId is a single string). Looks up the routine in `allRoutines`
- * by stableRoutineId and returns its `originatingObject` if present.
+ * attribution is an exact match (stableRoutineId is a single string). Looks
+ * up the routine in the pre-built `stableRoutineId → originatingObject` map
+ * (O(1)) and returns its `originatingObject` if present.
  *
  * Returns `undefined` when:
- *  - The attribution is ambiguous or a blind-spot.
  *  - stableRoutineId is an array (ambiguous) or absent.
- *  - The routine is not found in `allRoutines` (old model / no allRoutines).
- *  - The matched routine has no `originatingObject` (non-member-trigger or old engine).
+ *  - The routine is not in the map (old model / no allRoutines, or the routine
+ *    carries no `originatingObject` — non-member-trigger or old engine).
+ *
+ * NOTE: the map only holds routines that HAVE an `originatingObject`, so a
+ * hit always yields a defined value (see buildOriginatingObjectMap).
  */
 function resolveOriginatingObject(
 	stableRoutineId: string | string[] | undefined,
-	allRoutines: RoutineIdentity[] | undefined,
+	originatingByStableId: Map<string, string>,
 ): string | undefined {
 	if (typeof stableRoutineId !== "string") return undefined;
-	if (!allRoutines || allRoutines.length === 0) return undefined;
-	const routine = allRoutines.find(
-		(r) => r.stableRoutineId === stableRoutineId,
-	);
-	return routine?.originatingObject;
+	return originatingByStableId.get(stableRoutineId);
+}
+
+/**
+ * Build a `stableRoutineId → originatingObject` map from the inventory once,
+ * so the per-hotspot annotation loop can look up in O(1) instead of an
+ * O(routines) `Array.find` per hotspot (was O(hotspots × routines) — a real
+ * quadratic on the MCP/web path with untruncated methods + a full inventory).
+ *
+ * Only routines that carry an `originatingObject` are indexed — a miss is then
+ * indistinguishable from "no originatingObject", which is exactly the graceful
+ * behaviour we want. Returns an empty map when `allRoutines` is absent/empty
+ * (graceful: no provenance, identical to the old `find`-based path).
+ */
+function buildOriginatingObjectMap(
+	allRoutines: RoutineIdentity[] | undefined,
+): Map<string, string> {
+	const map = new Map<string, string>();
+	if (!allRoutines) return map;
+	for (const r of allRoutines) {
+		if (r.originatingObject !== undefined) {
+			map.set(r.stableRoutineId, r.originatingObject);
+		}
+	}
+	return map;
 }
 
 /**
@@ -278,6 +300,10 @@ export function annotateHotspots(
 	fused: FusedModel,
 	methods: MethodBreakdown[],
 ): HotspotAnnotation[] {
+	// R3-8 perf: build the stableRoutineId → originatingObject map ONCE so the
+	// per-hotspot lookup below is O(1) (was O(hotspots × routines) via Array.find).
+	const originatingByStableId = buildOriginatingObjectMap(fused.allRoutines);
+
 	const out: HotspotAnnotation[] = [];
 	for (const m of methods) {
 		const key = methodAttrKey(m);
@@ -291,7 +317,7 @@ export function annotateHotspots(
 		// a simple truthiness check without re-parsing the :-form.
 		const rawOriginating = resolveOriginatingObject(
 			attr.stableRoutineId,
-			fused.allRoutines,
+			originatingByStableId,
 		);
 		const originatingObject =
 			rawOriginating !== undefined &&
