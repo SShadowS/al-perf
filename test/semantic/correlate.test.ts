@@ -1275,3 +1275,339 @@ describe("correlate: unkeyableFindings determinism sort", () => {
 		]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Test 22: precise field-trigger attribution via enclosingMember (P3.2a)
+// Two OnValidate triggers on the same table, each with a distinct enclosingMember.
+// Profile frames are compound names: "Sell-to Customer No. - OnValidate" and
+// "Bill-to Customer No. - OnValidate".
+// Expected: TWO distinct `matched` attributions (each to its field), NOT ambiguous.
+// ---------------------------------------------------------------------------
+
+const STABLE_ID_SELL_TO = `${APP_GUID}:Table:18#sell000000000000000000000000000000000000000000000000000000000000001`;
+const STABLE_ID_BILL_TO = `${APP_GUID}:Table:18#bill000000000000000000000000000000000000000000000000000000000000002`;
+
+describe("correlate: precise field-trigger (two OnValidate, distinct enclosingMember)", () => {
+	// Finding for Sell-to field — carries enclosingMember on primaryLocation
+	// so it can be filtered to only the Sell-to routine (RE-11).
+	const sellFinding: FindingSummary = {
+		id: "d1/sell1",
+		fingerprint: "sell0001",
+		detector: "d1-db-op-in-loop",
+		title: "Finding d1/sell1",
+		rootCause: "test",
+		severity: "high",
+		confidence: { level: "likely" },
+		primaryLocation: {
+			file: "ws:src/Test.al",
+			line: 10,
+			column: 1,
+			objectId: `${APP_GUID}/Table/18`,
+			objectName: "TestObject",
+			routineName: "OnValidate",
+			enclosingMember: "Sell-to Customer No.",
+		},
+		affectedObjects: [`${APP_GUID}/Table/18`],
+		affectedTables: [],
+	};
+
+	// Two inventory routines: same routineName "OnValidate", same table 18,
+	// but different enclosingMember → different stableRoutineIds.
+	const routineSellTo: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_SELL_TO,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Sell-to Customer No.",
+	};
+	const routineBillTo: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_BILL_TO,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Bill-to Customer No.",
+	};
+
+	const engine = makeEngine([routineSellTo, routineBillTo], [sellFinding]);
+
+	// Two profile frames — one per field.
+	const methodSellTo = makeMethod(
+		"Sell-to Customer No. - OnValidate",
+		"Table",
+		18,
+	);
+	const methodBillTo = makeMethod(
+		"Bill-to Customer No. - OnValidate",
+		"Table",
+		18,
+	);
+	const result = correlate([methodSellTo, methodBillTo], engine);
+
+	const keySellTo = "Sell-to Customer No. - OnValidate_Table_18";
+	const keyBillTo = "Bill-to Customer No. - OnValidate_Table_18";
+
+	it("Sell-to frame → matched (not ambiguous)", () => {
+		expect(result.attributions.get(keySellTo)!.status).toBe("matched");
+	});
+
+	it("Bill-to frame → matched (not ambiguous)", () => {
+		expect(result.attributions.get(keyBillTo)!.status).toBe("matched");
+	});
+
+	it("Sell-to attribution carries the correct stableRoutineId", () => {
+		expect(result.attributions.get(keySellTo)!.stableRoutineId).toBe(
+			STABLE_ID_SELL_TO,
+		);
+	});
+
+	it("Bill-to attribution carries the correct stableRoutineId", () => {
+		expect(result.attributions.get(keyBillTo)!.stableRoutineId).toBe(
+			STABLE_ID_BILL_TO,
+		);
+	});
+
+	it("Sell-to attribution carries the d1 finding", () => {
+		expect(result.attributions.get(keySellTo)!.findings.length).toBe(1);
+		expect(result.attributions.get(keySellTo)!.findings[0].id).toBe("d1/sell1");
+	});
+
+	it("Bill-to attribution has empty findings (RE-11 honest: that field has no finding)", () => {
+		expect(result.attributions.get(keyBillTo)!.findings).toEqual([]);
+	});
+
+	it("correlationSummary.matched = 2 (both fields matched precisely)", () => {
+		expect(result.correlationSummary.matched).toBe(2);
+	});
+
+	it("correlationSummary.ambiguous = 0 (none left ambiguous)", () => {
+		expect(result.correlationSummary.ambiguous).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 23: case-insensitivity — profile name with lowercase member still matches
+// ---------------------------------------------------------------------------
+
+describe("correlate: precise field-trigger case-insensitivity", () => {
+	const routineSellTo: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_SELL_TO,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Sell-to Customer No.",
+	};
+	const routineBillTo: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_BILL_TO,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Bill-to Customer No.",
+	};
+
+	const engine = makeEngine([routineSellTo, routineBillTo], []);
+
+	// Profile name with all-lowercase member — AL is case-insensitive.
+	const methodLower = makeMethod(
+		"sell-to customer no. - OnValidate",
+		"Table",
+		18,
+	);
+	const result = correlate([methodLower], engine);
+	const keyLower = "sell-to customer no. - OnValidate_Table_18";
+
+	it("lowercase profile member still resolves to matched", () => {
+		expect(result.attributions.get(keyLower)!.status).toBe("matched");
+	});
+
+	it("matches the correct Sell-to stableRoutineId despite casing", () => {
+		expect(result.attributions.get(keyLower)!.stableRoutineId).toBe(
+			STABLE_ID_SELL_TO,
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 24: action frame — strip '&' accelerator before matching (RE-4)
+// ---------------------------------------------------------------------------
+
+const STABLE_ID_RELEASE = `${APP_GUID}:Page:42#release00000000000000000000000000000000000000000000000000000000001`;
+const STABLE_ID_CONFIRM = `${APP_GUID}:Page:42#confirm00000000000000000000000000000000000000000000000000000000002`;
+
+describe("correlate: action frame '&' strip (RE-4)", () => {
+	const routineRelease: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_RELEASE,
+		objectType: "Page",
+		objectNumber: 42,
+		routineName: "OnAction",
+		enclosingMember: "Release",
+	};
+	const routineConfirm: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_CONFIRM,
+		objectType: "Page",
+		objectNumber: 42,
+		routineName: "OnAction",
+		enclosingMember: "Confirm",
+	};
+
+	const engine = makeEngine([routineRelease, routineConfirm], []);
+
+	// Profile emits the caption with '&' accelerator.
+	const methodRelease = makeMethod("Re&lease - OnAction", "Page", 42);
+	const result = correlate([methodRelease], engine);
+	const keyRelease = "Re&lease - OnAction_Page_42";
+
+	it("'Re&lease - OnAction' strips & and matches inventory 'Release'", () => {
+		expect(result.attributions.get(keyRelease)!.status).toBe("matched");
+	});
+
+	it("matches Release stableRoutineId (not Confirm)", () => {
+		expect(result.attributions.get(keyRelease)!.stableRoutineId).toBe(
+			STABLE_ID_RELEASE,
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 25: old-engine graceful fallback — no enclosingMember → still ambiguous
+// ---------------------------------------------------------------------------
+
+describe("correlate: old-engine (no enclosingMember) stays ambiguous", () => {
+	// Two routines without enclosingMember — simulates a 1.0.0 engine response.
+	const trigA = `${APP_GUID}:Table:50100#aaaa0000000000000000000000000000000000000000000000000000000000000001`;
+	const trigB = `${APP_GUID}:Table:50100#bbbb0000000000000000000000000000000000000000000000000000000000000002`;
+
+	// No enclosingMember on either — old-engine inventory.
+	const engine = makeEngine(
+		[
+			makeRoutine("OnValidate", 50100, "Table", trigA),
+			makeRoutine("OnValidate", 50100, "Table", trigB),
+		],
+		[],
+	);
+
+	const method = makeMethod("Field A - OnValidate", "Table", 50100);
+	const result = correlate([method], engine);
+	const key = "Field A - OnValidate_Table_50100";
+
+	it("falls back to ambiguous when candidates have no enclosingMember", () => {
+		expect(result.attributions.get(key)!.status).toBe("ambiguous");
+	});
+
+	it("correlationSummary.ambiguous = 1 (graceful fallback)", () => {
+		expect(result.correlationSummary.ambiguous).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 26: genuine overload — same enclosingMember + trigger, two signatures
+//          → still ambiguous (cannot disambiguate)
+// ---------------------------------------------------------------------------
+
+describe("correlate: genuine overload (same enclosingMember + trigger, two sigs) → still ambiguous", () => {
+	const STABLE_ID_SIG1 = `${APP_GUID}:Table:18#sig10000000000000000000000000000000000000000000000000000000000000001`;
+	const STABLE_ID_SIG2 = `${APP_GUID}:Table:18#sig20000000000000000000000000000000000000000000000000000000000000002`;
+
+	// Two routines with THE SAME enclosingMember AND routineName → genuine overload.
+	const routineSig1: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_SIG1,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Sell-to Customer No.",
+	};
+	const routineSig2: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_SIG2,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Sell-to Customer No.",
+	};
+
+	const engine = makeEngine([routineSig1, routineSig2], []);
+
+	const method = makeMethod("Sell-to Customer No. - OnValidate", "Table", 18);
+	const result = correlate([method], engine);
+	const key = "Sell-to Customer No. - OnValidate_Table_18";
+
+	it("genuine overload (same member+trigger, 2 sigs) → ambiguous", () => {
+		expect(result.attributions.get(key)!.status).toBe("ambiguous");
+	});
+
+	it("correlationSummary.ambiguous = 1", () => {
+		expect(result.correlationSummary.ambiguous).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 27: RE-11 honesty — precise-matched field with ZERO findings → matched
+// with empty findings (not ambiguous, not falsely claiming clean beyond coverage gate)
+// ---------------------------------------------------------------------------
+
+describe("correlate: RE-11 honest zero-finding precise match", () => {
+	// The Bill-to field has no static finding; the Sell-to field does.
+	// Bill-to should resolve to matched with empty findings — not ambiguous.
+	const routineSellTo: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_SELL_TO,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Sell-to Customer No.",
+	};
+	const routineBillTo: RoutineIdentity = {
+		stableRoutineId: STABLE_ID_BILL_TO,
+		objectType: "Table",
+		objectNumber: 18,
+		routineName: "OnValidate",
+		enclosingMember: "Bill-to Customer No.",
+	};
+
+	// Only the Sell-to field has a finding — carries enclosingMember so it is
+	// attributed only to Sell-to, leaving Bill-to with empty findings (RE-11).
+	const finding: FindingSummary = {
+		id: "d1/only-sell",
+		fingerprint: "sell9999",
+		detector: "d1-db-op-in-loop",
+		title: "Finding d1/only-sell",
+		rootCause: "test",
+		severity: "high",
+		confidence: { level: "likely" },
+		primaryLocation: {
+			file: "ws:src/Test.al",
+			line: 10,
+			column: 1,
+			objectId: `${APP_GUID}/Table/18`,
+			objectName: "TestObject",
+			routineName: "OnValidate",
+			enclosingMember: "Sell-to Customer No.",
+		},
+		affectedObjects: [`${APP_GUID}/Table/18`],
+		affectedTables: [],
+	};
+
+	const engine = makeEngine([routineSellTo, routineBillTo], [finding]);
+
+	// Only query the Bill-to frame to isolate the "no finding" case.
+	const methodBillTo = makeMethod(
+		"Bill-to Customer No. - OnValidate",
+		"Table",
+		18,
+	);
+	const result = correlate([methodBillTo], engine);
+	const keyBillTo = "Bill-to Customer No. - OnValidate_Table_18";
+
+	it("Bill-to (zero findings) resolves to matched — not ambiguous (RE-11)", () => {
+		expect(result.attributions.get(keyBillTo)!.status).toBe("matched");
+	});
+
+	it("Bill-to attribution has empty findings (honest: that field has no finding)", () => {
+		expect(result.attributions.get(keyBillTo)!.findings).toEqual([]);
+	});
+
+	it("correlationSummary.ambiguous = 0", () => {
+		expect(result.correlationSummary.ambiguous).toBe(0);
+	});
+
+	it("correlationSummary.matched = 1", () => {
+		expect(result.correlationSummary.matched).toBe(1);
+	});
+});

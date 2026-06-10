@@ -211,6 +211,49 @@ export function normalizeTriggerName(functionName: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// extractMemberTrigger
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a compound profile function name `"<member> - <trigger>"` into its
+ * constituent member and trigger parts — but ONLY when the suffix after the
+ * LAST `" - "` is a recognised AL trigger keyword.
+ *
+ * The `&` accelerator character is stripped from the member name so that action
+ * captions like `"Re&lease - OnAction"` match an inventory `enclosingMember` of
+ * `"Release"` (RE-4 contract).
+ *
+ * Returns `null` when:
+ *  - the separator `" - "` does not appear in the name, OR
+ *  - the suffix after the last `" - "` is not an AL trigger keyword.
+ *
+ * @example
+ * extractMemberTrigger("Sell-to Customer No. - OnValidate")
+ * // → { member: "Sell-to Customer No.", trigger: "OnValidate" }
+ *
+ * extractMemberTrigger("Re&lease - OnAction")
+ * // → { member: "Release", trigger: "OnAction" }
+ *
+ * extractMemberTrigger("OnRun")
+ * // → null  (no separator)
+ *
+ * extractMemberTrigger("Get - Value")
+ * // → null  (Value is not a trigger keyword)
+ */
+export function extractMemberTrigger(
+	functionName: string,
+): { member: string; trigger: string } | null {
+	const sep = " - ";
+	const lastIdx = functionName.lastIndexOf(sep);
+	if (lastIdx === -1) return null;
+	const trigger = functionName.slice(lastIdx + sep.length);
+	if (!AL_TRIGGER_KEYWORDS.has(trigger.toLowerCase())) return null;
+	// Strip the '&' accelerator character from the member portion (RE-4).
+	const member = functionName.slice(0, lastIdx).replace(/&/g, "");
+	return { member, trigger };
+}
+
+// ---------------------------------------------------------------------------
 // isAlRoutineFrame
 // ---------------------------------------------------------------------------
 

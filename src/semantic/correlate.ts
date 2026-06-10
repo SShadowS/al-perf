@@ -23,14 +23,12 @@
  */
 
 import type { MethodBreakdown } from "../types/aggregated.js";
-// P3 ENHANCEMENT (tracked): precise field/control-level trigger correlation
-// needs al-sem to expose each trigger's enclosing field/control name in the
-// inventory, so the join key can be (objType, num, field, trigger) rather than
-// collapsing to (objType, num, bare-trigger). Until then, two fields on the
-// same object each having (say) an OnValidate trigger collide on the same join
-// key and are honestly reported as `ambiguous` (we cannot tell field-A's
-// OnValidate from field-B's from the profile's bare name alone). See the
-// collision handling in the `universeEntries.length > 1` branch below.
+// P3.2a (SHIPPED): precise field/control-level trigger correlation is now live.
+// When inventory routines carry `enclosingMember` (schema 1.1.0+), the join
+// key is upgraded to (objType, num, member.toLowerCase(), trigger), allowing
+// two OnValidate triggers on different fields to resolve to distinct `matched`
+// attributions rather than a single `ambiguous` union.  Old-engine routines
+// (no enclosingMember) gracefully fall back to the bare-key `ambiguous` path.
 import type {
 	CorrelationSummary,
 	FusedModel,
@@ -44,6 +42,7 @@ import type {
 import type { EngineAnalysis } from "./engine-runner.js";
 import {
 	canonicalObjectType,
+	extractMemberTrigger,
 	isAlRoutineFrame,
 	normalizeTriggerName,
 	parseObjectId,
@@ -55,6 +54,21 @@ import {
 
 /** A stable 3-tuple key for the join. Stored as a string for Map use. */
 type JoinKey = string; // `${canonicalType}|${objectNumber}|${routineName}`
+
+/**
+ * A precise 4-tuple key for member-trigger disambiguation.
+ * Used when inventory routines carry `enclosingMember` (schema 1.1.0+).
+ */
+type PreciseMemberKey = string; // `${canonicalType}|${objectNumber}|${member.toLowerCase()}|${trigger}`
+
+function makePreciseMemberKey(
+	objectType: string,
+	objectNumber: number,
+	member: string,
+	trigger: string,
+): PreciseMemberKey {
+	return `${canonicalObjectType(objectType)}|${objectNumber}|${member.toLowerCase()}|${trigger}`;
+}
 
 function makeJoinKey(
 	objectType: string,
@@ -103,6 +117,33 @@ function buildUniverseMap(
 	const map = new Map<JoinKey, RoutineIdentity[]>();
 	for (const r of routines) {
 		const key = makeRoutineJoinKey(r);
+		const list = map.get(key) ?? [];
+		list.push(r);
+		map.set(key, list);
+	}
+	return map;
+}
+
+/**
+ * Build a precise-member index: (objectType, objectNumber, member.toLowerCase(), routineName)
+ * → RoutineIdentity[] for routines that carry `enclosingMember`.
+ *
+ * Only routines with `enclosingMember` present are indexed here. Used in the
+ * ambiguous-resolution branch to upgrade `ambiguous` → `matched` when a profile
+ * frame's member uniquely identifies one of the collision candidates (RE-4/RE-11).
+ */
+function buildPreciseMemberMap(
+	routines: RoutineIdentity[],
+): Map<PreciseMemberKey, RoutineIdentity[]> {
+	const map = new Map<PreciseMemberKey, RoutineIdentity[]>();
+	for (const r of routines) {
+		if (!r.enclosingMember) continue;
+		const key = makePreciseMemberKey(
+			r.objectType,
+			r.objectNumber,
+			r.enclosingMember,
+			r.routineName,
+		);
 		const list = map.get(key) ?? [];
 		list.push(r);
 		map.set(key, list);
@@ -290,6 +331,7 @@ export function correlate(
 ): FusedModel {
 	// Build lookup structures.
 	const universeMap = buildUniverseMap(engine.routines);
+	const preciseMemberMap = buildPreciseMemberMap(engine.routines);
 	const { byKey: findingsMap, unkeyable: unkeyableFindings } =
 		buildFindingsIndex(engine.findings);
 
@@ -364,27 +406,101 @@ export function correlate(
 			matched++;
 			if (isClean) matchedClean++;
 		} else {
-			// Multiple universe routines → ambiguous (overloads OR colliding
-			// field/control triggers that share a bare trigger name).
-			// Attach the UNION of findings (all share this join key, so rawFindings
-			// already IS the union — the findings multimap keys on the same tuple).
-			const unionFindings = sortFindings(rawFindings);
-			const stableIds = universeEntries.map((r) => r.stableRoutineId);
+			// Multiple universe routines share the bare join key.
+			//
+			// P3.2a: attempt precise member-trigger disambiguation first.
+			// When the profile name is "<member> - <trigger>" AND the inventory
+			// carries enclosingMember on the candidates, we can uniquely identify
+			// which field's OnValidate (etc.) this is.
+			//
+			// Falls back to `ambiguous` only when:
+			//  (a) the frame is not a member trigger (no " - " / non-keyword suffix), OR
+			//  (b) the candidates lack enclosingMember (old engine — graceful), OR
+			//  (c) the precise key still resolves to >1 routine (genuine overload).
+			const memberTrigger = extractMemberTrigger(m.functionName);
+			let resolvedPrecisely = false;
 
-			// HONEST reason: they share the NORMALIZED join name, NOT the
-			// unstripped profile functionName. For a field-trigger collision the
-			// unstripped name (e.g. "Field A - OnValidate") is NOT what they share;
-			// the shared key is the bare trigger ("OnValidate").
-			const sharedName = normalizeTriggerName(m.functionName);
+			if (memberTrigger !== null) {
+				const preciseKey = makePreciseMemberKey(
+					m.objectType,
+					m.objectId,
+					memberTrigger.member,
+					memberTrigger.trigger,
+				);
+				const preciseEntries = preciseMemberMap.get(preciseKey);
 
-			attributions.set(attrKey, {
-				status: "ambiguous",
-				findings: unionFindings,
-				attributionConfidence: "ambiguous",
-				stableRoutineId: stableIds,
-				reason: `${universeEntries.length} routines resolve to "${sharedName}" on ${canonicalObjectType(m.objectType)} ${m.objectId} (overloads or field/control triggers sharing a bare name); attribution is ambiguous`,
-			});
-			ambiguous++;
+				if (preciseEntries && preciseEntries.length === 1) {
+					// Unique precise match — RE-11: attribute to this field's routine.
+					// A zero-finding match is honest `matched` (the field truly has no
+					// static finding), NOT ambiguous.
+					const routine = preciseEntries[0];
+					// Findings are keyed by bare (objectType, objectNumber, routineName),
+					// so rawFindings may contain findings for MULTIPLE fields. Filter to
+					// only findings attributed to THIS field by checking
+					// primaryLocation.enclosingMember (present in schema 1.1.0).
+					// When a finding has no enclosingMember discriminator (old schema), it
+					// is included conservatively (cannot tell which field it belongs to).
+					const filteredFindings = rawFindings.filter((f) => {
+						const fm = f.primaryLocation.enclosingMember;
+						if (fm === undefined || fm === null) return true; // old schema: include
+						return (
+							fm.toLowerCase() === (routine.enclosingMember ?? "").toLowerCase()
+						);
+					});
+					const sortedFindings = sortFindings(filteredFindings);
+					const hasNoFindings = sortedFindings.length === 0;
+
+					const fullyAnalyzed = routineFullyAnalyzed(
+						routine.objectType,
+						routine.objectNumber,
+						engine.coverage,
+						engine.opaqueApps,
+					);
+					const isClean = hasNoFindings && fullyAnalyzed;
+
+					attributions.set(attrKey, {
+						status: "matched",
+						findings: sortedFindings,
+						attributionConfidence: "exact",
+						matchedClean: isClean ? true : undefined,
+						stableRoutineId: routine.stableRoutineId,
+						reason:
+							hasNoFindings && !fullyAnalyzed
+								? "matched; coverage incomplete (no findings, but the routine body was not fully analyzed — not verified clean)"
+								: undefined,
+					});
+					matched++;
+					if (isClean) matchedClean++;
+					resolvedPrecisely = true;
+				}
+				// If preciseEntries.length > 1 → genuine overload (same member+trigger,
+				// multiple signatures) → fall through to ambiguous below.
+				// If preciseEntries is absent or empty → old engine (no enclosingMember
+				// on any candidate) → fall through to ambiguous below.
+			}
+
+			if (!resolvedPrecisely) {
+				// Ambiguous: overloads OR field/control triggers sharing a bare name
+				// with no enclosingMember to discriminate (old engine or genuine overload).
+				// Attach the UNION of findings.
+				const unionFindings = sortFindings(rawFindings);
+				const stableIds = universeEntries.map((r) => r.stableRoutineId);
+
+				// HONEST reason: they share the NORMALIZED join name, NOT the
+				// unstripped profile functionName. For a field-trigger collision the
+				// unstripped name (e.g. "Field A - OnValidate") is NOT what they share;
+				// the shared key is the bare trigger ("OnValidate").
+				const sharedName = normalizeTriggerName(m.functionName);
+
+				attributions.set(attrKey, {
+					status: "ambiguous",
+					findings: unionFindings,
+					attributionConfidence: "ambiguous",
+					stableRoutineId: stableIds,
+					reason: `${universeEntries.length} routines resolve to "${sharedName}" on ${canonicalObjectType(m.objectType)} ${m.objectId} (overloads or field/control triggers sharing a bare name); attribution is ambiguous`,
+				});
+				ambiguous++;
+			}
 		}
 	}
 
