@@ -528,4 +528,87 @@ describe("prioritizeFindings — per-finding corroboratingPatterns (P3.1)", () =
 		const r2 = prioritizeFindings(fused2, [method]);
 		expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));
 	});
+
+	it("TRUE UNION: one fingerprint on TWO attributions with divergent corroborating sets carries BOTH, sorted (R2-8 cross-frame)", () => {
+		// Two field triggers normalize to ONE routine/finding (OnValidate) but have
+		// DISTINCT methodAttrKeys → two separate attributions carrying the SAME
+		// finding fingerprint. Each attribution gets a DIFFERENT corroborating set;
+		// the prioritized finding must union BOTH (not just the first frame's).
+		// repeated-siblings AND high-hit-count both corroborate d1-db-op-in-loop.
+		const methodA = makeMethod("Field A - OnValidate", "Table", 50100, 10, 10);
+		const methodB = makeMethod("Field B - OnValidate", "Table", 50100, 8, 8);
+		const engine = makeEngine(
+			[makeRoutine("OnValidate", 50100, "Table", "rt")],
+			[
+				makeFinding(
+					"FT",
+					"fpT",
+					"d1-db-op-in-loop",
+					"OnValidate",
+					"Table",
+					50100,
+				),
+			],
+		);
+		const fused = correlate([methodA, methodB], engine);
+
+		// Inject DIVERGENT corroborating sets on the two distinct attributions.
+		const attrA = fused.attributions.get("Field A - OnValidate_Table_50100");
+		const attrB = fused.attributions.get("Field B - OnValidate_Table_50100");
+		expect(attrA).toBeDefined();
+		expect(attrB).toBeDefined();
+		(attrA as SemanticAttribution).corroboratingPatterns = [
+			"repeated-siblings",
+		];
+		(attrB as SemanticAttribution).corroboratingPatterns = ["high-hit-count"];
+
+		const { weighted } = prioritizeFindings(fused, [methodA, methodB]);
+		const ft = weighted.find((r) => r.finding.id === "FT");
+		expect(ft).toBeDefined();
+		expect(ft?.frameCount).toBe(2); // both frames carry the finding
+		// TRUE UNION: both patterns present, sorted (high-hit-count < repeated-siblings).
+		expect(ft?.corroboratingPatterns).toEqual([
+			"high-hit-count",
+			"repeated-siblings",
+		]);
+	});
+
+	it("cross-frame union is order-independent + deterministic (frame order does not change the result)", () => {
+		const methodA = makeMethod("Field A - OnValidate", "Table", 50100, 10, 10);
+		const methodB = makeMethod("Field B - OnValidate", "Table", 50100, 8, 8);
+		const engine = makeEngine(
+			[makeRoutine("OnValidate", 50100, "Table", "rt")],
+			[
+				makeFinding(
+					"FT",
+					"fpT",
+					"d1-db-op-in-loop",
+					"OnValidate",
+					"Table",
+					50100,
+				),
+			],
+		);
+		const fused1 = correlate([methodA, methodB], engine);
+		(
+			fused1.attributions.get(
+				"Field A - OnValidate_Table_50100",
+			) as SemanticAttribution
+		).corroboratingPatterns = ["repeated-siblings"];
+		(
+			fused1.attributions.get(
+				"Field B - OnValidate_Table_50100",
+			) as SemanticAttribution
+		).corroboratingPatterns = ["high-hit-count"];
+		// Reverse the methods[] order → same finding, frames visited in opposite order.
+		const r1 = prioritizeFindings(fused1, [methodA, methodB]);
+		const r2 = prioritizeFindings(fused1, [methodB, methodA]);
+		const ft1 = r1.weighted.find((r) => r.finding.id === "FT");
+		const ft2 = r2.weighted.find((r) => r.finding.id === "FT");
+		expect(ft1?.corroboratingPatterns).toEqual([
+			"high-hit-count",
+			"repeated-siblings",
+		]);
+		expect(ft2?.corroboratingPatterns).toEqual(ft1?.corroboratingPatterns);
+	});
 });

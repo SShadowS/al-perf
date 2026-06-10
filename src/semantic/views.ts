@@ -179,8 +179,11 @@ export function prioritizeFindings(
 		attributionConfidence: AttributionConfidence;
 		// representative frame (highest selfTime; tiebreak by functionName asc)
 		rep: MethodBreakdown;
-		// attribution-level corroborating patterns (union across all frames for this finding)
-		attrCorroboratingPatterns?: string[];
+		// TRUE UNION of corroborating patterns across ALL frames carrying this
+		// fingerprint. A finding spanning N ambiguous frames may sit on N distinct
+		// attributions (different methodAttrKeys) with DIVERGENT corroborating sets;
+		// we accumulate every frame's patterns so none are dropped.
+		attrCorroboratingPatterns: Set<string>;
 	}
 
 	const acc = new Map<string, Acc>(); // keyed by finding.fingerprint
@@ -200,7 +203,7 @@ export function prioritizeFindings(
 					status: attr.status,
 					attributionConfidence: attr.attributionConfidence,
 					rep: m,
-					attrCorroboratingPatterns: attr.corroboratingPatterns,
+					attrCorroboratingPatterns: new Set(attr.corroboratingPatterns ?? []),
 				});
 			} else {
 				existing.selfTimePercent += m.selfTimePercent; // SUM (R2-8)
@@ -215,21 +218,25 @@ export function prioritizeFindings(
 				) {
 					existing.rep = m;
 				}
-				// union corroborating patterns across frames (union = same as first non-empty,
-				// since all frames for the same finding share the attribution-level set)
-				if (!existing.attrCorroboratingPatterns && attr.corroboratingPatterns) {
-					existing.attrCorroboratingPatterns = attr.corroboratingPatterns;
+				// TRUE UNION across frames: merge THIS frame's corroborating patterns
+				// into the accumulated set, so divergent sets on different attributions
+				// for the same fingerprint are all retained (not just the first).
+				if (attr.corroboratingPatterns) {
+					for (const pid of attr.corroboratingPatterns) {
+						existing.attrCorroboratingPatterns.add(pid);
+					}
 				}
 			}
 		}
 	}
 
 	const toPrioritized = (a: Acc): PrioritizedFinding => {
-		// Per-finding precision (R3-6): filter attribution-level patterns to only
-		// those that actually corroborate THIS finding's detector.
-		const perFindingPatterns = a.attrCorroboratingPatterns?.filter((pid) =>
-			corroboratesDetector(pid, a.finding.detector),
-		);
+		// Per-finding precision (R3-6): filter the unioned attribution-level patterns
+		// to only those that actually corroborate THIS finding's detector, then sort
+		// for determinism (the Set's insertion order is not stable across frame orders).
+		const perFindingPatterns = [...a.attrCorroboratingPatterns]
+			.filter((pid) => corroboratesDetector(pid, a.finding.detector))
+			.sort((x, y) => x.localeCompare(y));
 		return {
 			finding: a.finding,
 			functionName: a.rep.functionName,
@@ -243,10 +250,10 @@ export function prioritizeFindings(
 			frameCount: a.frameCount,
 			status: a.status,
 			attributionConfidence: a.attributionConfidence,
-			// Weighted-only (R2-12): omit when empty (perFindingPatterns is
-			// undefined or []) — the toPrioritized helper is only called for
-			// weighted findings; unweighted rows use toUnweighted (no corroboration).
-			...(perFindingPatterns && perFindingPatterns.length > 0
+			// Weighted-only (R2-12): omit when the filtered union is empty — the
+			// toPrioritized helper is only called for weighted findings; unweighted
+			// rows use toUnweighted (no corroboration).
+			...(perFindingPatterns.length > 0
 				? { corroboratingPatterns: perFindingPatterns }
 				: {}),
 		};
