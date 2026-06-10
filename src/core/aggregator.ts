@@ -65,12 +65,17 @@ export function aggregateByMethod(
 
 		let entry = map.get(key);
 		if (!entry) {
+			const appId = node.declaringApplication?.appId;
 			entry = {
 				functionName,
 				objectType,
 				objectName,
 				objectId,
 				appName,
+				// First-seen appId from declaringApplication (Option B: no key change).
+				// Absent when the declaring app doesn't carry an appId (System frames,
+				// synthetic fixtures). Do NOT update after first creation — first-seen wins.
+				...(appId !== undefined ? { appId } : {}),
 				selfTime: 0,
 				selfTimePercent: 0,
 				totalTime: 0,

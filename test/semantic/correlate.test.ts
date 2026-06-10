@@ -1656,3 +1656,181 @@ describe("correlate: member name containing ' - ' (split-on-last edge)", () => {
 		);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Test 29 – R3-8: app-scope gate — same app → matched
+// ---------------------------------------------------------------------------
+
+const APP_X_DASHED = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+const APP_X_DASHLESS = "437dbf0e84ff417a965ded2bb9650972"; // same GUID, dash-less
+const APP_Y_DASHED = "deadbeef-cafe-1234-abcd-000000000001";
+
+const STABLE_APP_X = `${APP_X_DASHED}:Codeunit:50100#aaaabbbbccccddddeeeeffff0000000000000000000000000000000000000000001`;
+const _STABLE_APP_Y = `${APP_Y_DASHED}:Codeunit:50100#aaaabbbbccccddddeeeeffff0000000000000000000000000000000000000000002`;
+
+describe("correlate: R3-8 app-scope gate — same app (gate passes, matched)", () => {
+	// Routine in app X; method's appId is app X (dash-less, as BC profiles emit).
+	const routineAppX: RoutineIdentity = {
+		stableRoutineId: STABLE_APP_X,
+		objectType: "Codeunit",
+		objectNumber: 50100,
+		routineName: "DoWork",
+		originatingObject: `${APP_X_DASHED}:Codeunit:50100`,
+	};
+
+	const engine = makeEngine([routineAppX], []);
+
+	// Method carries dash-less appId for app X.
+	const method: MethodBreakdown = {
+		...makeMethod("DoWork", "Codeunit", 50100),
+		appId: APP_X_DASHLESS,
+	};
+	const result = correlate([method], engine);
+	const key = "DoWork_Codeunit_50100";
+
+	it("status is matched (same-app gate passes)", () => {
+		expect(result.attributions.get(key)!.status).toBe("matched");
+	});
+
+	it("stableRoutineId is the app-X routine", () => {
+		expect(result.attributions.get(key)!.stableRoutineId).toBe(STABLE_APP_X);
+	});
+
+	it("correlationSummary.matched = 1", () => {
+		expect(result.correlationSummary.matched).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 30 – R3-8: app-scope gate — cross-app → NOT matched (blind-spot)
+// ---------------------------------------------------------------------------
+
+describe("correlate: R3-8 app-scope gate — cross-app (gate rejects, blind-spot)", () => {
+	// The only candidate routine belongs to app X.
+	const routineAppX: RoutineIdentity = {
+		stableRoutineId: STABLE_APP_X,
+		objectType: "Codeunit",
+		objectNumber: 50100,
+		routineName: "DoWork",
+		originatingObject: `${APP_X_DASHED}:Codeunit:50100`,
+	};
+
+	const engine = makeEngine([routineAppX], []);
+
+	// Method's appId is app Y — different app.
+	const method: MethodBreakdown = {
+		...makeMethod("DoWork", "Codeunit", 50100),
+		appId: APP_Y_DASHED,
+	};
+	const result = correlate([method], engine);
+	const key = "DoWork_Codeunit_50100";
+
+	it("status is blind-spot (cross-app false match rejected)", () => {
+		expect(result.attributions.get(key)!.status).toBe("blind-spot");
+	});
+
+	it("correlationSummary.blindSpot = 1", () => {
+		expect(result.correlationSummary.blindSpot).toBe(1);
+	});
+
+	it("correlationSummary.matched = 0", () => {
+		expect(result.correlationSummary.matched).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 31 – R3-8: graceful when method has NO appId (System frame)
+// ---------------------------------------------------------------------------
+
+describe("correlate: R3-8 app-scope gate — no method appId (graceful, matched as today)", () => {
+	const routineAppX: RoutineIdentity = {
+		stableRoutineId: STABLE_APP_X,
+		objectType: "Codeunit",
+		objectNumber: 50100,
+		routineName: "DoWork",
+		originatingObject: `${APP_X_DASHED}:Codeunit:50100`,
+	};
+
+	const engine = makeEngine([routineAppX], []);
+
+	// No appId on the method (System frame / old profile).
+	const method = makeMethod("DoWork", "Codeunit", 50100);
+	// (makeMethod does NOT set appId — confirm it's absent)
+	expect(method.appId).toBeUndefined();
+
+	const result = correlate([method], engine);
+	const key = "DoWork_Codeunit_50100";
+
+	it("status is matched (graceful — no appId means gate is silent)", () => {
+		expect(result.attributions.get(key)!.status).toBe("matched");
+	});
+
+	it("correlationSummary.matched = 1", () => {
+		expect(result.correlationSummary.matched).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 32 – R3-8: graceful when routine has NO originatingObject (old engine)
+// ---------------------------------------------------------------------------
+
+describe("correlate: R3-8 app-scope gate — no routine originatingObject (graceful, matched)", () => {
+	// Routine has no originatingObject — simulates a 1.0.0 engine.
+	const routineNoOrigin: RoutineIdentity = {
+		stableRoutineId: STABLE_APP_X,
+		objectType: "Codeunit",
+		objectNumber: 50100,
+		routineName: "DoWork",
+		// originatingObject absent
+	};
+
+	const engine = makeEngine([routineNoOrigin], []);
+
+	// Method carries app X appId, but routine has no originatingObject → gate silent.
+	const method: MethodBreakdown = {
+		...makeMethod("DoWork", "Codeunit", 50100),
+		appId: APP_X_DASHLESS,
+	};
+	const result = correlate([method], engine);
+	const key = "DoWork_Codeunit_50100";
+
+	it("status is matched (graceful — no originatingObject means gate is silent)", () => {
+		expect(result.attributions.get(key)!.status).toBe("matched");
+	});
+
+	it("correlationSummary.matched = 1", () => {
+		expect(result.correlationSummary.matched).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 33 – R3-8: GUID normalization (dash-less appId matches dashed originatingObject)
+// ---------------------------------------------------------------------------
+
+describe("correlate: R3-8 GUID normalization (dash-less vs dashed)", () => {
+	// originatingObject uses dashed GUID; method.appId is dash-less hex.
+	const routineAppX: RoutineIdentity = {
+		stableRoutineId: STABLE_APP_X,
+		objectType: "Table",
+		objectNumber: 36,
+		routineName: "OnInsert",
+		originatingObject: `${APP_X_DASHED}:Table:36`, // dashed
+	};
+
+	const engine = makeEngine([routineAppX], []);
+
+	const method: MethodBreakdown = {
+		...makeMethod("OnInsert", "Table", 36),
+		appId: APP_X_DASHLESS, // dash-less
+	};
+	const result = correlate([method], engine);
+	const key = "OnInsert_Table_36";
+
+	it("dash-less appId matches dashed originatingObject (normalized comparison)", () => {
+		expect(result.attributions.get(key)!.status).toBe("matched");
+	});
+
+	it("stableRoutineId is the app-X routine", () => {
+		expect(result.attributions.get(key)!.stableRoutineId).toBe(STABLE_APP_X);
+	});
+});

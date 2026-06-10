@@ -256,6 +256,30 @@ export function extractMemberTrigger(
 }
 
 // ---------------------------------------------------------------------------
+// normalizeAppGuid
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize an app GUID for comparison: strip dashes + lowercase.
+ *
+ * BC profile `declaringApplication.appId` values are often dash-less hex
+ * (e.g. `"437dbf0e84ff417a965ded2bb9650972"`) while al-sem's
+ * `originatingObject` prefix and `app.json` ids carry dashes
+ * (e.g. `"437dbf0e-84ff-417a-965d-ed2bb9650972"`). Stripping dashes + lower-
+ * casing makes the two forms comparable.
+ *
+ * Returns `""` for `undefined` or empty strings so a missing id never
+ * spuriously matches another.
+ *
+ * Shared between `analyzer.ts` (workspace-app version guard) and
+ * `correlate.ts` (app-scope gate).
+ */
+export function normalizeAppGuid(id: string | undefined): string {
+	if (!id) return "";
+	return id.replace(/-/g, "").toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
 // isAlRoutineFrame
 // ---------------------------------------------------------------------------
 

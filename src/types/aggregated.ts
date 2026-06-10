@@ -26,6 +26,15 @@ export interface MethodBreakdown {
 	objectName: string;
 	objectId: number;
 	appName: string;
+	/**
+	 * The declaring app's GUID as carried from `declaringApplication.appId`
+	 * (first-seen across all nodes aggregated into this method key). Often a
+	 * dash-less hex string from BC profiles. Used by the app-scope gate in
+	 * `correlate.ts` to reject cross-app false matches when
+	 * `routine.originatingObject` is present. Optional — absent for System
+	 * frames and synthetic fixtures.
+	 */
+	appId?: string;
 	selfTime: number;
 	selfTimePercent: number;
 	totalTime: number;

@@ -6,6 +6,10 @@ import {
 } from "../../src/core/aggregator.js";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
+import type {
+	ProcessedNode,
+	ProcessedProfile,
+} from "../../src/types/processed.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -225,5 +229,166 @@ describe("aggregateByObject", () => {
 		const cu50000 = objects.find((o) => o.objectId === 50000);
 		expect(cu50000).toBeDefined();
 		expect(cu50000!.methodCount).toBe(2);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// R3-8: MethodBreakdown.appId — first-seen from declaringApplication.appId
+// ---------------------------------------------------------------------------
+
+describe("aggregateByMethod: R3-8 appId carried from declaringApplication.appId", () => {
+	/** Build a minimal ProcessedProfile with two nodes sharing the same method key. */
+	function makeMinimalProfile(
+		appIdFirst: string | undefined,
+		appIdSecond: string | undefined,
+	): ProcessedProfile {
+		const node1: ProcessedNode = {
+			id: 1,
+			callFrame: {
+				functionName: "DoWork",
+				scriptId: "Codeunit_50100",
+				url: "",
+				lineNumber: 10,
+				columnNumber: 0,
+			},
+			applicationDefinition: {
+				objectType: "Codeunit",
+				objectName: "TestCU",
+				objectId: 50100,
+			},
+			declaringApplication:
+				appIdFirst !== undefined
+					? {
+							appId: appIdFirst,
+							appName: "MyApp",
+							appPublisher: "Test",
+							appVersion: "1.0.0.0",
+						}
+					: undefined,
+			hitCount: 3,
+			children: [],
+			depth: 0,
+			selfTime: 100,
+			totalTime: 100,
+			selfTimePercent: 10,
+			totalTimePercent: 10,
+		};
+		const node2: ProcessedNode = {
+			id: 2,
+			callFrame: {
+				functionName: "DoWork",
+				scriptId: "Codeunit_50100",
+				url: "",
+				lineNumber: 10,
+				columnNumber: 0,
+			},
+			applicationDefinition: {
+				objectType: "Codeunit",
+				objectName: "TestCU",
+				objectId: 50100,
+			},
+			declaringApplication:
+				appIdSecond !== undefined
+					? {
+							appId: appIdSecond,
+							appName: "MyApp",
+							appPublisher: "Test",
+							appVersion: "1.0.0.0",
+						}
+					: undefined,
+			hitCount: 2,
+			children: [],
+			depth: 0,
+			selfTime: 50,
+			totalTime: 50,
+			selfTimePercent: 5,
+			totalTimePercent: 5,
+		};
+		return {
+			type: "sampling",
+			roots: [node1],
+			allNodes: [node1, node2],
+			nodeMap: new Map([
+				[1, node1],
+				[2, node2],
+			]),
+			totalDuration: 1000,
+			totalSelfTime: 150,
+			activeSelfTime: 150,
+			idleSelfTime: 0,
+			maxDepth: 0,
+			nodeCount: 2,
+			startTime: 0,
+			endTime: 1000,
+		};
+	}
+
+	test("appId is carried from declaringApplication.appId (first-seen)", () => {
+		const profile = makeMinimalProfile(
+			"437dbf0e84ff417a965ded2bb9650972",
+			"deadbeefcafe1234abcd000000000001",
+		);
+		const methods = aggregateByMethod(profile);
+		const doWork = methods.find((m) => m.functionName === "DoWork");
+		expect(doWork).toBeDefined();
+		// First-seen wins: the first node's appId
+		expect(doWork!.appId).toBe("437dbf0e84ff417a965ded2bb9650972");
+	});
+
+	test("appId is undefined when declaringApplication has no appId", () => {
+		// declaringApplication present but appId absent (old profile / System frame)
+		const node: ProcessedNode = {
+			id: 1,
+			callFrame: {
+				functionName: "OnRun",
+				scriptId: "Codeunit_1",
+				url: "",
+				lineNumber: 1,
+				columnNumber: 0,
+			},
+			applicationDefinition: {
+				objectType: "Codeunit",
+				objectName: "System",
+				objectId: 1,
+			},
+			declaringApplication: {
+				appName: "(System)",
+				appPublisher: "",
+				appVersion: "",
+			},
+			hitCount: 1,
+			children: [],
+			depth: 0,
+			selfTime: 10,
+			totalTime: 10,
+			selfTimePercent: 1,
+			totalTimePercent: 1,
+		};
+		const profile: ProcessedProfile = {
+			type: "sampling",
+			roots: [node],
+			allNodes: [node],
+			nodeMap: new Map([[1, node]]),
+			totalDuration: 100,
+			totalSelfTime: 10,
+			activeSelfTime: 10,
+			idleSelfTime: 0,
+			maxDepth: 0,
+			nodeCount: 1,
+			startTime: 0,
+			endTime: 100,
+		};
+		const methods = aggregateByMethod(profile);
+		const onRun = methods.find((m) => m.functionName === "OnRun");
+		expect(onRun).toBeDefined();
+		expect(onRun!.appId).toBeUndefined();
+	});
+
+	test("appId is undefined when declaringApplication itself is absent", () => {
+		const profile = makeMinimalProfile(undefined, undefined);
+		const methods = aggregateByMethod(profile);
+		const doWork = methods.find((m) => m.functionName === "DoWork");
+		expect(doWork).toBeDefined();
+		expect(doWork!.appId).toBeUndefined();
 	});
 });

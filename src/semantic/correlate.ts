@@ -44,6 +44,7 @@ import {
 	canonicalObjectType,
 	extractMemberTrigger,
 	isAlRoutineFrame,
+	normalizeAppGuid,
 	normalizeTriggerName,
 	parseObjectId,
 } from "./identity.js";
@@ -113,6 +114,55 @@ export function makeRoutineJoinKey(r: RoutineIdentity): JoinKey {
 /** al-perf's canonical method attribution key. */
 export function methodAttrKey(m: MethodBreakdown): string {
 	return `${m.functionName}_${m.objectType}_${m.objectId}`;
+}
+
+// ---------------------------------------------------------------------------
+// App-scope gate (R3-8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the app-GUID prefix from a colon-form StableObjectId (or
+ * StableRoutineId) of the form `<appGuid>:<objectType>:<objectNumber>[#...]`.
+ *
+ * Returns the first `:` segment as-is (may be dashed; callers normalize via
+ * `normalizeAppGuid` before comparison). Returns `""` for empty/malformed ids.
+ */
+function appGuidOf(stableId: string | undefined): string {
+	if (!stableId) return "";
+	const colon = stableId.indexOf(":");
+	return colon === -1 ? "" : stableId.slice(0, colon);
+}
+
+/**
+ * App-scope filter: given a method's `appId` and a list of candidate routines,
+ * return only the candidates whose `originatingObject` belongs to the same app.
+ *
+ * **Graceful** — when `method.appId` is absent OR a candidate's
+ * `originatingObject` is absent, that pair is NOT gated: the candidate is kept
+ * so the gate never widens a blind-spot beyond a genuine cross-app mismatch.
+ *
+ * The gate is TIGHTEN-ONLY: it only removes wrong cross-app candidates; it
+ * never invents a match.
+ *
+ * When the filtered list is empty (all candidates were cross-app), the caller
+ * falls through to blind-spot (honest — the method's app is not in the universe
+ * under this key).
+ */
+function filterToSameApp(
+	methodAppId: string | undefined,
+	candidates: RoutineIdentity[],
+): RoutineIdentity[] {
+	// No method appId → gate cannot fire → return all candidates unchanged.
+	if (!methodAppId) return candidates;
+	const normMethodApp = normalizeAppGuid(methodAppId);
+	if (!normMethodApp) return candidates;
+
+	return candidates.filter((r) => {
+		const routineAppGuid = appGuidOf(r.originatingObject);
+		// Absent originatingObject → graceful: keep candidate (no gate).
+		if (!routineAppGuid) return true;
+		return normalizeAppGuid(routineAppGuid) === normMethodApp;
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +423,15 @@ export function correlate(
 		const attrKey = methodAttrKey(m);
 		const joinKey = makeMethodJoinKey(m);
 
-		const universeEntries = universeMap.get(joinKey);
+		const rawUniverseEntries = universeMap.get(joinKey);
+
+		// App-scope gate (R3-8): when the method carries an appId AND a candidate
+		// carries an originatingObject, require matching normalized app GUIDs.
+		// When either identity is absent the gate is silent (graceful). The gate
+		// is tighten-only: it can never invent a match, only remove cross-app ones.
+		const universeEntries = rawUniverseEntries
+			? filterToSameApp(m.appId, rawUniverseEntries)
+			: rawUniverseEntries;
 
 		if (!universeEntries || universeEntries.length === 0) {
 			// blind-spot
@@ -447,7 +505,11 @@ export function correlate(
 					memberTrigger.member,
 					memberTrigger.trigger,
 				);
-				const preciseEntries = preciseMemberMap.get(preciseKey);
+				const rawPreciseEntries = preciseMemberMap.get(preciseKey);
+				// Apply the same app-scope gate to the precise-member candidates.
+				const preciseEntries = rawPreciseEntries
+					? filterToSameApp(m.appId, rawPreciseEntries)
+					: rawPreciseEntries;
 
 				if (preciseEntries && preciseEntries.length === 1) {
 					// Unique precise match — RE-11: attribute to this field's routine.

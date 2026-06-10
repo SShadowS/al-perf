@@ -10,6 +10,7 @@ import type {
 import { runEngineDiff } from "../semantic/diff-runner.js";
 import { isAlWorkspaceDir } from "../semantic/engine-runner.js";
 import { fuseProfile } from "../semantic/fuse.js";
+import { normalizeAppGuid } from "../semantic/identity.js";
 import { correlateRegressions } from "../semantic/regression-correlate.js";
 import { annotateHotspots, prioritizeFindings } from "../semantic/views.js";
 import { buildSourceIndex } from "../source/indexer.js";
@@ -27,6 +28,10 @@ import {
 	aggregateByObject,
 } from "./aggregator.js";
 import { parseProfile } from "./parser.js";
+
+// Re-exported for callers (e.g. tests) that previously imported normalizeAppGuid from analyzer.
+export { normalizeAppGuid };
+
 import { runDetectors } from "./patterns.js";
 import { isIdleNode, processProfile } from "./processor.js";
 import { buildTableBreakdown } from "./table-view.js";
@@ -155,18 +160,6 @@ function computeConfidenceScore(
 
 function isIdle(method: MethodBreakdown): boolean {
 	return method.functionName === "IdleTime" && method.objectId === 0;
-}
-
-/**
- * Normalize an app GUID for comparison: strip dashes + lowercase.
- * BC profile appIds are often dash-less hex (e.g. "437dbf0e84ff417a965ded2bb9650972")
- * while app.json `id` carries dashes (e.g. "437dbf0e-84ff-417a-965d-ed2bb9650972").
- * Returns "" for undefined/empty so a missing id never spuriously matches another.
- * Exported for unit testing.
- */
-export function normalizeAppGuid(id: string | undefined): string {
-	if (!id) return "";
-	return id.replace(/-/g, "").toLowerCase();
 }
 
 /**
