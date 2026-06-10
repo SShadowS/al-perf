@@ -130,8 +130,58 @@ export function canonicalObjectType(s: string): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * The set of recognised AL trigger keyword names (lowercased) that may appear
+ * as the suffix of a compound field/control trigger function name in a profile.
+ *
+ * Derived from the AL trigger surface (table field, page control, page, report,
+ * codeunit, and request-page triggers). al-sem stores the BARE trigger name as
+ * its `routineName`; profiles emit `"<member> - <Trigger>"` for field/control
+ * triggers. Only when the suffix after the final ` - ` is one of these do we
+ * strip — otherwise a real quoted procedure named e.g. `"Get - Value"` would be
+ * wrongly truncated to `"Value"` (→ a spurious blind-spot).
+ */
+const AL_TRIGGER_KEYWORDS: Set<string> = new Set([
+	// Table / table-extension triggers
+	"oninsert",
+	"onmodify",
+	"ondelete",
+	"onrename",
+	// Field triggers
+	"onvalidate",
+	"onlookup",
+	"onaftervalidate",
+	"onbeforevalidate",
+	// Page triggers
+	"onopenpage",
+	"onclosepage",
+	"onqueryclosepage",
+	"onaftergetrecord",
+	"onaftergetcurrrecord",
+	"onnewrecord",
+	"oninsertrecord",
+	"onmodifyrecord",
+	"ondeleterecord",
+	"onfindrecord",
+	"onnextrecord",
+	// Page control / action triggers
+	"onaction",
+	"onassistedit",
+	"ondrilldown",
+	"oncontroladdinready",
+	// Codeunit triggers
+	"onrun",
+	// Report triggers
+	"oninitreport",
+	"onprereport",
+	"onpostreport",
+	"onpredataitem",
+	"onpostdataitem",
+]);
+
+/**
  * Strip the `"<member> - "` prefix from a field/page trigger function name so
- * it matches al-sem's bare `routineName`.
+ * it matches al-sem's bare `routineName` — but ONLY when the suffix is a
+ * recognised AL trigger keyword.
  *
  * In AL CPU profiles, field and page control triggers are reported as compound
  * names (the field/control name followed by the trigger keyword):
@@ -142,15 +192,22 @@ export function canonicalObjectType(s: string): string {
  *   `"OnRun"`          → `"OnRun"`
  *   `"ProcessRecords"` → `"ProcessRecords"`
  *
- * When the separator ` - ` appears multiple times (edge case: a field name
- * itself containing ` - `), only the LAST occurrence is stripped so the trigger
- * keyword (the part after the final ` - `) is always preserved.
+ * A quoted procedure name that merely CONTAINS ` - ` but whose suffix is NOT a
+ * trigger keyword is left untouched (no over-strip):
+ *   `"Get - Value"`    → `"Get - Value"`   (Value is not a trigger keyword)
+ *
+ * When the separator ` - ` appears multiple times, only the LAST occurrence is
+ * considered, so the trigger keyword (the part after the final ` - `) is the
+ * candidate suffix.
  */
 export function normalizeTriggerName(functionName: string): string {
 	const sep = " - ";
 	const lastIdx = functionName.lastIndexOf(sep);
 	if (lastIdx === -1) return functionName;
-	return functionName.slice(lastIdx + sep.length);
+	const suffix = functionName.slice(lastIdx + sep.length);
+	// Only strip when the suffix is a genuine trigger keyword.
+	if (!AL_TRIGGER_KEYWORDS.has(suffix.toLowerCase())) return functionName;
+	return suffix;
 }
 
 // ---------------------------------------------------------------------------

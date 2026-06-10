@@ -23,6 +23,7 @@ import { correlate } from "../../src/semantic/correlate.js";
 import type { EngineAnalysis } from "../../src/semantic/engine-runner.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
 import type {
+	CoverageEntry,
 	FindingSummary,
 	RoutineIdentity,
 } from "../../src/semantic/contracts.js";
@@ -102,10 +103,27 @@ function makeMethod(
 	};
 }
 
+/**
+ * Build a "complete" CoverageEntry for each routine so matched-clean gating
+ * (which requires a complete CoverageEntry for the object) is satisfied by
+ * default. Tests that want degraded coverage override `coverage`/`opaqueApps`.
+ */
+function makeCompleteCoverage(routines: RoutineIdentity[]): CoverageEntry[] {
+	return routines.map((r) => ({
+		directStatus: "complete",
+		inheritedStatus: "complete",
+		reasons: [],
+		subject: r.stableRoutineId,
+		unknownTargets: [],
+	}));
+}
+
 function makeEngine(
 	routines: RoutineIdentity[],
 	findings: FindingSummary[],
+	overrides: Partial<EngineAnalysis> = {},
 ): EngineAnalysis {
+	const coverage = overrides.coverage ?? makeCompleteCoverage(routines);
 	return {
 		routines,
 		findings,
@@ -117,8 +135,8 @@ function makeEngine(
 				version: "1.0.0.0",
 			},
 		],
-		coverage: [],
-		coverageSubjects: [],
+		coverage,
+		coverageSubjects: coverage.map((c) => c.subject),
 		primaryApp: {
 			appGuid: APP_GUID,
 			name: APP_NAME,
@@ -129,6 +147,7 @@ function makeEngine(
 		diagnostics: [],
 		coverageDegraded: false,
 		opaqueApps: [],
+		...overrides,
 	};
 }
 
@@ -791,6 +810,10 @@ describe("correlate: comprehensive correlationSummary", () => {
 	it("unkeyableCount = 1", () => {
 		expect(result.correlationSummary.unkeyableCount).toBe(1);
 	});
+
+	it("orphanCount = 0 (no keyed finding whose routine is absent from the universe)", () => {
+		expect(result.correlationSummary.orphanCount).toBe(0);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -929,5 +952,326 @@ describe("correlate: ws-min golden realistic case", () => {
 
 	it("no mismatch (there is intersection)", () => {
 		expect(result.mismatch).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 15: ambiguous reason is HONEST (uses the normalized shared name, not the
+// unstripped functionName) — the field-trigger collision case
+// ---------------------------------------------------------------------------
+
+describe("correlate: ambiguous reason honesty (field-trigger collision)", () => {
+	// A Table 50100 with TWO fields, each having an OnValidate trigger. al-sem
+	// stores both as bare "OnValidate" on (Table, 50100) → same join key.
+	const trigA = `${APP_GUID}:Table:50100#aaaa0000000000000000000000000000000000000000000000000000000000000001`;
+	const trigB = `${APP_GUID}:Table:50100#bbbb0000000000000000000000000000000000000000000000000000000000000002`;
+
+	const engine = makeEngine(
+		[
+			makeRoutine("OnValidate", 50100, "Table", trigA),
+			makeRoutine("OnValidate", 50100, "Table", trigB),
+		],
+		[],
+	);
+
+	// The profile reports the compound field-trigger name for field A.
+	const method = makeMethod("Field A - OnValidate", "Table", 50100);
+	const result = correlate([method], engine);
+	const key = "Field A - OnValidate_Table_50100";
+
+	it("status is ambiguous (collision on the bare trigger name)", () => {
+		expect(result.attributions.get(key)!.status).toBe("ambiguous");
+	});
+
+	it("reason mentions the NORMALIZED shared name 'OnValidate', not the unstripped 'Field A - OnValidate'", () => {
+		const reason = result.attributions.get(key)!.reason ?? "";
+		expect(reason).toContain('"OnValidate"');
+		// It must NOT claim they share the unstripped compound name.
+		expect(reason).not.toContain("Field A - OnValidate");
+	});
+
+	it("reason describes the field/control-trigger ambiguity honestly", () => {
+		const reason = result.attributions.get(key)!.reason ?? "";
+		expect(reason.toLowerCase()).toContain("ambiguous");
+	});
+
+	it("stableRoutineId is an array of both trigger ids", () => {
+		const sid = result.attributions.get(key)!.stableRoutineId;
+		expect(Array.isArray(sid)).toBe(true);
+		expect(sid).toContain(trigA);
+		expect(sid).toContain(trigB);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 16: matched-clean is COVERAGE-GATED — degraded coverage ≠ verified clean
+// ---------------------------------------------------------------------------
+
+describe("correlate: matched-clean coverage gating", () => {
+	it("does NOT claim matched-clean when the object's CoverageEntry is incomplete", () => {
+		const routine = makeRoutine(
+			"PartiallyAnalyzed",
+			50100,
+			"Codeunit",
+			STABLE_ID_CLEAN,
+		);
+		// Coverage entry exists but directStatus is NOT "complete".
+		const engine = makeEngine([routine], [], {
+			coverage: [
+				{
+					directStatus: "partial",
+					inheritedStatus: "complete",
+					reasons: ["opaque-callee"],
+					subject: STABLE_ID_CLEAN,
+					unknownTargets: [],
+				},
+			],
+		});
+
+		const method = makeMethod("PartiallyAnalyzed", "Codeunit", 50100);
+		const result = correlate([method], engine);
+		const key = "PartiallyAnalyzed_Codeunit_50100";
+
+		expect(result.attributions.get(key)!.status).toBe("matched");
+		// matchedClean must be falsy — incomplete coverage ≠ clean.
+		expect(result.attributions.get(key)!.matchedClean).toBeFalsy();
+		expect(result.correlationSummary.matchedClean).toBe(0);
+		// And there's an honest reason explaining why.
+		expect(result.attributions.get(key)!.reason ?? "").toMatch(
+			/coverage incomplete/i,
+		);
+	});
+
+	it("does NOT claim matched-clean when the workspace has opaque apps", () => {
+		const routine = makeRoutine("DoWork", 50100, "Codeunit", STABLE_ID_CLEAN);
+		// CoverageEntry is complete, BUT opaqueApps is non-empty (degraded).
+		const engine = makeEngine([routine], [], {
+			opaqueApps: ["deadbeef-0000-0000-0000-000000000000"],
+			coverageDegraded: true,
+		});
+
+		const method = makeMethod("DoWork", "Codeunit", 50100);
+		const result = correlate([method], engine);
+		const key = "DoWork_Codeunit_50100";
+
+		expect(result.attributions.get(key)!.status).toBe("matched");
+		expect(result.attributions.get(key)!.matchedClean).toBeFalsy();
+	});
+
+	it("does NOT claim matched-clean when there is NO CoverageEntry for the object", () => {
+		const routine = makeRoutine("DoWork", 50100, "Codeunit", STABLE_ID_CLEAN);
+		// Explicit empty coverage — cannot prove full analysis.
+		const engine = makeEngine([routine], [], { coverage: [] });
+
+		const method = makeMethod("DoWork", "Codeunit", 50100);
+		const result = correlate([method], engine);
+		const key = "DoWork_Codeunit_50100";
+
+		expect(result.attributions.get(key)!.matchedClean).toBeFalsy();
+	});
+
+	it("DOES claim matched-clean when coverage is complete and no opaque apps", () => {
+		const routine = makeRoutine("DoWork", 50100, "Codeunit", STABLE_ID_CLEAN);
+		const engine = makeEngine([routine], []); // default complete coverage
+
+		const method = makeMethod("DoWork", "Codeunit", 50100);
+		const result = correlate([method], engine);
+		const key = "DoWork_Codeunit_50100";
+
+		expect(result.attributions.get(key)!.matchedClean).toBe(true);
+		// No "incomplete" reason when genuinely clean.
+		expect(result.attributions.get(key)!.reason).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 17: orphan-vs-cold split — a keyed finding whose routine is NOT in the
+// universe is ORPHAN, not cold
+// ---------------------------------------------------------------------------
+
+describe("correlate: orphan vs cold finding split", () => {
+	// Universe has ColdRoutine (with a finding) but NOT GhostRoutine.
+	// A finding keyed to GhostRoutine (absent from inventory) is an orphan.
+	const coldFinding = makeFinding(
+		"d1/cold",
+		"aaaa1111",
+		"d1-db-op-in-loop",
+		"ColdRoutine",
+		"Codeunit",
+		50100,
+	);
+	const orphanFinding = makeFinding(
+		"d1/ghost",
+		"bbbb2222",
+		"d1-db-op-in-loop",
+		"GhostRoutine",
+		"Codeunit",
+		50100,
+	);
+
+	const engine = makeEngine(
+		[makeRoutine("ColdRoutine", 50100, "Codeunit", STABLE_ID_COLD)],
+		[coldFinding, orphanFinding],
+	);
+
+	// No methods at all — ColdRoutine is cold, GhostRoutine has no universe entry.
+	const result = correlate([], engine);
+
+	it("coldFindings contains ONLY the in-universe (cold) finding", () => {
+		expect(result.coldFindings.map((f) => f.id)).toEqual(["d1/cold"]);
+	});
+
+	it("orphanFindings contains the routine-absent finding", () => {
+		expect(result.orphanFindings.map((f) => f.id)).toEqual(["d1/ghost"]);
+	});
+
+	it("coldCount counts only universe routines (1)", () => {
+		expect(result.correlationSummary.coldCount).toBe(1);
+	});
+
+	it("orphanCount = 1 (the ghost finding)", () => {
+		expect(result.correlationSummary.orphanCount).toBe(1);
+	});
+
+	it("orphan finding is NOT in coldFindings", () => {
+		expect(
+			result.coldFindings.find((f) => f.id === "d1/ghost"),
+		).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 18: cross-type blind-spot reason — same objectNumber, different type
+// ---------------------------------------------------------------------------
+
+describe("correlate: cross-type blind-spot reason", () => {
+	// al-sem analyzed Codeunit 50100; the hot frame is Page 50100 (same number,
+	// different type). The blind-spot reason must NOT claim "50100 is covered".
+	const engine = makeEngine(
+		[
+			makeRoutine(
+				"ProcessRecords",
+				50100,
+				"Codeunit",
+				STABLE_ID_PROCESS_RECORDS,
+			),
+		],
+		[],
+	);
+
+	const method = makeMethod("OnOpenPage", "Page", 50100);
+	const result = correlate([method], engine);
+	const key = "OnOpenPage_Page_50100";
+
+	it("status is blind-spot", () => {
+		expect(result.attributions.get(key)!.status).toBe("blind-spot");
+	});
+
+	it("reason says the OBJECT was not analyzed (not 'covered but routine absent')", () => {
+		const reason = result.attributions.get(key)!.reason ?? "";
+		// The Codeunit 50100 coverage must NOT make a Page 50100 look 'covered'.
+		expect(reason).toMatch(/was not analyzed/i);
+		expect(reason).not.toMatch(/covered but routine absent/i);
+		expect(reason).not.toMatch(/absent from the inventory/i);
+	});
+
+	it("a same-TYPE missing routine still reports 'analyzed but routine absent'", () => {
+		// Sanity: a Codeunit 50100 method whose routine isn't in the inventory
+		// SHOULD report the routine-absent reason (the object IS covered).
+		const method2 = makeMethod("MissingProc", "Codeunit", 50100);
+		const result2 = correlate([method2], engine);
+		const key2 = "MissingProc_Codeunit_50100";
+		const reason2 = result2.attributions.get(key2)!.reason ?? "";
+		expect(reason2).toMatch(/absent from the inventory/i);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 19: procedure name with ` - ` is NOT over-stripped → matched, not blind-spot
+// ---------------------------------------------------------------------------
+
+describe("correlate: quoted procedure with ` - ` is not over-stripped", () => {
+	// A real AL procedure named "Get - Value" must correlate as-is, NOT be
+	// truncated to "Value" (which would be a spurious blind-spot).
+	const engine = makeEngine(
+		[makeRoutine("Get - Value", 50100, "Codeunit", STABLE_ID_CLEAN)],
+		[],
+	);
+
+	const method = makeMethod("Get - Value", "Codeunit", 50100);
+	const result = correlate([method], engine);
+	const key = "Get - Value_Codeunit_50100";
+
+	it("status is matched (the full name is preserved as the join name)", () => {
+		expect(result.attributions.get(key)!.status).toBe("matched");
+	});
+
+	it("is NOT a blind-spot", () => {
+		expect(result.attributions.get(key)!.status).not.toBe("blind-spot");
+		expect(result.correlationSummary.blindSpot).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 20: coldRoutines identities surfaced (not just a count) + determinism
+// ---------------------------------------------------------------------------
+
+describe("correlate: coldRoutines identities + determinism", () => {
+	const rCold1 = makeRoutine("ColdA", 50100, "Codeunit", STABLE_ID_OVERLOAD_2); // sorts later
+	const rCold2 = makeRoutine("ColdB", 50100, "Codeunit", STABLE_ID_CLEAN); // sorts earlier
+
+	const engine = makeEngine([rCold1, rCold2], []);
+	const result = correlate([], engine);
+
+	it("coldRoutines surfaces the routine identities (not just a count)", () => {
+		expect(result.coldRoutines.length).toBe(2);
+		const names = result.coldRoutines.map((r) => r.routineName).sort();
+		expect(names).toEqual(["ColdA", "ColdB"]);
+	});
+
+	it("coldRoutines is sorted deterministically by stableRoutineId", () => {
+		const ids = result.coldRoutines.map((r) => r.stableRoutineId);
+		const sorted = [...ids].sort((a, b) => a.localeCompare(b));
+		expect(ids).toEqual(sorted);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 21: unkeyableFindings are sorted by (fingerprint, id) for determinism
+// ---------------------------------------------------------------------------
+
+describe("correlate: unkeyableFindings determinism sort", () => {
+	const mkUnkeyable = (id: string, fp: string): FindingSummary => ({
+		id,
+		fingerprint: fp,
+		detector: "d1-db-op-in-loop",
+		title: "Unkeyable",
+		rootCause: "test",
+		severity: "high",
+		confidence: { level: "likely" },
+		primaryLocation: {
+			file: "ws:src/Test.al",
+			line: 1,
+			column: 1,
+			objectId: `${APP_GUID}/Codeunit/50100`,
+			objectName: "TestObject",
+			// no routineName → unkeyable
+		},
+		affectedObjects: [],
+		affectedTables: [],
+	});
+
+	// Emit order is reverse of the sorted order.
+	const engine = makeEngine(
+		[],
+		[mkUnkeyable("z-id", "zzzz9999"), mkUnkeyable("a-id", "aaaa0000")],
+	);
+	const result = correlate([], engine);
+
+	it("unkeyableFindings sorted by fingerprint ascending", () => {
+		expect(result.unkeyableFindings.map((f) => f.fingerprint)).toEqual([
+			"aaaa0000",
+			"zzzz9999",
+		]);
 	});
 });

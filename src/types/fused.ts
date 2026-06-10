@@ -13,8 +13,10 @@
 
 import type {
 	AppIdentity,
+	CoverageEntry,
 	DiagnosticContract,
 	FindingSummary,
+	RoutineIdentity,
 } from "../semantic/contracts.js";
 
 // ---------------------------------------------------------------------------
@@ -42,6 +44,15 @@ import type {
  *  unkeyable     — a finding whose primaryLocation has no routineName (or an
  *                  unparseable objectId); cannot be joined to any method.
  *                  Surfaced in FusedModel.unkeyableFindings — NOT cold.
+ *
+ * NOTE: only `matched`, `ambiguous`, and `blind-spot` are per-method statuses on
+ * SemanticAttribution. The other "states" are modeled via flags/buckets, NOT as
+ * status values:
+ *  - matched-clean → status="matched" + `matchedClean: true` on the attribution.
+ *  - cold          → FusedModel.coldRoutines / FusedModel.coldFindings.
+ *  - unkeyable     → FusedModel.unkeyableFindings.
+ *  - orphan        → FusedModel.orphanFindings (keyed finding, routine absent
+ *                    from the inventory — distinct from cold).
  */
 export type CorrelationStatus = "matched" | "ambiguous" | "blind-spot";
 
@@ -123,6 +134,11 @@ export interface CorrelationSummary {
 	coldCount: number;
 	/** Findings with no join key (no routineName or unparseable objectId). */
 	unkeyableCount: number;
+	/**
+	 * Findings whose join key has NO universe routine (routine absent from the
+	 * inventory) — distinct from cold (which requires an in-universe routine).
+	 */
+	orphanCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,21 +175,37 @@ export interface FusedModel {
 	attributions: Map<string, SemanticAttribution>;
 
 	/**
-	 * Universe routines (from the engine inventory) for which there is NO
-	 * runtime sample in this profile — "statically flagged but not hot".
-	 * These may still have findings; P2 uses them for background recommendations.
+	 * Universe routines (from the engine inventory) for which there is NO runtime
+	 * sample in this profile — "statically flagged but not hot". P2 wants the
+	 * routine IDENTITIES (not just a count), e.g. to surface dead-but-flagged
+	 * routines. Sorted by stableRoutineId for determinism.
+	 */
+	coldRoutines: RoutineIdentity[];
+
+	/**
+	 * Findings attached to a COLD universe routine (in the inventory, no runtime
+	 * sample). A cold routine may also have zero findings; this list is just the
+	 * findings that land on cold keys. Sorted by (fingerprint, id).
 	 */
 	coldFindings: FindingSummary[];
 
 	/**
+	 * Findings whose join key is keyable but has NO universe routine (the routine
+	 * is absent from the inventory). Distinct from cold (which requires an
+	 * in-universe routine) and from unkeyable (which has no join key at all).
+	 * Sorted by (fingerprint, id).
+	 */
+	orphanFindings: FindingSummary[];
+
+	/**
 	 * Findings whose primaryLocation has no `routineName` or an unparseable
-	 * `objectId` — they cannot be joined to any method key.
-	 * NOT the same as cold (a cold routine may have no finding at all).
+	 * `objectId` — they cannot be joined to any method key. Sorted by
+	 * (fingerprint, id). NOT the same as cold or orphan.
 	 */
 	unkeyableFindings: FindingSummary[];
 
 	/** Coverage entries from the engine inventory. */
-	coverage: import("../semantic/contracts.js").CoverageEntry[];
+	coverage: CoverageEntry[];
 
 	/** Aggregated correlation counts. */
 	correlationSummary: CorrelationSummary;

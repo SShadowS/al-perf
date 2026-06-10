@@ -205,17 +205,46 @@ describe("normalizeTriggerName", () => {
 		expect(normalizeTriggerName("OnInsert")).toBe("OnInsert");
 	});
 
-	it("edge case: field name contains ` - ` — strips at the last occurrence", () => {
+	it("edge case: field name contains ` - ` — strips at the last occurrence when suffix is a trigger", () => {
 		// A field named "Start - End Date" with trigger OnValidate
 		expect(normalizeTriggerName("Start - End Date - OnValidate")).toBe(
 			"OnValidate",
 		);
 	});
 
-	it("returns empty string from ` - ` alone (extreme edge)", () => {
-		// functionName is exactly " - " — lastIdx=0, slice from 3 → ""
-		// This is degenerate but should not throw
-		expect(normalizeTriggerName(" - ")).toBe("");
+	it("does NOT over-strip a quoted procedure whose suffix is not a trigger keyword", () => {
+		// A real AL procedure named "Get - Value" must NOT become "Value" (which
+		// would cause a spurious blind-spot). "Value" is not a trigger keyword.
+		expect(normalizeTriggerName("Get - Value")).toBe("Get - Value");
+	});
+
+	it("does NOT strip when the suffix is an ordinary word", () => {
+		expect(normalizeTriggerName("Compute - Total")).toBe("Compute - Total");
+	});
+
+	it("strips OnAction (page action trigger)", () => {
+		expect(normalizeTriggerName("Post - OnAction")).toBe("OnAction");
+	});
+
+	it("strips OnLookup (field trigger)", () => {
+		expect(normalizeTriggerName("Customer No. - OnLookup")).toBe("OnLookup");
+	});
+
+	it("strips OnAfterGetRecord (page/report trigger)", () => {
+		expect(normalizeTriggerName("Rec - OnAfterGetRecord")).toBe(
+			"OnAfterGetRecord",
+		);
+	});
+
+	it("trigger-suffix match is case-insensitive", () => {
+		// Profiles may vary casing; the suffix check lowercases before matching
+		expect(normalizeTriggerName("Field A - onvalidate")).toBe("onvalidate");
+	});
+
+	it("returns ` - ` unchanged (suffix is empty, not a trigger)", () => {
+		// functionName is exactly " - " — suffix is "" which is not a trigger
+		// keyword, so the string is left untouched (no over-strip, no throw)
+		expect(normalizeTriggerName(" - ")).toBe(" - ");
 	});
 });
 
