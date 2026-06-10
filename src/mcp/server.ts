@@ -149,7 +149,10 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 							// R2-12: build a TRIMMED object — unweightedFindings is
 							// deliberately excluded from MCP output.
 							fusionBlock = {
-								hotspotAnnotations: annotateHotspots(fuseResult, allMethods),
+								hotspotAnnotations: annotateHotspots(
+									fuseResult,
+									result.hotspots,
+								),
 								prioritizedFindings: weighted,
 								correlationSummary: fuseResult.correlationSummary,
 							};

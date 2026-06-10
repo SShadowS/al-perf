@@ -244,7 +244,7 @@ export function registerAnalyzeCommand(program: Command) {
 							allMethods,
 						);
 						result.fusionViews = {
-							hotspotAnnotations: annotateHotspots(fuseResult, allMethods),
+							hotspotAnnotations: annotateHotspots(fuseResult, result.hotspots),
 							prioritizedFindings: weighted,
 							unweightedFindings: unweighted,
 							correlationSummary: fuseResult.correlationSummary,
