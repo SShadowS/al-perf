@@ -32,7 +32,7 @@
  */
 
 const args = process.argv.slice(2);
-const subcommand = args[0]; // "fingerprint" | "analyze"
+const subcommand = args[0]; // "fingerprint" | "analyze" | "diff"
 const mode = process.env.ALSEM_STUB_MODE ?? "ok";
 
 const APP = {
@@ -415,35 +415,214 @@ function emitFindings() {
 	process.exit(0);
 }
 
-switch (mode) {
-	case "bad-json":
-		process.stdout.write("this-is-not-json{");
-		process.exit(0);
-		break;
-	case "exit2":
-		process.stderr.write("al-sem: error: analysis failed\nmore detail\n");
-		process.exit(2);
-		break;
-	case "timeout":
-		// Sleep past any short test timeout (tests use ~400-500ms) so the runner
-		// kills us first. Kept modest (3s) so that if the kill cannot reach this
-		// grandchild through a shell shim, it self-exits quickly rather than
-		// lingering as a test artifact.
-		setTimeout(() => process.exit(0), 3_000);
-		break;
-	case "wrong-schema":
-		emit("99.0.0", false);
-		break;
-	case "opaque":
-		emit("1.1.0", true);
-		break;
-	case "findings":
-		emitFindings();
-		break;
-	case "old-findings":
-		emitOldFindings();
-		break;
-	default:
-		emit("1.1.0", false);
-		break;
+// ---------------------------------------------------------------------------
+// "diff" mode — emit diff-report 1.0.0 + fingerprint inventory for P4.0b tests.
+//
+// `diff` subcommand → emits a diff-report envelope (schema 1.0.0) with:
+//   - a capability-gained-write (total/strong) on DIFF_CU stableId
+//   - a procedure-added on DIFF_CU_NEW stableId (new hot routine)
+//   - a capability-gained-event-publish (cross-boundary) on DIFF_CU stableId
+//   - a capability-gained-telemetry (weak) on DIFF_CU stableId
+//
+// `fingerprint` subcommand → emits the after-WS inventory with DIFF_CU + DIFF_CU_NEW.
+//   (Used by runEngineDiff's second call.)
+//
+// The before/after workspace paths are args[1]/args[2] for the diff subcommand;
+// args[1] is the workspace for fingerprint. Both must contain app.json.
+// ---------------------------------------------------------------------------
+
+export const DIFF_APP_GUID = "00000000-dddd-0000-0000-000000005001";
+export const DIFF_CU_STABLE = `${DIFF_APP_GUID}:Codeunit:51000#writehash0000`;
+export const DIFF_CU_NEW_STABLE = `${DIFF_APP_GUID}:Codeunit:51001#addedhash00`;
+
+function diffReportEnvelope() {
+	return {
+		kind: "diff-report",
+		schemaVersion: "1.0.0",
+		alsemVersion: "0.0.0-stub",
+		deterministic: true,
+		generatedAt: "1970-01-01T00:00:00Z",
+		diagnostics: [],
+		payload: {
+			diagnostics: [],
+			findings: [
+				// 1. capability-gained-write → total / strong
+				{
+					id: "diff-f1",
+					category: "capabilities",
+					kind: "capability-gained-write",
+					severity: "medium",
+					subject: {
+						normalizedStableId: DIFF_CU_STABLE,
+						newStableId: DIFF_CU_STABLE,
+						displayName: "ProcessWrite",
+					},
+					details: {
+						kind: "capability-gained-write",
+						op: "insert",
+						resourceKind: "table",
+						resourceId: `${DIFF_APP_GUID}/table/51000`,
+					},
+					coverageState: { old: "unknown", new: "complete" },
+				},
+				// 2. procedure-added → self / strong (PR2-5 new-method headline)
+				{
+					id: "diff-f2",
+					category: "abi",
+					kind: "procedure-added",
+					severity: "info",
+					subject: {
+						normalizedStableId: DIFF_CU_NEW_STABLE,
+						newStableId: DIFF_CU_NEW_STABLE,
+						displayName: "NewHotMethod",
+					},
+					details: {
+						kind: "procedure-added",
+					},
+				},
+				// 3. capability-gained-event-publish → none / weak (cross-boundary PR2-7)
+				{
+					id: "diff-f3",
+					category: "capabilities",
+					kind: "capability-gained-event-publish",
+					severity: "medium",
+					subject: {
+						normalizedStableId: DIFF_CU_STABLE,
+						newStableId: DIFF_CU_STABLE,
+						displayName: "ProcessWrite",
+					},
+					details: {
+						kind: "capability-gained-event-publish",
+						op: "publish",
+						resourceKind: "event",
+						resourceId: `${DIFF_APP_GUID}/Codeunit/51000/event/onafter`,
+					},
+					coverageState: { old: "unknown", new: "complete" },
+				},
+				// 4. capability-gained-telemetry → self / weak
+				{
+					id: "diff-f4",
+					category: "capabilities",
+					kind: "capability-gained-telemetry",
+					severity: "low",
+					subject: {
+						normalizedStableId: DIFF_CU_STABLE,
+						newStableId: DIFF_CU_STABLE,
+						displayName: "ProcessWrite",
+					},
+					details: {
+						kind: "capability-gained-telemetry",
+					},
+					coverageState: { old: "unknown", new: "complete" },
+				},
+			],
+			summary: {
+				coverageIncompleteCones: 0,
+				findingsByCategory: {
+					abi: 1,
+					capabilities: 3,
+					events: 0,
+					permissions: 0,
+					schema: 0,
+				},
+				findingsBySeverity: {
+					critical: 0,
+					high: 0,
+					medium: 2,
+					low: 1,
+					info: 1,
+				},
+				renamesApplied: 0,
+			},
+		},
+	};
+}
+
+function diffInventoryEnvelope() {
+	return {
+		kind: "routine-inventory",
+		schemaVersion: "1.1.0",
+		alsemVersion: "0.0.0-stub",
+		deterministic: true,
+		generatedAt: "1970-01-01T00:00:00Z",
+		diagnostics: [],
+		payload: {
+			apps: [
+				{
+					appGuid: DIFF_APP_GUID,
+					name: "DiffStubApp",
+					publisher: "stub",
+					version: "2.0.0.0",
+				},
+			],
+			coverage: [],
+			identities: {
+				displayNames: ["ProcessWrite", "NewHotMethod"],
+				stableIds: [DIFF_CU_STABLE, DIFF_CU_NEW_STABLE],
+			},
+			rootClassifications: [],
+			routineInventory: [
+				{
+					objectNumber: 51000,
+					objectType: "Codeunit",
+					routineName: "ProcessWrite",
+					stableRoutineId: DIFF_CU_STABLE,
+				},
+				{
+					objectNumber: 51001,
+					objectType: "Codeunit",
+					routineName: "NewHotMethod",
+					stableRoutineId: DIFF_CU_NEW_STABLE,
+				},
+			],
+		},
+	};
+}
+
+function emitDiff() {
+	if (subcommand === "diff") {
+		process.stdout.write(JSON.stringify(diffReportEnvelope()));
+	} else {
+		// fingerprint --inventory-only for the after-WS
+		process.stdout.write(JSON.stringify(diffInventoryEnvelope()));
+	}
+	process.exit(0);
+}
+
+if (import.meta.main) {
+	switch (mode) {
+		case "bad-json":
+			process.stdout.write("this-is-not-json{");
+			process.exit(0);
+			break;
+		case "exit2":
+			process.stderr.write("al-sem: error: analysis failed\nmore detail\n");
+			process.exit(2);
+			break;
+		case "timeout":
+			// Sleep past any short test timeout (tests use ~400-500ms) so the runner
+			// kills us first. Kept modest (3s) so that if the kill cannot reach this
+			// grandchild through a shell shim, it self-exits quickly rather than
+			// lingering as a test artifact.
+			setTimeout(() => process.exit(0), 3_000);
+			break;
+		case "wrong-schema":
+			emit("99.0.0", false);
+			break;
+		case "opaque":
+			emit("1.1.0", true);
+			break;
+		case "findings":
+			emitFindings();
+			break;
+		case "old-findings":
+			emitOldFindings();
+			break;
+		case "diff":
+			emitDiff();
+			break;
+		default:
+			emit("1.1.0", false);
+			break;
+	}
 }
