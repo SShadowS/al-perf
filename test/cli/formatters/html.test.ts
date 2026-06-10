@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { formatAnalysisHtml } from "../../../src/cli/formatters/html.js";
 import { analyzeProfile } from "../../../src/core/analyzer.js";
+import type {
+	FusionViews,
+	HotspotAnnotation,
+} from "../../../src/semantic/views.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -129,5 +133,173 @@ describe("formatAnalysisHtml", () => {
 		const output = formatAnalysisHtml(result);
 		expect(output).not.toMatch(/href="https?:\/\//);
 		expect(output).not.toMatch(/src="https?:\/\//);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Fusion section tests (R2-2, R2-4, R2-5, R2-9/R2-10)
+// ---------------------------------------------------------------------------
+
+const SAMPLE_FUSION_VIEWS: FusionViews = {
+	hotspotAnnotations: [],
+	prioritizedFindings: [
+		{
+			finding: {
+				id: "F1",
+				fingerprint: "fp1",
+				detector: "n-plus-one",
+				title: "N+1 query",
+				rootCause: "loop",
+				severity: "high",
+				confidence: { level: "likely" },
+				primaryLocation: {
+					file: "src/X.al",
+					line: 5,
+					column: 1,
+					objectId: "g/Codeunit/1",
+					objectName: "X",
+				},
+				affectedObjects: [],
+				affectedTables: [],
+			},
+			functionName: "ProcessLine",
+			objectType: "Codeunit",
+			objectId: 1,
+			appName: "App",
+			selfTimePercent: 42,
+			totalTimePercent: 50,
+			efficiencyScore: 0.84,
+			frameCount: 1,
+			status: "matched",
+			attributionConfidence: "exact",
+		},
+	],
+	unweightedFindings: [],
+	correlationSummary: {
+		matched: 1,
+		matchedClean: 0,
+		ambiguous: 0,
+		blindSpot: 0,
+		coldCount: 0,
+		unkeyableCount: 0,
+		orphanCount: 0,
+	},
+};
+
+describe("formatAnalysisHtml — fusion section", () => {
+	test("fusion section renders prioritized findings", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = SAMPLE_FUSION_VIEWS;
+		const out = formatAnalysisHtml(result);
+		expect(out).toContain("Runtime-Prioritized Static Findings");
+		expect(out).toContain("N+1 query");
+	});
+
+	test("fusion section absent => output byte-unchanged", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.fusionViews).toBeUndefined();
+		const out = formatAnalysisHtml(result);
+		expect(out).not.toContain("Runtime-Prioritized");
+	});
+
+	test("result.hotspots[i] schema unchanged when fusion is on (R2-5)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const snapshotBefore = JSON.stringify(result.hotspots);
+		result.fusionViews = SAMPLE_FUSION_VIEWS;
+		formatAnalysisHtml(result);
+		expect(JSON.stringify(result.hotspots)).toBe(snapshotBefore);
+	});
+
+	test("matched, zero findings, degraded coverage => not 'clean' (R2-9/R2-10)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const h = result.hotspots[0];
+		const degradedAnnotation: HotspotAnnotation = {
+			attrKey: `${h.functionName}_${h.objectType}_${h.objectId}`,
+			status: "matched",
+			attributionConfidence: "exact",
+			findings: [],
+			matchedClean: undefined,
+			reason: "matched; coverage incomplete",
+		};
+		result.fusionViews = {
+			hotspotAnnotations: [degradedAnnotation],
+			prioritizedFindings: [],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).toContain("coverage incomplete");
+		expect(out).not.toContain("no static findings");
+	});
+
+	test("escapes HTML in fusion finding content", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const xssFusionViews: FusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [
+				{
+					finding: {
+						id: "FX",
+						fingerprint: "fpx",
+						detector: "<evil>",
+						title: '<script>alert("xss")</script>',
+						rootCause: "xss",
+						severity: "high",
+						confidence: { level: "certain" },
+						primaryLocation: {
+							file: "src/X.al",
+							line: 1,
+							column: 1,
+							objectId: "g/Codeunit/1",
+							objectName: "X",
+						},
+						affectedObjects: [],
+						affectedTables: [],
+					},
+					functionName: "Fn",
+					objectType: "Codeunit",
+					objectId: 1,
+					appName: "App",
+					selfTimePercent: 10,
+					totalTimePercent: 10,
+					efficiencyScore: 1,
+					frameCount: 1,
+					status: "matched",
+					attributionConfidence: "exact",
+				},
+			],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		result.fusionViews = xssFusionViews;
+		const out = formatAnalysisHtml(result);
+		expect(out).not.toContain('<script>alert("xss")</script>');
+		expect(out).toContain("&lt;script&gt;");
 	});
 });

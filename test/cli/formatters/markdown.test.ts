@@ -4,6 +4,10 @@ import {
 	formatComparisonMarkdown,
 } from "../../../src/cli/formatters/markdown.js";
 import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
+import type {
+	FusionViews,
+	HotspotAnnotation,
+} from "../../../src/semantic/views.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -100,6 +104,119 @@ describe("formatAnalysisMarkdown", () => {
 		);
 		const output = formatAnalysisMarkdown(result);
 		expect(output).not.toContain("## AI Analysis");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Fusion section tests (R2-2, R2-4, R2-5, R2-9/R2-10)
+// ---------------------------------------------------------------------------
+
+const SAMPLE_FUSION_VIEWS: FusionViews = {
+	hotspotAnnotations: [],
+	prioritizedFindings: [
+		{
+			finding: {
+				id: "F1",
+				fingerprint: "fp1",
+				detector: "n-plus-one",
+				title: "N+1 query",
+				rootCause: "loop",
+				severity: "high",
+				confidence: { level: "likely" },
+				primaryLocation: {
+					file: "src/X.al",
+					line: 5,
+					column: 1,
+					objectId: "g/Codeunit/1",
+					objectName: "X",
+				},
+				affectedObjects: [],
+				affectedTables: [],
+			},
+			functionName: "ProcessLine",
+			objectType: "Codeunit",
+			objectId: 1,
+			appName: "App",
+			selfTimePercent: 42,
+			totalTimePercent: 50,
+			efficiencyScore: 0.84,
+			frameCount: 1,
+			status: "matched",
+			attributionConfidence: "exact",
+		},
+	],
+	unweightedFindings: [],
+	correlationSummary: {
+		matched: 1,
+		matchedClean: 0,
+		ambiguous: 0,
+		blindSpot: 0,
+		coldCount: 0,
+		unkeyableCount: 0,
+		orphanCount: 0,
+	},
+};
+
+describe("formatAnalysisMarkdown — fusion section", () => {
+	test("fusion section renders prioritized findings", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = SAMPLE_FUSION_VIEWS;
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("## Runtime-Prioritized Static Findings");
+		expect(out).toContain("N+1 query");
+	});
+
+	test("fusion section absent => output byte-unchanged", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.fusionViews).toBeUndefined();
+		const out = formatAnalysisMarkdown(result);
+		expect(out).not.toContain("Runtime-Prioritized");
+	});
+
+	test("result.hotspots[i] schema unchanged when fusion is on (R2-5)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const snapshotBefore = JSON.stringify(result.hotspots);
+		result.fusionViews = SAMPLE_FUSION_VIEWS;
+		formatAnalysisMarkdown(result);
+		expect(JSON.stringify(result.hotspots)).toBe(snapshotBefore);
+	});
+
+	test("matched, zero findings, degraded coverage => not 'clean' (R2-9/R2-10)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const h = result.hotspots[0];
+		const degradedAnnotation: HotspotAnnotation = {
+			attrKey: `${h.functionName}_${h.objectType}_${h.objectId}`,
+			status: "matched",
+			attributionConfidence: "exact",
+			findings: [],
+			matchedClean: undefined,
+			reason: "matched; coverage incomplete",
+		};
+		result.fusionViews = {
+			hotspotAnnotations: [degradedAnnotation],
+			prioritizedFindings: [],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("coverage incomplete");
+		expect(out).not.toContain("no static findings");
 	});
 });
 

@@ -2,6 +2,7 @@ import { formatTime } from "../../core/analyzer.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
+import type { HotspotAnnotation } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
 /**
@@ -65,6 +66,34 @@ function renderSummary(result: AnalysisResult): string {
 	return lines.join("\n");
 }
 
+/**
+ * Build the per-hotspot static-cause annotation blockquote line (R2-4, R2-9/R2-10).
+ * Returns "" when annotation is absent. Never mutates result.hotspots[i] (R2-5).
+ */
+function fusionAnnotationMd(annotation: HotspotAnnotation | undefined): string {
+	if (!annotation) return "";
+	if (annotation.status === "blind-spot") {
+		return `> ↳ not statically analyzed${annotation.reason ? ` (${annotation.reason})` : ""}`;
+	}
+	if (annotation.status === "ambiguous") {
+		return `> ↳ ${annotation.findings.length} possible static cause(s) (ambiguous)`;
+	}
+	// matched
+	if (annotation.findings.length === 0) {
+		// R2-9: never imply clean unless matchedClean === true
+		if (annotation.matchedClean === true) {
+			return "> ↳ analyzed, no static findings";
+		}
+		return `> ↳ matched; ${annotation.reason ?? "coverage incomplete"}`;
+	}
+	return annotation.findings
+		.map(
+			(f) =>
+				`> ↳ [${f.detector}] ${f.title} @ ${f.primaryLocation.file}:${f.primaryLocation.line} (${f.severity}/${f.confidence.level})`,
+		)
+		.join("\n");
+}
+
 function renderHotspots(result: AnalysisResult): string {
 	if (result.hotspots.length === 0) return "";
 
@@ -87,6 +116,45 @@ function renderHotspots(result: AnalysisResult): string {
 			h.calledBy.length > 0 ? h.calledBy.slice(0, 3).join(", ") : "-";
 		lines.push(
 			`| ${i + 1} | **${h.functionName}** | ${objectStr} | ${h.appName} | ${selfTimeStr}${gapStr} | ${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%) | ${h.hitCount} | ${calledByStr} |`,
+		);
+	});
+
+	// In-place static-cause annotations (R2-4, R2-5: read fusionViews, never mutate hotspots[i])
+	if (result.fusionViews) {
+		const annMap = new Map(
+			result.fusionViews.hotspotAnnotations.map((a) => [a.attrKey, a]),
+		);
+		const annotationLines: string[] = [];
+		result.hotspots.forEach((h: MethodBreakdown) => {
+			const key = `${h.functionName}_${h.objectType}_${h.objectId}`;
+			const line = fusionAnnotationMd(annMap.get(key));
+			if (line) annotationLines.push(line);
+		});
+		if (annotationLines.length > 0) {
+			lines.push("");
+			lines.push(...annotationLines);
+		}
+	}
+
+	return lines.join("\n");
+}
+
+function renderFusion(result: AnalysisResult): string {
+	const fv = result.fusionViews;
+	if (!fv || fv.prioritizedFindings.length === 0) return "";
+
+	const lines = [
+		"## Runtime-Prioritized Static Findings",
+		"",
+		"| # | Finding | Detector | Routine | Self% | Total% | Severity |",
+		"| --- | --- | --- | --- | --- | --- | --- |",
+	];
+
+	fv.prioritizedFindings.forEach((p, i) => {
+		const amb = p.frameCount > 1 ? ` (×${p.frameCount})` : "";
+		const orch = p.efficiencyScore < 0.5 ? " (orchestrator)" : "";
+		lines.push(
+			`| ${i + 1} | ${p.finding.title}${amb} | ${p.finding.detector} | ${p.functionName}${orch} | ${p.selfTimePercent.toFixed(1)} | ${p.totalTimePercent.toFixed(1)} | ${p.finding.severity} |`,
 		);
 	});
 
@@ -260,6 +328,7 @@ function renderAiFindings(result: AnalysisResult): string {
 const markdownSections: SectionRenderers<string> = {
 	summary: renderSummary,
 	hotspots: renderHotspots,
+	fusion: renderFusion,
 	criticalPath: renderCriticalPath,
 	patterns: renderPatterns,
 	appBreakdown: renderAppBreakdown,

@@ -4,6 +4,7 @@ import { truncateFunctionName } from "../../core/display-utils.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult } from "../../output/types.js";
+import type { HotspotAnnotation } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
 /**
@@ -67,8 +68,47 @@ function renderSummary(result: AnalysisResult): string {
   </div>`;
 }
 
+/**
+ * Build the per-hotspot static-cause annotation HTML (R2-4, R2-9/R2-10).
+ * Returns "" when annotation is absent. Never mutates result.hotspots[i] (R2-5).
+ */
+function fusionAnnotationHtml(
+	annotation: HotspotAnnotation | undefined,
+): string {
+	if (!annotation) return "";
+	if (annotation.status === "blind-spot") {
+		const reason = annotation.reason
+			? ` (${escapeHtml(annotation.reason)})`
+			: "";
+		return `<tr class="fusion-annotation"><td colspan="8" style="color:#505C6D;font-size:0.85em;padding-left:24px">\u21b3 not statically analyzed${reason}</td></tr>`;
+	}
+	if (annotation.status === "ambiguous") {
+		return `<tr class="fusion-annotation"><td colspan="8" style="color:#9F9700;font-size:0.85em;padding-left:24px">\u21b3 ${annotation.findings.length} possible static cause(s) (ambiguous)</td></tr>`;
+	}
+	// matched
+	if (annotation.findings.length === 0) {
+		// R2-9: never imply clean unless matchedClean === true
+		if (annotation.matchedClean === true) {
+			return `<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 analyzed, no static findings</td></tr>`;
+		}
+		const reason = escapeHtml(annotation.reason ?? "coverage incomplete");
+		return `<tr class="fusion-annotation"><td colspan="8" style="color:#505C6D;font-size:0.85em;padding-left:24px">\u21b3 matched; ${reason}</td></tr>`;
+	}
+	return annotation.findings
+		.map(
+			(f) =>
+				`<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 [${escapeHtml(f.detector)}] ${escapeHtml(f.title)} @ ${escapeHtml(f.primaryLocation.file)}:${f.primaryLocation.line} (${escapeHtml(f.severity)}/${escapeHtml(f.confidence.level)})</td></tr>`,
+		)
+		.join("\n");
+}
+
 function renderHotspots(result: AnalysisResult): string {
 	if (result.hotspots.length === 0) return "";
+
+	// Build annotation lookup when fusionViews is present (R2-5: never mutate hotspots[i])
+	const annMap: Map<string, HotspotAnnotation> = result.fusionViews
+		? new Map(result.fusionViews.hotspotAnnotations.map((a) => [a.attrKey, a]))
+		: new Map();
 
 	const rows = result.hotspots
 		.map((h: MethodBreakdown, i: number) => {
@@ -88,7 +128,7 @@ function renderHotspots(result: AnalysisResult): string {
 				displayName !== h.functionName
 					? `<strong title="${escapeHtml(h.functionName)}">${escapeHtml(displayName)}</strong>`
 					: `<strong>${escapeHtml(h.functionName)}</strong>`;
-			return `<tr>
+			const mainRow = `<tr>
         <td>${i + 1}</td>
         <td>${nameHtml}</td>
         <td>${objectStr}</td>
@@ -98,6 +138,12 @@ function renderHotspots(result: AnalysisResult): string {
         <td>${h.hitCount}</td>
         <td style="font-size:0.85em">${calledByStr}</td>
       </tr>`;
+			// Append annotation row when fusionViews present
+			const key = `${h.functionName}_${h.objectType}_${h.objectId}`;
+			const annRow = result.fusionViews
+				? fusionAnnotationHtml(annMap.get(key))
+				: "";
+			return annRow ? mainRow + "\n" + annRow : mainRow;
 		})
 		.join("\n");
 
@@ -106,6 +152,45 @@ function renderHotspots(result: AnalysisResult): string {
     <table>
       <thead>
         <tr><th>#</th><th>Function</th><th>Object</th><th>App</th><th>Self Time</th><th>Total Time</th><th>Hits</th><th>Called By</th></tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderFusion(result: AnalysisResult): string {
+	const fv = result.fusionViews;
+	if (!fv || fv.prioritizedFindings.length === 0) return "";
+
+	const rows = fv.prioritizedFindings
+		.map((p, i) => {
+			const amb =
+				p.frameCount > 1
+					? ` <span style="color:#9F9700">(\u00d7${p.frameCount} ambiguous)</span>`
+					: "";
+			const orch =
+				p.efficiencyScore < 0.5
+					? ` <span style="color:#505C6D">(orchestrator)</span>`
+					: "";
+			return `<tr>
+        <td>${i + 1}</td>
+        <td>${escapeHtml(p.finding.title)}${amb}</td>
+        <td>${escapeHtml(p.finding.detector)}</td>
+        <td style="font-family:monospace">${escapeHtml(p.functionName)}${orch}</td>
+        <td>${p.selfTimePercent.toFixed(1)}</td>
+        <td>${p.totalTimePercent.toFixed(1)}</td>
+        <td>${escapeHtml(p.finding.severity)}</td>
+      </tr>`;
+		})
+		.join("\n");
+
+	return `<div class="section">
+    <h2>Runtime-Prioritized Static Findings</h2>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Finding</th><th>Detector</th><th>Routine</th><th>Self%</th><th>Total%</th><th>Severity</th></tr>
       </thead>
       <tbody>
         ${rows}
@@ -315,6 +400,7 @@ function renderAiFindings(result: AnalysisResult): string {
 const htmlSections: SectionRenderers<string> = {
 	summary: renderSummary,
 	hotspots: renderHotspots,
+	fusion: renderFusion,
 	criticalPath: renderCriticalPath,
 	patterns: renderPatterns,
 	appBreakdown: renderAppBreakdown,

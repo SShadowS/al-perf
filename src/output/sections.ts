@@ -3,6 +3,7 @@ import type { AnalysisResult } from "./types.js";
 export type AnalysisSectionType =
 	| "summary"
 	| "hotspots"
+	| "fusion"
 	| "criticalPath"
 	| "patterns"
 	| "appBreakdown"
@@ -25,6 +26,7 @@ export const SECTION_ORDER: readonly AnalysisSectionType[] = [
 	"appBreakdown",
 	"tableBreakdown",
 	"hotspots",
+	"fusion",
 	"criticalPath",
 	"patterns",
 	"objectBreakdown",

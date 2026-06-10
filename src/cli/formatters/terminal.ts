@@ -5,6 +5,7 @@ import { truncateFunctionName } from "../../core/display-utils.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
+import type { HotspotAnnotation } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
 /**
@@ -58,6 +59,44 @@ function renderSummary(result: AnalysisResult): string {
 	return lines.join("\n");
 }
 
+/**
+ * Build the per-hotspot static-cause annotation line (R2-4, R2-5, R2-9/R2-10).
+ * Never mutates result.hotspots[i]; returns "" when fusionViews is absent.
+ */
+function fusionAnnotationLine(
+	annotation: HotspotAnnotation | undefined,
+): string {
+	if (!annotation) return "";
+	if (annotation.status === "blind-spot") {
+		return chalk.gray(
+			`    ↳ not statically analyzed${annotation.reason ? ` (${annotation.reason})` : ""}`,
+		);
+	}
+	if (annotation.status === "ambiguous") {
+		return chalk.yellow(
+			`    ↳ ${annotation.findings.length} possible static cause(s) (ambiguous)`,
+		);
+	}
+	// matched
+	if (annotation.findings.length === 0) {
+		// R2-9: never imply clean unless matchedClean === true
+		if (annotation.matchedClean === true) {
+			return chalk.green("    ↳ analyzed, no static findings");
+		}
+		return chalk.gray(
+			`    ↳ matched; ${annotation.reason ?? "coverage incomplete"}`,
+		);
+	}
+	return annotation.findings
+		.map((f) =>
+			chalk.cyan(
+				`    ↳ [${f.detector}] ${f.title} @ ${f.primaryLocation.file}:${f.primaryLocation.line}` +
+					` (${f.severity}/${f.confidence.level})`,
+			),
+		)
+		.join("\n");
+}
+
 function renderHotspots(result: AnalysisResult): string {
 	if (result.hotspots.length === 0) return "";
 
@@ -100,6 +139,56 @@ function renderHotspots(result: AnalysisResult): string {
 	});
 
 	lines.push(hotspotsTable.toString());
+
+	// In-place static-cause annotations (R2-4, R2-5: read fusionViews, never mutate hotspots[i])
+	if (result.fusionViews) {
+		// Build a fast lookup map: attrKey → annotation
+		const annMap = new Map(
+			result.fusionViews.hotspotAnnotations.map((a) => [a.attrKey, a]),
+		);
+		const annotationLines: string[] = [];
+		result.hotspots.forEach((h: MethodBreakdown) => {
+			const key = `${h.functionName}_${h.objectType}_${h.objectId}`;
+			const line = fusionAnnotationLine(annMap.get(key));
+			if (line) annotationLines.push(line);
+		});
+		if (annotationLines.length > 0) {
+			lines.push(chalk.gray("Static-cause annotations:"));
+			lines.push(...annotationLines);
+		}
+	}
+
+	return lines.join("\n");
+}
+
+function renderFusion(result: AnalysisResult): string {
+	const fv = result.fusionViews;
+	if (!fv || fv.prioritizedFindings.length === 0) return "";
+
+	const lines: string[] = [chalk.bold("Runtime-Prioritized Static Findings")];
+	const table = new Table({
+		head: ["#", "Finding", "Detector", "Routine", "Self%", "Total%", "Sev"].map(
+			(h) => chalk.gray(h),
+		),
+		style: { head: [], border: [] },
+	});
+
+	fv.prioritizedFindings.forEach((p, i) => {
+		const orch = p.efficiencyScore < 0.5 ? chalk.gray(" (orchestrator)") : "";
+		const amb =
+			p.frameCount > 1 ? chalk.yellow(` (×${p.frameCount} ambiguous)`) : "";
+		table.push([
+			String(i + 1),
+			chalk.white(p.finding.title) + amb,
+			p.finding.detector,
+			`${p.functionName}${orch}`,
+			p.selfTimePercent.toFixed(1),
+			p.totalTimePercent.toFixed(1),
+			p.finding.severity,
+		]);
+	});
+
+	lines.push(table.toString());
 	return lines.join("\n");
 }
 
@@ -287,6 +376,7 @@ function renderAiFindings(result: AnalysisResult): string {
 const terminalSections: SectionRenderers<string> = {
 	summary: renderSummary,
 	hotspots: renderHotspots,
+	fusion: renderFusion,
 	criticalPath: renderCriticalPath,
 	patterns: renderPatterns,
 	appBreakdown: renderAppBreakdown,
