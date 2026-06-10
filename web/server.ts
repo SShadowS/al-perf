@@ -21,9 +21,13 @@ import type { DeepExplainResult } from "../src/explain/deep-analyzer.js";
 import { deepAnalysis } from "../src/explain/deep-analyzer.js";
 import type { ExplainResult } from "../src/explain/explainer.js";
 import { explainAnalysis } from "../src/explain/explainer.js";
+import { isAlWorkspaceDir } from "../src/semantic/engine-runner.js";
+import { fuseProfile } from "../src/semantic/fuse.js";
+import { annotateHotspots, prioritizeFindings } from "../src/semantic/views.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
 import type { ProfileMetadata } from "../src/types/batch.js";
 import type { ProcessedProfile } from "../src/types/processed.js";
+import type { MethodBreakdown } from "../src/types/aggregated.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 // Persisted data root — set AL_PERF_DATA_DIR=/data in Docker so it lands on the
@@ -200,6 +204,7 @@ async function runAnalysis(
 		let sourceIndex:
 			| import("../src/types/source-index.js").SourceIndex
 			| undefined;
+		let allMethods: MethodBreakdown[] = [];
 		const result = await analyzeProfile(profilePath, {
 			top: config.analysisTopN,
 			includePatterns: true,
@@ -210,7 +215,34 @@ async function runAnalysis(
 			onSourceIndex: (idx) => {
 				sourceIndex = idx;
 			},
+			onAllMethods: (m) => {
+				allMethods = m;
+			},
 		});
+
+		// al-sem fusion: attach fusionViews when a workspace sourcePath is present
+		// and the engine is available. Defensive: a fusion failure must NOT abort
+		// the analysis response (wrap so a throw is swallowed → fusionViews absent).
+		// Gate so when no workspace, result.fusionViews stays undefined (byte-unchanged).
+		if (sourcePath && isAlWorkspaceDir(sourcePath)) {
+			try {
+				const fuseResult = await fuseProfile(allMethods, sourcePath);
+				if (!("disabled" in fuseResult)) {
+					const { weighted, unweighted } = prioritizeFindings(
+						fuseResult,
+						allMethods,
+					);
+					result.fusionViews = {
+						hotspotAnnotations: annotateHotspots(fuseResult, allMethods),
+						prioritizedFindings: weighted,
+						unweightedFindings: unweighted,
+						correlationSummary: fuseResult.correlationSummary,
+					};
+				}
+			} catch {
+				// Non-fatal — analysis still returns without fusionViews
+			}
+		}
 
 		// AI explanation and deep analysis
 		// AI_DISABLED=1 skips all AI calls (e.g. during upgrades) while keeping

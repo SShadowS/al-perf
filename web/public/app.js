@@ -461,12 +461,159 @@ function renderHotspots(data) {
 			tr.appendChild(tdCalledBy);
 
 			tbody.appendChild(tr);
+
+			// Fusion annotation sub-row (R2-4): in-place, gated on fusionViews.
+			// Do NOT mutate hotspot objects (R2-5) \u2014 read from fusionViews only.
+			if (data.fusionViews) {
+				const attrKey = h.functionName + "_" + h.objectType + "_" + h.objectId;
+				const annotText = fusionAnnotationText(data.fusionViews, attrKey);
+				if (annotText !== null) {
+					const annRow = document.createElement("tr");
+					annRow.className = "fusion-annotation";
+					const annCell = document.createElement("td");
+					annCell.colSpan = 8;
+					annCell.style.paddingLeft = "2em";
+					annCell.style.fontSize = "0.85em";
+					annCell.style.color = "var(--text-secondary)";
+					annCell.textContent = "\u21b3 " + annotText;
+					annRow.appendChild(annCell);
+					tbody.appendChild(annRow);
+				}
+			}
 		}
 	}
 
 	rebuildTbody();
 	wrapper.appendChild(table);
 	section.appendChild(wrapper);
+}
+
+/**
+ * Render the runtime-prioritized static findings section (fusion).
+ * Only rendered when data.fusionViews is present and has weighted findings.
+ * When absent, the section stays empty — output byte-unchanged (R2-6).
+ */
+function renderFusion(data) {
+	const section = document.getElementById("fusion-section");
+	if (!section) return;
+	section.innerHTML = "";
+	const fv = data.fusionViews;
+	if (!fv?.prioritizedFindings || fv.prioritizedFindings.length === 0) return;
+
+	const title = document.createElement("div");
+	title.className = "section-title";
+	title.textContent = "Runtime-Prioritized Static Findings";
+	section.appendChild(title);
+
+	const wrapper = document.createElement("div");
+	wrapper.className = "table-wrapper";
+
+	const table = document.createElement("table");
+	const thead = document.createElement("thead");
+	const headerRow = document.createElement("tr");
+	for (const col of [
+		"#",
+		"Finding",
+		"Detector",
+		"Routine",
+		"Self%",
+		"Total%",
+		"Severity",
+	]) {
+		const th = document.createElement("th");
+		th.textContent = col;
+		headerRow.appendChild(th);
+	}
+	thead.appendChild(headerRow);
+	table.appendChild(thead);
+
+	const tbody = document.createElement("tbody");
+	fv.prioritizedFindings.forEach((p, i) => {
+		const tr = document.createElement("tr");
+		// Ambiguous indicator when finding spans multiple frames (R2-8)
+		const amb = p.frameCount > 1 ? " (×" + p.frameCount + " ambiguous)" : "";
+		// Orchestrator indicator when efficiency is low (R2-3)
+		const orch = p.efficiencyScore < 0.5 ? " (orchestrator)" : "";
+		tr.innerHTML =
+			"<td>" +
+			(i + 1) +
+			"</td>" +
+			"<td>" +
+			escapeHtml(p.finding.title) +
+			escapeHtml(amb) +
+			"</td>" +
+			"<td>" +
+			escapeHtml(p.finding.detector) +
+			"</td>" +
+			'<td class="mono">' +
+			escapeHtml(p.functionName) +
+			escapeHtml(orch) +
+			"</td>" +
+			"<td>" +
+			escapeHtml(p.selfTimePercent.toFixed(1)) +
+			"</td>" +
+			"<td>" +
+			escapeHtml(p.totalTimePercent.toFixed(1)) +
+			"</td>" +
+			"<td>" +
+			escapeHtml(p.finding.severity) +
+			"</td>";
+		tbody.appendChild(tr);
+	});
+	table.appendChild(tbody);
+	wrapper.appendChild(table);
+	section.appendChild(wrapper);
+}
+
+/**
+ * Build the honest fusion annotation text for a hotspot row.
+ * Returns null when no annotation exists for the given key.
+ * Implements the R2-9/R2-10 honest-state semantics verbatim.
+ */
+function fusionAnnotationText(fv, attrKey) {
+	if (!fv?.hotspotAnnotations) return null;
+	const ann = fv.hotspotAnnotations.find((a) => a.attrKey === attrKey);
+	if (!ann) return null;
+	if (ann.status === "blind-spot") {
+		// R2-9: not analyzed — surface reason
+		return (
+			"not statically analyzed" + (ann.reason ? " (" + ann.reason + ")" : "")
+		);
+	}
+	if (ann.status === "ambiguous") {
+		// Never "caused by" — ambiguous means N possible causes (R2-10)
+		return ann.findings.length + " possible static cause(s) (ambiguous)";
+	}
+	// status === "matched"
+	if (ann.findings.length > 0) {
+		// Show first finding inline; escape all dynamic text
+		const f = ann.findings[0];
+		return (
+			"[" +
+			f.detector +
+			"] " +
+			f.title +
+			" @ " +
+			f.primaryLocation.file +
+			":" +
+			f.primaryLocation.line +
+			" (" +
+			f.severity +
+			"/" +
+			f.confidence.level +
+			")" +
+			(ann.findings.length > 1
+				? " (+" + (ann.findings.length - 1) + " more)"
+				: "")
+		);
+	}
+	// matched, 0 findings
+	if (ann.matchedClean === true) {
+		// R2-10: ONLY say clean when matchedClean===true (full coverage verified)
+		return "analyzed, no static findings";
+	}
+	// R2-9: matched but coverage incomplete — never imply clean
+	return "matched; " + (ann.reason ?? "coverage incomplete");
 }
 
 /**
@@ -1095,6 +1242,7 @@ function buildSidebar() {
 		{ id: "app-breakdown-section", label: "App Breakdown" },
 		{ id: "table-breakdown-section", label: "Table Breakdown" },
 		{ id: "hotspots-section", label: "Hotspots" },
+		{ id: "fusion-section", label: "Prioritized Findings" },
 		{ id: "critical-path-section", label: "Critical Path" },
 		{ id: "patterns-section", label: "Patterns" },
 		{ id: "object-breakdown-section", label: "Object Breakdown" },
@@ -1156,6 +1304,7 @@ function renderResults(data) {
 	renderAppBreakdown(data);
 	renderTableBreakdown(data);
 	renderHotspots(data);
+	renderFusion(data);
 	renderCriticalPath(data);
 	renderPatterns(data);
 	renderObjectBreakdown(data);
