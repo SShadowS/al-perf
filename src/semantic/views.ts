@@ -19,7 +19,11 @@ import type {
 	FusedModel,
 } from "../types/fused.js";
 import type { FindingSummary, RoutineIdentity } from "./contracts.js";
-import { methodAttrKey } from "./correlate.js";
+import {
+	makeMethodJoinKey,
+	makeRoutineJoinKey,
+	methodAttrKey,
+} from "./correlate.js";
 import { corroboratesDetector } from "./corroboration-map.js";
 
 // ---------------------------------------------------------------------------
@@ -87,6 +91,16 @@ export interface CausalStep {
 	 * and for zero-self orchestrators.
 	 */
 	isHot: boolean;
+	/**
+	 * Number of intermediate steps elided IMMEDIATELY AFTER this step when a
+	 * consumer truncates the chain (P3.2b MCP context guard). Absent (undefined)
+	 * on the full, untruncated chain that views.ts emits — it is stamped only by
+	 * a downstream capper (see mcp/server.ts `capCausalChain`). When present and
+	 * > 0 it signals that the chain is NON-CONTIGUOUS at this point: `n` steps
+	 * were dropped between this step and the next one in the array, so an LLM must
+	 * not read consecutive retained steps as direct caller→callee links.
+	 */
+	omittedAfter?: number;
 }
 
 /**
@@ -218,11 +232,20 @@ export function annotateHotspots(
  * Build a Map from :-form stableRoutineId → MethodBreakdown by cross-indexing
  * the inventory routines against the profile method breakdowns.
  *
- * The join is (canonicalObjectType, objectNumber, routineName) — the same key
- * correlate uses — which lets us find a method's runtime cost given only a
- * stableRoutineId. When a stableRoutineId is not in the routines array, or its
- * corresponding profile method is absent (the routine wasn't hot), the result
- * is undefined for that key (HONEST — no fabricated cost).
+ * The join key is derived by the SAME canonical helpers correlate uses —
+ * `makeMethodJoinKey` (canonicalObjectType, objectNumber,
+ * normalizeTriggerName(functionName)) for methods and `makeRoutineJoinKey`
+ * (canonicalObjectType, objectNumber, routineName) for routines — so the
+ * drilldown join can NEVER drift from the correlation join. This matters most
+ * for field/control triggers: the profile method functionName is
+ * "<member> - OnValidate" while the inventory routineName is the bare
+ * "OnValidate"; only by normalizing the METHOD side (normalizeTriggerName,
+ * applied inside makeMethodJoinKey) do the two sides meet. Object-type aliases
+ * (e.g. "CodeUnit" vs "Codeunit") are unified by canonicalObjectType.
+ *
+ * When a stableRoutineId is not in the routines array, or its corresponding
+ * profile method is absent (the routine wasn't hot), the result is undefined
+ * for that key (HONEST — no fabricated cost).
  *
  * NOTE: this is a best-effort lookup. An ambiguous match (two inventory routines
  * sharing the same join key) will map to the first hit — the same behaviour as
@@ -232,16 +255,12 @@ function buildStableIdToMethodMap(
 	routines: RoutineIdentity[],
 	methods: MethodBreakdown[],
 ): Map<string, MethodBreakdown> {
-	// Index methods by their canonical join key for fast lookup.
-	// methodAttrKey format: `${functionName}_${objectType}_${objectId}`
-	// But we need to join by (objectType, objectNumber, routineName) since the
-	// profile functionName may differ from routineName for member triggers.
-	// Use a simpler index keyed by `${canonicalObjectType}|${objectNumber}|${routineName}`.
-	// We intentionally use the raw join key (not normalizeTriggerName) here because
-	// we're matching against the inventory routineName — which is already normalized.
+	// Index methods by the canonical method join key (normalizeTriggerName +
+	// canonicalObjectType applied inside makeMethodJoinKey). First write wins for
+	// duplicate keys — matches correlate's ambiguous-first-hit behaviour.
 	const methodIndex = new Map<string, MethodBreakdown>();
 	for (const m of methods) {
-		const key = `${m.objectType.toLowerCase()}|${m.objectId}|${m.functionName}`;
+		const key = makeMethodJoinKey(m);
 		if (!methodIndex.has(key)) {
 			methodIndex.set(key, m);
 		}
@@ -249,8 +268,7 @@ function buildStableIdToMethodMap(
 
 	const result = new Map<string, MethodBreakdown>();
 	for (const r of routines) {
-		const key = `${r.objectType.toLowerCase()}|${r.objectNumber}|${r.routineName}`;
-		const m = methodIndex.get(key);
+		const m = methodIndex.get(makeRoutineJoinKey(r));
 		if (m) {
 			result.set(r.stableRoutineId, m);
 		}

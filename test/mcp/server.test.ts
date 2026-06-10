@@ -22,8 +22,13 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { createMcpServer } from "../../src/mcp/server.js";
+import {
+	capCausalChain,
+	createMcpServer,
+	MCP_CHAIN_CAP,
+} from "../../src/mcp/server.js";
 import { clearEngineCache } from "../../src/semantic/engine-runner.js";
+import type { CausalStep } from "../../src/semantic/views.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -820,6 +825,99 @@ describe("P3.2b causal chain in MCP output", () => {
 			cleanup();
 		}
 	}, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// P3.2b capCausalChain — direct unit tests of the cap behaviour (>8-step chains)
+// ---------------------------------------------------------------------------
+
+describe("P3.2b capCausalChain (direct unit, >8-step chains)", () => {
+	/** Build a step where selfTimePercent doubles as the identity marker. */
+	function step(self: number, note: string): CausalStep {
+		return {
+			note,
+			file: "ws:src/X.al",
+			line: self,
+			selfTimePercent: self,
+			totalTimePercent: self,
+			isHot: self > 0,
+		};
+	}
+
+	test("MCP_CHAIN_CAP is 8", () => {
+		expect(MCP_CHAIN_CAP).toBe(8);
+	});
+
+	test("chain of exactly 8 steps is returned UNCHANGED (no cap, no marker)", () => {
+		const chain = Array.from({ length: 8 }, (_, i) => step(i + 1, `s${i}`));
+		const out = capCausalChain(chain);
+		expect(out).toBe(chain); // identity — no-op below/at cap
+		for (const s of out as CausalStep[]) {
+			expect(s.omittedAfter).toBeUndefined();
+		}
+	});
+
+	test("chain of 12 steps caps to [first, hottest, last] keeping the hottest", () => {
+		// Hottest is at index 4 (selfTimePercent 99). First=index0, last=index11.
+		const selves = [1, 2, 3, 4, 99, 5, 6, 7, 8, 9, 10, 2];
+		const chain = selves.map((v, i) => step(v, `s${i}`));
+		const out = capCausalChain(chain) as CausalStep[];
+		expect(out).toHaveLength(3);
+
+		// First retained step is the original first.
+		expect(out[0]?.note).toBe("s0");
+		expect(out[0]?.selfTimePercent).toBe(1);
+
+		// Middle retained step is the HOTTEST (index 4, self 99) — never dropped.
+		expect(out[1]?.note).toBe("s4");
+		expect(out[1]?.selfTimePercent).toBe(99);
+
+		// Last retained step is the original last (index 11).
+		expect(out[2]?.note).toBe("s11");
+		expect(out[2]?.selfTimePercent).toBe(2);
+
+		// Hottest self-time across the WHOLE original chain must survive the cap.
+		const maxSelf = Math.max(...selves);
+		const keptMaxSelf = Math.max(...out.map((s) => s.selfTimePercent ?? -1));
+		expect(keptMaxSelf).toBe(maxSelf);
+	});
+
+	test("capped chain carries omittedAfter truncation markers (non-contiguous signal)", () => {
+		// Hottest at index 4; kept indices [0, 4, 11].
+		const selves = [1, 2, 3, 4, 99, 5, 6, 7, 8, 9, 10, 2];
+		const chain = selves.map((v, i) => step(v, `s${i}`));
+		const out = capCausalChain(chain) as CausalStep[];
+
+		// After index 0, indices 1,2,3 dropped → omittedAfter 3.
+		expect(out[0]?.omittedAfter).toBe(3);
+		// After index 4, indices 5..10 dropped (6 steps) → omittedAfter 6.
+		expect(out[1]?.omittedAfter).toBe(6);
+		// Final retained step has no gap after it → 0.
+		expect(out[2]?.omittedAfter).toBe(0);
+
+		// Sanity: the gaps + retained count reconstruct the original length.
+		const reconstructed =
+			out.length + out.reduce((sum, s) => sum + (s.omittedAfter ?? 0), 0);
+		expect(reconstructed).toBe(selves.length);
+	});
+
+	test("hottest at the FIRST index → kept set dedupes to [first, last]", () => {
+		// hotIdx 0 collides with the mandatory first index → only 2 kept.
+		const selves = [99, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+		const chain = selves.map((v, i) => step(v, `s${i}`));
+		const out = capCausalChain(chain) as CausalStep[];
+		expect(out).toHaveLength(2);
+		expect(out[0]?.note).toBe("s0");
+		expect(out[0]?.selfTimePercent).toBe(99);
+		expect(out[1]?.note).toBe("s9");
+		// first→last gap = 8 dropped steps.
+		expect(out[0]?.omittedAfter).toBe(8);
+		expect(out[1]?.omittedAfter).toBe(0);
+	});
+
+	test("undefined input is passed through", () => {
+		expect(capCausalChain(undefined)).toBeUndefined();
+	});
 });
 
 // ---------------------------------------------------------------------------

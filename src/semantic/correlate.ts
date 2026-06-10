@@ -84,7 +84,16 @@ function makeJoinKey(
 	return `${canonicalObjectType(objectType)}|${objectNumber}|${routineName}`;
 }
 
-function makeMethodJoinKey(m: MethodBreakdown): JoinKey {
+/**
+ * Canonical method-side join key: (canonicalObjectType, objectNumber,
+ * normalizeTriggerName(functionName)). Exported so the view layer's
+ * drilldown join (views.ts buildStableIdToMethodMap) reuses the EXACT same
+ * key and can never drift from the correlation join — critical for member
+ * triggers, where the profile functionName is "<member> - OnValidate" but the
+ * inventory routineName is the bare "OnValidate" (normalizeTriggerName strips
+ * the "<member> - " prefix on the method side).
+ */
+export function makeMethodJoinKey(m: MethodBreakdown): JoinKey {
 	return makeJoinKey(
 		m.objectType,
 		m.objectId,
@@ -92,7 +101,12 @@ function makeMethodJoinKey(m: MethodBreakdown): JoinKey {
 	);
 }
 
-function makeRoutineJoinKey(r: RoutineIdentity): JoinKey {
+/**
+ * Canonical routine-side join key: (canonicalObjectType, objectNumber,
+ * routineName). Exported alongside makeMethodJoinKey so both sides of any
+ * routine↔method join (correlation or drilldown) share one key derivation.
+ */
+export function makeRoutineJoinKey(r: RoutineIdentity): JoinKey {
 	return makeJoinKey(r.objectType, r.objectNumber, r.routineName);
 }
 

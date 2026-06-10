@@ -185,7 +185,8 @@ function renderHotspots(result: AnalysisResult): string {
  */
 function renderCausalChain(steps: CausalStep[] | undefined): string {
 	if (!steps || steps.length === 0) return "";
-	const lines = steps.map((s) => {
+	const lines: string[] = [];
+	for (const s of steps) {
 		const loc = `${s.file}:${s.line}`;
 		const hotMark = s.isHot ? chalk.yellow("⚡ ") : "";
 		if (s.routineName !== undefined) {
@@ -194,15 +195,22 @@ function renderCausalChain(steps: CausalStep[] | undefined): string {
 					? ` (${s.selfTimePercent.toFixed(1)}%/${s.totalTimePercent.toFixed(1)}%)`
 					: "";
 			const routine = `${s.routineName}`;
-			return (
+			lines.push(
 				chalk.gray(`    ↳ ${hotMark}${s.note} @ `) +
-				chalk.cyan(`${routine}`) +
-				chalk.gray(`${pct} [${loc}]`)
+					chalk.cyan(`${routine}`) +
+					chalk.gray(`${pct} [${loc}]`),
+			);
+		} else {
+			// Unresolved step — show note and location only
+			lines.push(chalk.gray(`    ↳ ${hotMark}${s.note} [${loc}]`));
+		}
+		// Truncation marker (P3.2b): a capped chain (MCP) is non-contiguous here.
+		if (s.omittedAfter !== undefined && s.omittedAfter > 0) {
+			lines.push(
+				chalk.gray(`    ⋮ (${s.omittedAfter} intermediate step(s) elided)`),
 			);
 		}
-		// Unresolved step — show note and location only
-		return chalk.gray(`    ↳ ${hotMark}${s.note} [${loc}]`);
-	});
+	}
 	return lines.join("\n");
 }
 

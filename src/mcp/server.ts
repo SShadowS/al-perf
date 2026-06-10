@@ -47,10 +47,19 @@ interface McpFusionBlock {
  * Strategy: keep the first step + the hottest step (highest selfTimePercent) +
  * the last step. All others are dropped. A chain of ≤ MCP_CHAIN_CAP steps is
  * returned unchanged. The chain order is PRESERVED (no reordering).
+ *
+ * TRUNCATION MARKER: because the retained steps are NOT contiguous in the
+ * original chain, each retained step carries `omittedAfter` = the number of
+ * steps dropped immediately after it. A consumer (LLM) reading the capped chain
+ * must treat any retained step with `omittedAfter > 0` as a discontinuity — the
+ * next retained step is NOT its direct callee. Steps with `omittedAfter === 0`
+ * (or, in practice, set on the last step) are adjacent in the original chain.
+ *
+ * Exported (with MCP_CHAIN_CAP) for direct unit testing of the cap behaviour.
  */
-const MCP_CHAIN_CAP = 8;
+export const MCP_CHAIN_CAP = 8;
 
-function capCausalChain(
+export function capCausalChain(
 	steps: CausalStep[] | undefined,
 ): CausalStep[] | undefined {
 	if (!steps || steps.length <= MCP_CHAIN_CAP) return steps;
@@ -65,8 +74,25 @@ function capCausalChain(
 		}
 	}
 	// Always include indices: 0, hotIdx, last. Preserve order, deduplicate.
-	const mustInclude = new Set([0, hotIdx, steps.length - 1]);
-	return steps.filter((_, i) => mustInclude.has(i));
+	const keptIdx = [...new Set([0, hotIdx, steps.length - 1])].sort(
+		(a, b) => a - b,
+	);
+	// Stamp omittedAfter = (next kept index − this index − 1): the count of steps
+	// dropped in the gap immediately following each retained step. The final
+	// retained step always has omittedAfter 0 (it is the chain's last element).
+	const result: CausalStep[] = [];
+	for (let k = 0; k < keptIdx.length; k++) {
+		const idx = keptIdx[k] as number;
+		const step = steps[idx] as CausalStep;
+		const nextIdx = keptIdx[k + 1];
+		const omittedAfter = nextIdx !== undefined ? nextIdx - idx - 1 : 0;
+		result.push(
+			omittedAfter > 0
+				? { ...step, omittedAfter }
+				: { ...step, omittedAfter: 0 },
+		);
+	}
+	return result;
 }
 
 /**

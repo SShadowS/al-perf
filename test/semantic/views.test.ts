@@ -848,4 +848,114 @@ describe("prioritizeFindings — causalSteps (P3.2b)", () => {
 			}
 		}
 	});
+
+	it("causalSteps: FIELD-TRIGGER step resolves via normalizeTriggerName (regression for the canonical-key fix)", () => {
+		// THE case that silently failed before the join fix: the profile method
+		// functionName is the COMPOUND "Quantity - OnValidate" but the inventory
+		// routineName is the BARE "OnValidate". A raw-functionName join NEVER
+		// matched these, so the step resolved to no-cost/isHot:false. With the
+		// canonical join (normalizeTriggerName applied to the method side inside
+		// makeMethodJoinKey) it MUST resolve to the field trigger's runtime cost.
+		const stableEntry = `${APP_GUID}:Table:700#entry`;
+		const stableTrigger = `${APP_GUID}:Table:700#onvalidate`;
+
+		// Entry orchestrator (low self) + the hot field trigger (high self).
+		const methodEntry = makeMethod("Entry", "Table", 700, 5, 50);
+		// Profile reports the field trigger as the COMPOUND name.
+		const methodTrigger = makeMethod(
+			"Quantity - OnValidate",
+			"Table",
+			700,
+			42,
+			42,
+		);
+
+		const finding = makeFinding(
+			"FFieldTrig",
+			"fpFieldTrig",
+			"d1",
+			"Entry",
+			"Table",
+			700,
+		);
+		(finding as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableEntry, "ws:src/Item.Table.al", 5, "calls"),
+			// This step's routine is the field trigger with BARE routineName.
+			makeEvidenceStep(
+				stableTrigger,
+				"ws:src/Item.Table.al",
+				40,
+				"db op in loop",
+			),
+		];
+
+		const routines: RoutineIdentity[] = [
+			makeRoutine("Entry", 700, "Table", stableEntry),
+			// Inventory carries the BARE trigger name.
+			makeRoutine("OnValidate", 700, "Table", stableTrigger),
+		];
+
+		const engine = makeEngine(routines, [finding]);
+		const fused = correlate([methodEntry, methodTrigger], engine);
+
+		const { weighted } = prioritizeFindings(
+			fused,
+			[methodEntry, methodTrigger],
+			routines,
+		);
+		const row = weighted.find((r) => r.finding.id === "FFieldTrig");
+		expect(row).toBeDefined();
+		const steps = row?.causalSteps as CausalStep[];
+		expect(steps).toHaveLength(2);
+
+		// The field-trigger step (index 1) MUST resolve to the compound method's
+		// runtime cost — this is the assertion that fails under the buggy raw join.
+		expect(steps[1]?.note).toBe("db op in loop");
+		expect(steps[1]?.routineName).toBe("Quantity - OnValidate");
+		expect(steps[1]?.selfTimePercent).toBe(42);
+		expect(steps[1]?.totalTimePercent).toBe(42);
+		expect(steps[1]?.isHot).toBe(true);
+		expect(steps[1]?.objectType).toBe("Table");
+		expect(steps[1]?.objectId).toBe(700);
+	});
+
+	it("causalSteps: alias-spelled objectType resolves via canonicalObjectType", () => {
+		// Inventory routine uses an alias spelling ("CodeUnit") while the profile
+		// method uses the canonical "Codeunit". The canonical join key (applied to
+		// BOTH sides) must unify them so the step resolves.
+		const stableR = `${APP_GUID}:Codeunit:800#proc`;
+
+		// Profile method: canonical "Codeunit".
+		const method = makeMethod("DoWork", "Codeunit", 800, 33, 33);
+
+		const finding = makeFinding(
+			"FAlias",
+			"fpAlias",
+			"d1",
+			"DoWork",
+			"Codeunit",
+			800,
+		);
+		(finding as FindingSummary).evidencePath = [
+			makeEvidenceStep(stableR, "ws:src/Work.Codeunit.al", 12, "loop"),
+		];
+
+		// Inventory: alias spelling "CodeUnit" (mixed case) — same object.
+		const routines: RoutineIdentity[] = [
+			makeRoutine("DoWork", 800, "CodeUnit", stableR),
+		];
+
+		const engine = makeEngine(routines, [finding]);
+		const fused = correlate([method], engine);
+
+		const { weighted } = prioritizeFindings(fused, [method], routines);
+		const row = weighted.find((r) => r.finding.id === "FAlias");
+		expect(row).toBeDefined();
+		const steps = row?.causalSteps as CausalStep[];
+		expect(steps).toHaveLength(1);
+		// Resolved despite the objectType alias mismatch.
+		expect(steps[0]?.routineName).toBe("DoWork");
+		expect(steps[0]?.selfTimePercent).toBe(33);
+		expect(steps[0]?.isHot).toBe(true);
+	});
 });
