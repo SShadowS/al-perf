@@ -25,9 +25,9 @@ import { isAlWorkspaceDir } from "../src/semantic/engine-runner.js";
 import { fuseProfile } from "../src/semantic/fuse.js";
 import { annotateHotspots, prioritizeFindings } from "../src/semantic/views.js";
 import { extractCompanionZip } from "../src/source/zip-extractor.js";
+import type { MethodBreakdown } from "../src/types/aggregated.js";
 import type { ProfileMetadata } from "../src/types/batch.js";
 import type { ProcessedProfile } from "../src/types/processed.js";
-import type { MethodBreakdown } from "../src/types/aggregated.js";
 
 const PUBLIC_DIR = resolve(import.meta.dir, "public");
 // Persisted data root — set AL_PERF_DATA_DIR=/data in Docker so it lands on the
