@@ -23,6 +23,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { createMcpServer } from "../../src/mcp/server.js";
+import { clearEngineCache } from "../../src/semantic/engine-runner.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -43,6 +44,11 @@ const BUN_EXE = process.execPath;
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
+	// Clear the per-(workspaceContentHash) engine result cache between tests. The
+	// stub binary's OUTPUT changes with ALSEM_STUB_MODE but the workspace dir
+	// (WS_MIN) is identical, so without this a cached "ok" (empty-findings) result
+	// would be served to a later "findings"-mode test for the same workspace.
+	clearEngineCache();
 	for (const fn of cleanups) {
 		try {
 			fn();
@@ -55,23 +61,29 @@ afterEach(() => {
 
 /**
  * Build a platform-appropriate launcher that runs the committed `alsem-stub.ts`
- * via the current bun executable in "ok" mode (empty findings, valid envelopes).
+ * via the current bun executable in the given mode.
+ *
+ *  - "ok"       (default) — valid envelopes, EMPTY findings (shape-only tests).
+ *  - "findings"           — non-empty findings that correlate to the
+ *                           sampling-minimal fixture's hot frames (ProcessLine
+ *                           self 100% → weighted; OnRun self 0% → dropped by the
+ *                           R2-12 filter but kept in hotspotAnnotations).
  */
-function makeStubBinary(): string {
+function makeStubBinary(mode: "ok" | "findings" = "ok"): string {
 	const tmpDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-stub-"));
 	cleanups.push(() => rmSync(tmpDir, { recursive: true, force: true }));
 	if (process.platform === "win32") {
 		const cmdPath = join(tmpDir, "alsem-stub.cmd");
 		writeFileSync(
 			cmdPath,
-			`@echo off\r\nset "ALSEM_STUB_MODE=ok"\r\n"${BUN_EXE}" "${STUB_TS}" %*\r\n`,
+			`@echo off\r\nset "ALSEM_STUB_MODE=${mode}"\r\n"${BUN_EXE}" "${STUB_TS}" %*\r\n`,
 		);
 		return cmdPath;
 	}
 	const shPath = join(tmpDir, "alsem-stub.sh");
 	writeFileSync(
 		shPath,
-		`#!/bin/sh\nexport ALSEM_STUB_MODE='ok'\nexec "${BUN_EXE}" "${STUB_TS}" "$@"\n`,
+		`#!/bin/sh\nexport ALSEM_STUB_MODE='${mode}'\nexec "${BUN_EXE}" "${STUB_TS}" "$@"\n`,
 	);
 	chmodSync(shPath, 0o755);
 	return shPath;
@@ -322,6 +334,108 @@ describe("analyze_profile: with workspace sourcePath (fusion, stub binary)", () 
 			cleanup();
 		}
 	}, 120_000);
+
+	// --- Real (non-empty) findings via the "findings" stub mode ---
+	test("fusion block has a POPULATED hotspotAnnotations entry with a correlated finding (findings stub)", async () => {
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "analyze_profile",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			const parsed = parseResponse(result) as Record<string, unknown>;
+			const fusion = parsed.fusion as Record<string, unknown>;
+			expect(fusion).toBeDefined();
+
+			// hotspotAnnotations must carry the ProcessLine annotation WITH its
+			// correlated finding (proves annotateHotspots ran on real findings).
+			const annotations = fusion.hotspotAnnotations as Array<
+				Record<string, unknown>
+			>;
+			const procAnn = annotations.find(
+				(a) => a.attrKey === "ProcessLine_CodeUnit_50000",
+			);
+			expect(procAnn).toBeDefined();
+			expect(procAnn?.status).toBe("matched");
+			const procFindings = procAnn?.findings as Array<Record<string, unknown>>;
+			expect(procFindings.length).toBeGreaterThan(0);
+			expect(procFindings.some((f) => f.id === "F-PROC")).toBe(true);
+
+			// prioritizedFindings must contain the hot-leaf finding with selfTime>0.
+			const prioritized = fusion.prioritizedFindings as Array<
+				Record<string, unknown>
+			>;
+			expect(prioritized.length).toBeGreaterThan(0);
+			const fProc = prioritized.find(
+				(p) => (p.finding as Record<string, unknown>).id === "F-PROC",
+			);
+			expect(fProc).toBeDefined();
+			expect(fProc?.selfTimePercent as number).toBeGreaterThan(0);
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+
+	test("R2-12 through MCP: a matched zero-self finding is NOT inlined in prioritizedFindings but IS in hotspotAnnotations (findings stub)", async () => {
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "analyze_profile",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			const parsed = parseResponse(result) as Record<string, unknown>;
+			const fusion = parsed.fusion as Record<string, unknown>;
+
+			// OnRun is matched but selfTimePercent 0 → its finding (F-ONRUN) must NOT
+			// be in the weighted prioritizedFindings list (R2-12 self-time>0 filter).
+			const prioritized = fusion.prioritizedFindings as Array<
+				Record<string, unknown>
+			>;
+			const onrunWeighted = prioritized.find(
+				(p) => (p.finding as Record<string, unknown>).id === "F-ONRUN",
+			);
+			expect(onrunWeighted).toBeUndefined();
+			// Every weighted row is strictly selfTime>0.
+			expect(prioritized.every((p) => (p.selfTimePercent as number) > 0)).toBe(
+				true,
+			);
+
+			// But it IS honestly visible in hotspotAnnotations on the OnRun hotspot.
+			const annotations = fusion.hotspotAnnotations as Array<
+				Record<string, unknown>
+			>;
+			const onrunAnn = annotations.find(
+				(a) => a.attrKey === "OnRun_CodeUnit_50000",
+			);
+			expect(onrunAnn).toBeDefined();
+			const onrunFindings = onrunAnn?.findings as Array<
+				Record<string, unknown>
+			>;
+			expect(onrunFindings.some((f) => f.id === "F-ONRUN")).toBe(true);
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -456,8 +570,8 @@ describe("prioritized_findings tool", () => {
 		}
 	}, 120_000);
 
-	test("respects the top parameter (stub binary)", async () => {
-		// Stub returns 0 findings; with real data this would limit results.
+	test("respects the top parameter (ok stub, empty findings)", async () => {
+		// "ok" stub returns 0 findings; with real data this would limit results.
 		// Verify no error and the field types are correct.
 		const stubBin = makeStubBinary();
 		const { client, cleanup } = await createTestClient({
@@ -482,6 +596,76 @@ describe("prioritized_findings tool", () => {
 			expect(Array.isArray(findings)).toBe(true);
 			// Stub returns no findings → length = 0 (≤ top of 5)
 			expect(findings.length).toBeLessThanOrEqual(5);
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+
+	// --- Real (non-empty) findings via the "findings" stub mode ---
+	test("returns a NON-EMPTY prioritizedFindings with selfTimePercent>0 (findings stub)", async () => {
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "prioritized_findings",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+						top: 10,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			expect(result.isError).toBeFalsy();
+			const parsed = parseResponse(result) as Record<string, unknown>;
+			const findings = parsed.prioritizedFindings as Array<
+				Record<string, unknown>
+			>;
+			// Non-empty: the ProcessLine finding is weighted.
+			expect(findings.length).toBeGreaterThan(0);
+			// R2-12: every returned row is strictly self-time>0.
+			expect(findings.every((f) => (f.selfTimePercent as number) > 0)).toBe(
+				true,
+			);
+			// The hot-leaf finding is present; the zero-self orchestrator one is not.
+			const ids = findings.map(
+				(f) => (f.finding as Record<string, unknown>).id,
+			);
+			expect(ids).toContain("F-PROC");
+			expect(ids).not.toContain("F-ONRUN");
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+
+	test("the top param truncates the returned findings (findings stub)", async () => {
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "prioritized_findings",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+						top: 1,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			expect(result.isError).toBeFalsy();
+			const parsed = parseResponse(result) as Record<string, unknown>;
+			const findings = parsed.prioritizedFindings as unknown[];
+			// top:1 → at most 1 finding (the weighted set is exactly {F-PROC}).
+			expect(findings.length).toBeLessThanOrEqual(1);
+			expect(findings.length).toBeGreaterThan(0);
 		} finally {
 			cleanup();
 		}

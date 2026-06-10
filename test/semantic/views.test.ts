@@ -171,6 +171,38 @@ describe("prioritizeFindings", () => {
 		expect(ft?.frameCount).toBe(2);
 	});
 
+	it("excludes a matched zero-self frame's finding from weighted, but keeps an ambiguous SUM>0 (R2-12)", () => {
+		// Orchestrator: matched, selfTime 0 (all cost in callees) carrying a finding
+		//   → must NOT appear in weighted.
+		// Ambiguous OnValidate: two frames selfTime 0 + 5 → sum 5 → must STAY.
+		const methods = [
+			makeMethod("Orchestrator", "Codeunit", 50000, 0, 90),
+			makeMethod("Field A - OnValidate", "Table", 50100, 0, 0),
+			makeMethod("Field B - OnValidate", "Table", 50100, 5, 5),
+		];
+		const engine = makeEngine(
+			[
+				makeRoutine("Orchestrator", 50000, "Codeunit", "r0"),
+				makeRoutine("OnValidate", 50100, "Table", "rt"),
+			],
+			[
+				makeFinding("FO", "fpO", "d1", "Orchestrator", "Codeunit", 50000),
+				makeFinding("FT", "fpT", "d1", "OnValidate", "Table", 50100),
+			],
+		);
+		const fused = correlate(methods, engine);
+		const { weighted } = prioritizeFindings(fused, methods);
+		// The zero-self orchestrator finding is dropped from weighted.
+		expect(weighted.map((r) => r.finding.id)).not.toContain("FO");
+		// The ambiguous SUM>0 finding stays, with summed selfTime 0 + 5 = 5.
+		const ft = weighted.find((r) => r.finding.id === "FT");
+		expect(ft).toBeDefined();
+		expect(ft?.selfTimePercent).toBe(5);
+		expect(ft?.frameCount).toBe(2);
+		// Every weighted row is strictly self-time>0.
+		expect(weighted.every((r) => r.selfTimePercent > 0)).toBe(true);
+	});
+
 	it("puts cold/blind/unkeyable findings in unweighted, never weighted (R2-12)", () => {
 		const methods = [makeMethod("Hot", "Codeunit", 50000, 50, 50)];
 		const engine = makeEngine(

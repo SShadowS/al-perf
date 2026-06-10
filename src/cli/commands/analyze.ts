@@ -1,6 +1,5 @@
 import type { Command } from "commander";
-import { existsSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { resolve } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import { initIdCounter, nextId } from "../../debug/ids.js";
 import type { DebugCapture } from "../../debug/types.js";
@@ -11,32 +10,19 @@ import type { DeepExplainResult } from "../../explain/deep-analyzer.js";
 import { deepAnalysis } from "../../explain/deep-analyzer.js";
 import type { ExplainResult } from "../../explain/explainer.js";
 import { type ExplainModel, explainAnalysis } from "../../explain/explainer.js";
+import { isAlWorkspaceDir } from "../../semantic/engine-runner.js";
 import { formatFusionSummary, fuseProfile } from "../../semantic/fuse.js";
 import { annotateHotspots, prioritizeFindings } from "../../semantic/views.js";
-import type { MethodBreakdown } from "../../types/aggregated.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import {
 	extractCompanionZip,
 	findCompanionZip,
 } from "../../source/zip-extractor.js";
+import type { MethodBreakdown } from "../../types/aggregated.js";
 import type { ProcessedProfile } from "../../types/processed.js";
 import type { SourceIndex } from "../../types/source-index.js";
 import { formatAnalysis, type OutputFormat } from "../formatters/index.js";
 import { withStatus } from "../status.js";
-
-/**
- * Return `true` when the given path is a directory that contains an `app.json`
- * — i.e. it is a valid AL workspace suitable for al-sem fusion.
- */
-function isAlWorkspaceDir(dirPath: string): boolean {
-	try {
-		const st = statSync(dirPath);
-		if (!st.isDirectory()) return false;
-		return existsSync(join(dirPath, "app.json"));
-	} catch {
-		return false;
-	}
-}
 
 export function registerAnalyzeCommand(program: Command) {
 	program

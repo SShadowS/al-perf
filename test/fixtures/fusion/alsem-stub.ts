@@ -13,9 +13,16 @@
  *   timeout       — sleep past the test's timeoutMs   → "timed out" degrade
  *   wrong-schema  — emit a valid envelope w/ schemaVersion 99.0.0 → schema degrade
  *   opaque        — emit valid envelopes w/ non-empty opaqueApps → coverageDegraded
+ *   findings      — emit an inventory + findings that correlate to the
+ *                   sampling-minimal fixture's hot frames (ProcessLine, self 100%)
+ *                   and its zero-self orchestrator (OnRun, self 0%) on
+ *                   Codeunit 50000. Used to exercise the MCP fusion path with REAL
+ *                   (non-empty) findings: ProcessLine → a weighted prioritized
+ *                   finding; OnRun → matched but self 0% → R2-12 filter drops it
+ *                   from `weighted` (stays in hotspotAnnotations).
  *
  * The subcommand (argv[2] = "fingerprint" | "analyze") selects which envelope
- * the "ok"/"wrong-schema"/"opaque" modes emit.
+ * the "ok"/"wrong-schema"/"opaque"/"findings" modes emit.
  */
 
 const args = process.argv.slice(2);
@@ -91,11 +98,146 @@ function analyzeEnvelope(schemaVersion: string, opaque: boolean) {
 	};
 }
 
+// ---------------------------------------------------------------------------
+// "findings" mode — correlate to the sampling-minimal fixture's hot frames.
+//
+// The fixture profile (test/fixtures/sampling-minimal.alcpuprofile) has exactly
+// two AL frames on Codeunit 50000:
+//   ProcessLine — selfTimePercent 100 (the hot leaf)
+//   OnRun       — selfTimePercent 0   (orchestrator; all cost in its callee)
+// We emit an inventory routine for each + a finding on each. After the R2-12
+// self-time>0 filter, ProcessLine's finding is weighted; OnRun's is NOT.
+// ---------------------------------------------------------------------------
+
+const FINDINGS_APP_GUID = "00000000-0000-0000-0000-000000005000";
+
+function findingsInventory() {
+	return {
+		kind: "routine-inventory",
+		schemaVersion: "1.0.0",
+		alsemVersion: "0.0.0-stub",
+		deterministic: true,
+		generatedAt: "1970-01-01T00:00:00Z",
+		diagnostics: [],
+		payload: {
+			apps: [APP],
+			coverage: [
+				{
+					directStatus: "complete",
+					inheritedStatus: "complete",
+					reasons: [],
+					subject: `${FINDINGS_APP_GUID}:Codeunit:50000#aaaa`,
+					unknownTargets: [],
+				},
+			],
+			identities: {
+				displayNames: ["ProcessLine", "OnRun"],
+				stableIds: [
+					`${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
+					`${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
+				],
+			},
+			rootClassifications: [],
+			routineInventory: [
+				{
+					objectNumber: 50000,
+					objectType: "Codeunit",
+					routineName: "ProcessLine",
+					stableRoutineId: `${FINDINGS_APP_GUID}:Codeunit:50000#proc`,
+				},
+				{
+					objectNumber: 50000,
+					objectType: "Codeunit",
+					routineName: "OnRun",
+					stableRoutineId: `${FINDINGS_APP_GUID}:Codeunit:50000#onrun`,
+				},
+			],
+		},
+	};
+}
+
+function makeStubFinding(
+	id: string,
+	fingerprint: string,
+	detector: string,
+	title: string,
+	routineName: string,
+) {
+	return {
+		id,
+		fingerprint,
+		detector,
+		title,
+		rootCause: "stub-root-cause",
+		severity: "high",
+		confidence: { level: "likely" },
+		primaryLocation: {
+			file: "ws:src/Cod50000.al",
+			line: 10,
+			column: 1,
+			objectId: `${FINDINGS_APP_GUID}/Codeunit/50000`,
+			objectName: "StubCodeunit",
+			routineName,
+		},
+		affectedObjects: [`${FINDINGS_APP_GUID}/Codeunit/50000`],
+		affectedTables: [],
+	};
+}
+
+function findingsAnalyze() {
+	const findings = [
+		// Lands on the hot leaf (ProcessLine, self 100%) → weighted.
+		makeStubFinding(
+			"F-PROC",
+			"fp-proc",
+			"d1-db-op-in-loop",
+			"DB operation inside a loop",
+			"ProcessLine",
+		),
+		// Lands on the zero-self orchestrator (OnRun, self 0%) → R2-12 drops it
+		// from weighted; it remains in hotspotAnnotations + correlationSummary.
+		makeStubFinding(
+			"F-ONRUN",
+			"fp-onrun",
+			"d2-orchestrator",
+			"Orchestrator dispatch",
+			"OnRun",
+		),
+	];
+	return {
+		kind: "analyze-report",
+		schemaVersion: "1.0.0",
+		alsemVersion: "0.0.0-stub",
+		deterministic: true,
+		generatedAt: "1970-01-01T00:00:00Z",
+		diagnostics: [],
+		payload: {
+			findings,
+			summary: {
+				byDetector: { "d1-db-op-in-loop": 1, "d2-orchestrator": 1 },
+				bySeverity: { high: 2 },
+				detectorStats: [],
+				opaqueApps: [],
+				routinesAnalyzed: 2,
+				sourceUnitsParsed: 1,
+				totalFindings: 2,
+			},
+		},
+	};
+}
+
 function emit(schemaVersion: string, opaque: boolean) {
 	const doc =
 		subcommand === "analyze"
 			? analyzeEnvelope(schemaVersion, opaque)
 			: inventoryEnvelope(schemaVersion, opaque);
+	process.stdout.write(JSON.stringify(doc));
+	process.exit(0);
+}
+
+function emitFindings() {
+	const doc =
+		subcommand === "analyze" ? findingsAnalyze() : findingsInventory();
 	process.stdout.write(JSON.stringify(doc));
 	process.exit(0);
 }
@@ -121,6 +263,9 @@ switch (mode) {
 		break;
 	case "opaque":
 		emit("1.0.0", true);
+		break;
+	case "findings":
+		emitFindings();
 		break;
 	default:
 		emit("1.0.0", false);

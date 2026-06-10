@@ -1,6 +1,4 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { existsSync, statSync } from "fs";
-import { join } from "path";
 import { z } from "zod";
 import pkg from "../../package.json";
 import { aggregateByMethod } from "../core/aggregator.js";
@@ -16,6 +14,7 @@ import { processProfile } from "../core/processor.js";
 import { deepAnalysis } from "../explain/deep-analyzer.js";
 import { HistoryStore } from "../history/store.js";
 import type { AnalysisResult } from "../output/types.js";
+import { isAlWorkspaceDir } from "../semantic/engine-runner.js";
 import { fuseProfile } from "../semantic/fuse.js";
 import {
 	annotateHotspots,
@@ -35,19 +34,11 @@ import type { CorrelationSummary } from "../types/fused.js";
 import type { ProcessedProfile } from "../types/processed.js";
 import type { SourceIndex } from "../types/source-index.js";
 
-/**
- * Return `true` when the given path is a directory that contains an `app.json`
- * — i.e. it is a valid AL workspace suitable for al-sem fusion.
- * Mirrors the same guard in src/cli/commands/analyze.ts.
- */
-function isAlWorkspaceDir(dirPath: string): boolean {
-	try {
-		const st = statSync(dirPath);
-		if (!st.isDirectory()) return false;
-		return existsSync(join(dirPath, "app.json"));
-	} catch {
-		return false;
-	}
+/** Trimmed fusion block for MCP output (R2-12: no unweightedFindings). */
+interface McpFusionBlock {
+	hotspotAnnotations: HotspotAnnotation[];
+	prioritizedFindings: PrioritizedFinding[];
+	correlationSummary: CorrelationSummary;
 }
 
 export interface McpServerOptions {
@@ -143,12 +134,6 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 				// available (R2-12: only weighted findings + summary, NO cold/orphan/
 				// unkeyable findings to avoid blowing LLM context).
 				// Gate: no workspace → no fusion key → response byte-unchanged.
-				/** Trimmed fusion block for MCP output (R2-12: no unweightedFindings). */
-				interface McpFusionBlock {
-					hotspotAnnotations: HotspotAnnotation[];
-					prioritizedFindings: PrioritizedFinding[];
-					correlationSummary: CorrelationSummary;
-				}
 				let fusionBlock: McpFusionBlock | undefined;
 
 				if (resolvedSourcePath && isAlWorkspaceDir(resolvedSourcePath)) {

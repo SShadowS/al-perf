@@ -106,6 +106,25 @@ export function clearEngineCache(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Return `true` when the given path is a directory that contains an `app.json`
+ * — i.e. it is a valid AL workspace suitable for al-sem fusion. Shared by the
+ * CLI `analyze` command and the MCP server so the fusion gate is defined once.
+ */
+export function isAlWorkspaceDir(dirPath: string): boolean {
+	try {
+		const st = statSync(dirPath);
+		if (!st.isDirectory()) return false;
+		return existsSync(join(dirPath, "app.json"));
+	} catch {
+		return false;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Binary resolution
 // ---------------------------------------------------------------------------
 

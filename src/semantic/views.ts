@@ -50,6 +50,13 @@ export interface HotspotAnnotation {
 /**
  * A static finding weighted by the runtime cost of the routine(s) it sits on.
  * Findings spanning N ambiguous frames have CPU summed across all frames (R2-8).
+ *
+ * In the `weighted` list, `selfTimePercent` (the SUM across ambiguous frames) is
+ * always > 0 (R2-12). A matched finding whose every hot frame has selfTime 0
+ * (e.g. an orchestrator whose cost is all in callees) is NOT in `weighted`; it
+ * appears only in `hotspotAnnotations` (in place on its hotspot) and is counted
+ * in `correlationSummary.matched`. Rows in the `unweightedFindings` bucket have
+ * `selfTimePercent === 0` and carry a `bucket` of cold/orphan/unkeyable.
  */
 export interface PrioritizedFinding {
 	finding: FindingSummary;
@@ -86,9 +93,13 @@ export interface PrioritizedFinding {
 export interface FusionViews {
 	/** One annotation per AL hotspot, in methods[] order (R2-14). */
 	hotspotAnnotations: HotspotAnnotation[];
-	/** selfTime > 0 findings, ranked by selfTime desc (R2-3). */
+	/**
+	 * Weighted = summed selfTimePercent > 0, ranked by selfTime desc (R2-3/R2-12).
+	 * Zero-self matched findings (orchestrators whose cost is all in callees) are
+	 * NOT here — they appear only in `hotspotAnnotations` + `correlationSummary`.
+	 */
 	prioritizedFindings: PrioritizedFinding[];
-	/** Cold/blind/unkeyable findings, weight 0, separate bucket (R2-12). */
+	/** Cold/orphan/unkeyable findings, weight 0, separate bucket (R2-12). */
 	unweightedFindings: PrioritizedFinding[];
 	correlationSummary: CorrelationSummary;
 }
@@ -136,9 +147,13 @@ export function annotateHotspots(
  * Static findings weighted by runtime cost. Ranked by selfTimePercent desc
  * (R2-3: totalTime is inclusive/orchestrator-skewed). A finding spanning N
  * ambiguous hot frames is ONE row whose CPU is the SUM across frames (R2-8).
- * Findings on cold/blind/unkeyable routines have no runtime sample →
- * `unweightedFindings`, never weighted/dropped (R2-12). Drives off the
- * ordered `methods[]` for determinism (R2-14).
+ *
+ * `weighted` is summed-selfTimePercent>0 ONLY (R2-12): a matched finding whose
+ * every hot frame has selfTime 0 is excluded (it stays honestly visible via
+ * `annotateHotspots` + `correlationSummary.matched`). Findings on
+ * cold/orphan/unkeyable routines have no runtime sample → `unweighted`, never
+ * weighted/dropped (R2-12). Drives off the ordered `methods[]` for determinism
+ * (R2-14).
  */
 export function prioritizeFindings(
 	fused: FusedModel,
@@ -207,7 +222,19 @@ export function prioritizeFindings(
 		attributionConfidence: a.attributionConfidence,
 	});
 
-	const weighted = [...acc.values()].map(toPrioritized).sort(cmpPrioritized);
+	// R2-12: `weighted` is self-time>0 ONLY. Filter on the SUMMED selfTimePercent
+	// (after the ambiguous-frame accumulation), not per-frame — so an ambiguous
+	// finding with frames {0, 5} sums to 5 and STAYS, while a finding whose every
+	// hot frame has selfTime 0 (e.g. a matched orchestrator/dispatcher whose cost is
+	// all in callees) sums to 0 and is DROPPED from weighted. Such zero-self matched
+	// findings are NOT silently lost: they remain honestly visible via
+	// `hotspotAnnotations` (in place on their hotspot) + `correlationSummary.matched`.
+	// They are NOT rerouted into `unweighted` (that bucket is cold/orphan/unkeyable
+	// only).
+	const weighted = [...acc.values()]
+		.map(toPrioritized)
+		.filter((p) => p.selfTimePercent > 0)
+		.sort(cmpPrioritized);
 
 	// Unweighted bucket: cold + orphan + unkeyable findings (no runtime sample).
 	// Each source array is tagged with its TRUE bucket — `blind-spot` here is a
