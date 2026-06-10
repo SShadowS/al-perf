@@ -8,6 +8,53 @@ import type {
 export type SourceMatch = ProcedureInfo | TriggerInfo;
 
 /**
+ * Return ALL source-index candidates for `(functionName, objectType, objectId)`.
+ *
+ * The returned array may have:
+ *  - 0 entries — no match found.
+ *  - 1 entry  — unambiguous match; same as the old `matchToSource` result.
+ *  - ≥2 entries — overloaded name: multiple routines share `(functionName, objectId)`
+ *    (al-perf has no signature to disambiguate further). Callers that need to detect
+ *    overloads should inspect `candidates.length > 1`.
+ *
+ * Matching strategy (applied in order, stopping at the first set that is non-empty):
+ * 1. Exact match:   candidates with `objectId === objectId` (all of them).
+ * 2. Name-only:     if there is exactly one candidate total, return it.
+ * 3. Type+id match: candidates with `objectType === objectType && objectId === objectId`.
+ *
+ * The function name lookup is case-insensitive.
+ */
+export function matchAllToSource(
+	functionName: string,
+	objectType: string,
+	objectId: number,
+	index: SourceIndex,
+): SourceMatch[] {
+	const nameLower = functionName.toLowerCase();
+
+	const procCandidates = index.procedures.get(nameLower) ?? [];
+	const trigCandidates = index.triggers.get(nameLower) ?? [];
+	const allCandidates: SourceMatch[] = [...procCandidates, ...trigCandidates];
+
+	if (allCandidates.length === 0) return [];
+
+	// 1. All candidates matching objectId (may be multiple overloads).
+	const exactMatches = allCandidates.filter((c) => c.objectId === objectId);
+	if (exactMatches.length > 0) return exactMatches;
+
+	// 2. Single candidate regardless of objectId — return it.
+	if (allCandidates.length === 1) return allCandidates;
+
+	// 3. Narrow by objectType + objectId.
+	const typeMatches = allCandidates.filter(
+		(c) => c.objectType === objectType && c.objectId === objectId,
+	);
+	if (typeMatches.length > 0) return typeMatches;
+
+	return [];
+}
+
+/**
  * Match a profile method to its source location in the index.
  *
  * Matching strategy:
@@ -15,6 +62,9 @@ export type SourceMatch = ProcedureInfo | TriggerInfo;
  * 2. Name-only match: if there's exactly one candidate
  * 3. Disambiguate by objectType + objectId
  * 4. Fall back to triggers
+ *
+ * Returns the first result from `matchAllToSource`, or `null` when there is no
+ * match. Existing callers are byte-unchanged.
  */
 export function matchToSource(
 	functionName: string,
@@ -22,28 +72,7 @@ export function matchToSource(
 	objectId: number,
 	index: SourceIndex,
 ): SourceMatch | null {
-	const nameLower = functionName.toLowerCase();
-
-	const procCandidates = index.procedures.get(nameLower) ?? [];
-	const trigCandidates = index.triggers.get(nameLower) ?? [];
-	const allCandidates: SourceMatch[] = [...procCandidates, ...trigCandidates];
-
-	if (allCandidates.length === 0) return null;
-
-	// 1. Exact match: name + objectId
-	const exactMatch = allCandidates.find((c) => c.objectId === objectId);
-	if (exactMatch) return exactMatch;
-
-	// 2. If only one candidate, use it
-	if (allCandidates.length === 1) return allCandidates[0];
-
-	// 3. Disambiguate by objectType + objectId
-	const typeMatch = allCandidates.find(
-		(c) => c.objectType === objectType && c.objectId === objectId,
-	);
-	if (typeMatch) return typeMatch;
-
-	return null;
+	return matchAllToSource(functionName, objectType, objectId, index)[0] ?? null;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { matchToSource } from "../../src/source/locator.js";
+import { matchAllToSource, matchToSource } from "../../src/source/locator.js";
 import type {
 	ProcedureInfo,
 	SourceIndex,
@@ -115,5 +115,69 @@ describe("matchToSource", () => {
 		const index = makeIndex([proc]);
 		const result = matchToSource("dowork", "Codeunit", 80, index);
 		expect(result).not.toBeNull();
+	});
+});
+
+describe("matchAllToSource — overload detection", () => {
+	it("returns empty array when no candidate found", () => {
+		const index = makeIndex([]);
+		const result = matchAllToSource("NonExistent", "Codeunit", 80, index);
+		expect(result).toEqual([]);
+	});
+
+	it("returns a single-element array for an unambiguous match", () => {
+		const proc = makeProcedure({ name: "DoWork", objectId: 80 });
+		const index = makeIndex([proc]);
+		const result = matchAllToSource("DoWork", "Codeunit", 80, index);
+		expect(result.length).toBe(1);
+		expect(result[0].name).toBe("DoWork");
+	});
+
+	it("returns ≥2 elements when multiple overloads share (functionName, objectId)", () => {
+		// Two procedures with the same name and objectId (overloads — same object)
+		const proc1 = makeProcedure({
+			name: "Calculate",
+			objectId: 50100,
+			objectType: "Codeunit",
+		});
+		const proc2 = makeProcedure({
+			name: "Calculate",
+			objectId: 50100,
+			objectType: "Codeunit",
+			lineStart: 30, // different line to distinguish them
+			lineEnd: 40,
+		});
+		const index = makeIndex([proc1, proc2]);
+		const result = matchAllToSource("Calculate", "Codeunit", 50100, index);
+		expect(result.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("matchToSource still returns exactly one result (first of matchAllToSource)", () => {
+		const proc1 = makeProcedure({
+			name: "Calculate",
+			objectId: 50100,
+			lineStart: 10,
+			lineEnd: 20,
+		});
+		const proc2 = makeProcedure({
+			name: "Calculate",
+			objectId: 50100,
+			lineStart: 30,
+			lineEnd: 40,
+		});
+		const index = makeIndex([proc1, proc2]);
+		const single = matchToSource("Calculate", "Codeunit", 50100, index);
+		const all = matchAllToSource("Calculate", "Codeunit", 50100, index);
+		// matchToSource returns the first element of matchAllToSource
+		expect(single).toBe(all[0]);
+		expect(all.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("is case-insensitive (same as matchToSource)", () => {
+		const proc = makeProcedure({ name: "DoWork", objectId: 80 });
+		const index = makeIndex([proc]);
+		const result = matchAllToSource("dowork", "Codeunit", 80, index);
+		expect(result.length).toBe(1);
+		expect(result[0].name).toBe("DoWork");
 	});
 });
