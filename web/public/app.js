@@ -534,6 +534,13 @@ function renderFusion(data) {
 		const amb = p.frameCount > 1 ? " (×" + p.frameCount + " ambiguous)" : "";
 		// Orchestrator indicator when efficiency is low (R2-3)
 		const orch = p.efficiencyScore < 0.5 ? " (orchestrator)" : "";
+		// Per-finding runtime-correlated badge (P3.1, R3-6): co-occurrence is correlation, not causation
+		const badge =
+			p.corroboratingPatterns && p.corroboratingPatterns.length > 0
+				? ' <span style="color:#00B7C3;font-weight:600">⚡ runtime-correlated (' +
+					escapeHtml(p.corroboratingPatterns.join(", ")) +
+					")</span>"
+				: "";
 		tr.innerHTML =
 			"<td>" +
 			(i + 1) +
@@ -541,6 +548,7 @@ function renderFusion(data) {
 			"<td>" +
 			escapeHtml(p.finding.title) +
 			escapeHtml(amb) +
+			badge +
 			"</td>" +
 			"<td>" +
 			escapeHtml(p.finding.detector) +
@@ -563,6 +571,20 @@ function renderFusion(data) {
 	table.appendChild(tbody);
 	wrapper.appendChild(table);
 	section.appendChild(wrapper);
+}
+
+/**
+ * Build the runtime-correlated badge text for an annotation.
+ * Returns "" when absent. Badge text is ALWAYS "runtime-correlated" — NEVER
+ * "runtime-confirmed" — co-occurrence is correlation not causation (P3.1 R3-6).
+ * Safe for textContent insertion (pattern ids are our own map keys).
+ */
+function runtimeCorrelatedBadgeText(ann) {
+	if (!ann.corroboratingPatterns || ann.corroboratingPatterns.length === 0)
+		return "";
+	return (
+		" ⚡ runtime-correlated (" + ann.corroboratingPatterns.join(", ") + ")"
+	);
 }
 
 /**
@@ -589,6 +611,8 @@ function fusionAnnotationText(fv, attrKey) {
 		return ann.findings.length + " possible static cause(s) (ambiguous)";
 	}
 	// status === "matched"
+	// Attribution-level badge (P3.1, R3-6): appended to annotation text
+	const badge = runtimeCorrelatedBadgeText(ann);
 	if (ann.findings.length > 0) {
 		// Show first finding inline. Raw text — safe only because the caller
 		// inserts via textContent (see the SECURITY note on this function).
@@ -609,16 +633,17 @@ function fusionAnnotationText(fv, attrKey) {
 			")" +
 			(ann.findings.length > 1
 				? " (+" + (ann.findings.length - 1) + " more)"
-				: "")
+				: "") +
+			badge
 		);
 	}
 	// matched, 0 findings
 	if (ann.matchedClean === true) {
 		// R2-10: ONLY say clean when matchedClean===true (full coverage verified)
-		return "analyzed, no static findings";
+		return "analyzed, no static findings" + badge;
 	}
 	// R2-9: matched but coverage incomplete — never imply clean
-	return "matched; " + (ann.reason ?? "coverage incomplete");
+	return "matched; " + (ann.reason ?? "coverage incomplete") + badge;
 }
 
 /**

@@ -2,8 +2,21 @@ import { formatTime } from "../../core/analyzer.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
-import type { HotspotAnnotation } from "../../semantic/views.js";
+import type {
+	HotspotAnnotation,
+	PrioritizedFinding,
+} from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
+
+/**
+ * Build the "runtime-correlated" badge string for a list of pattern ids.
+ * Returns "" when patterns is absent or empty (byte-unchanged off).
+ * Badge text is ALWAYS "runtime-correlated" — NEVER "runtime-confirmed" (R3-6).
+ */
+function runtimeCorrelatedBadge(patterns: string[] | undefined): string {
+	if (!patterns || patterns.length === 0) return "";
+	return ` ⚡ runtime-correlated (${patterns.join(", ")})`;
+}
 
 /**
  * Build a simple bar chart string using filled/empty blocks.
@@ -79,19 +92,21 @@ function fusionAnnotationMd(annotation: HotspotAnnotation | undefined): string {
 		return `> ↳ ${annotation.findings.length} possible static cause(s) (ambiguous)`;
 	}
 	// matched
+	const badge = runtimeCorrelatedBadge(annotation.corroboratingPatterns);
 	if (annotation.findings.length === 0) {
 		// R2-9: never imply clean unless matchedClean === true
 		if (annotation.matchedClean === true) {
-			return "> ↳ analyzed, no static findings";
+			return `> ↳ analyzed, no static findings${badge}`;
 		}
-		return `> ↳ matched; ${annotation.reason ?? "coverage incomplete"}`;
+		return `> ↳ matched; ${annotation.reason ?? "coverage incomplete"}${badge}`;
 	}
-	return annotation.findings
+	const findingLines = annotation.findings
 		.map(
 			(f) =>
 				`> ↳ [${f.detector}] ${f.title} @ ${f.primaryLocation.file}:${f.primaryLocation.line} (${f.severity}/${f.confidence.level})`,
 		)
 		.join("\n");
+	return badge ? findingLines + badge : findingLines;
 }
 
 function renderHotspots(result: AnalysisResult): string {
@@ -139,6 +154,12 @@ function renderHotspots(result: AnalysisResult): string {
 	return lines.join("\n");
 }
 
+function renderFusionFindingCell(p: PrioritizedFinding): string {
+	const amb = p.frameCount > 1 ? ` (×${p.frameCount})` : "";
+	const badge = runtimeCorrelatedBadge(p.corroboratingPatterns);
+	return `${p.finding.title}${amb}${badge}`;
+}
+
 function renderFusion(result: AnalysisResult): string {
 	const fv = result.fusionViews;
 	if (!fv || fv.prioritizedFindings.length === 0) return "";
@@ -151,10 +172,9 @@ function renderFusion(result: AnalysisResult): string {
 	];
 
 	fv.prioritizedFindings.forEach((p, i) => {
-		const amb = p.frameCount > 1 ? ` (×${p.frameCount})` : "";
 		const orch = p.efficiencyScore < 0.5 ? " (orchestrator)" : "";
 		lines.push(
-			`| ${i + 1} | ${p.finding.title}${amb} | ${p.finding.detector} | ${p.functionName}${orch} | ${p.selfTimePercent.toFixed(1)} | ${p.totalTimePercent.toFixed(1)} | ${p.finding.severity} |`,
+			`| ${i + 1} | ${renderFusionFindingCell(p)} | ${p.finding.detector} | ${p.functionName}${orch} | ${p.selfTimePercent.toFixed(1)} | ${p.totalTimePercent.toFixed(1)} | ${p.finding.severity} |`,
 		);
 	});
 

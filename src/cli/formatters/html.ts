@@ -4,7 +4,10 @@ import { truncateFunctionName } from "../../core/display-utils.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult } from "../../output/types.js";
-import type { HotspotAnnotation } from "../../semantic/views.js";
+import type {
+	HotspotAnnotation,
+	PrioritizedFinding,
+} from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 
 /**
@@ -17,6 +20,16 @@ function escapeHtml(str: string | undefined | null): string {
 		.replace(/</g, "&lt;")
 		.replace(/>/g, "&gt;")
 		.replace(/"/g, "&quot;");
+}
+
+/**
+ * Build the "runtime-correlated" badge HTML for a list of pattern ids.
+ * Returns "" when patterns is absent or empty (byte-unchanged off).
+ * Badge text is ALWAYS "runtime-correlated" — NEVER "runtime-confirmed" (R3-6).
+ */
+function runtimeCorrelatedBadgeHtml(patterns: string[] | undefined): string {
+	if (!patterns || patterns.length === 0) return "";
+	return ` <span style="color:#00B7C3;font-weight:600">⚡ runtime-correlated (${escapeHtml(patterns.join(", "))})</span>`;
 }
 
 /**
@@ -86,18 +99,27 @@ function fusionAnnotationHtml(
 		return `<tr class="fusion-annotation"><td colspan="8" style="color:#9F9700;font-size:0.85em;padding-left:24px">\u21b3 ${annotation.findings.length} possible static cause(s) (ambiguous)</td></tr>`;
 	}
 	// matched
+	const badge = runtimeCorrelatedBadgeHtml(annotation.corroboratingPatterns);
 	if (annotation.findings.length === 0) {
 		// R2-9: never imply clean unless matchedClean === true
 		if (annotation.matchedClean === true) {
-			return `<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 analyzed, no static findings</td></tr>`;
+			return `<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 analyzed, no static findings${badge}</td></tr>`;
 		}
 		const reason = escapeHtml(annotation.reason ?? "coverage incomplete");
-		return `<tr class="fusion-annotation"><td colspan="8" style="color:#505C6D;font-size:0.85em;padding-left:24px">\u21b3 matched; ${reason}</td></tr>`;
+		return `<tr class="fusion-annotation"><td colspan="8" style="color:#505C6D;font-size:0.85em;padding-left:24px">\u21b3 matched; ${reason}${badge}</td></tr>`;
 	}
-	return annotation.findings
+	// Render all finding rows; append the badge to the last finding row inline
+	const rows = annotation.findings.map(
+		(f) =>
+			`\u21b3 [${escapeHtml(f.detector)}] ${escapeHtml(f.title)} @ ${escapeHtml(f.primaryLocation.file)}:${f.primaryLocation.line} (${escapeHtml(f.severity)}/${escapeHtml(f.confidence.level)})`,
+	);
+	if (badge && rows.length > 0) {
+		rows[rows.length - 1] += badge;
+	}
+	return rows
 		.map(
-			(f) =>
-				`<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">\u21b3 [${escapeHtml(f.detector)}] ${escapeHtml(f.title)} @ ${escapeHtml(f.primaryLocation.file)}:${f.primaryLocation.line} (${escapeHtml(f.severity)}/${escapeHtml(f.confidence.level)})</td></tr>`,
+			(text) =>
+				`<tr class="fusion-annotation"><td colspan="8" style="color:#00B7C3;font-size:0.85em;padding-left:24px">${text}</td></tr>`,
 		)
 		.join("\n");
 }
@@ -160,23 +182,28 @@ function renderHotspots(result: AnalysisResult): string {
   </div>`;
 }
 
+function renderFusionFindingCell(p: PrioritizedFinding): string {
+	const amb =
+		p.frameCount > 1
+			? ` <span style="color:#9F9700">(\u00d7${p.frameCount} ambiguous)</span>`
+			: "";
+	const badge = runtimeCorrelatedBadgeHtml(p.corroboratingPatterns);
+	return `${escapeHtml(p.finding.title)}${amb}${badge}`;
+}
+
 function renderFusion(result: AnalysisResult): string {
 	const fv = result.fusionViews;
 	if (!fv || fv.prioritizedFindings.length === 0) return "";
 
 	const rows = fv.prioritizedFindings
 		.map((p, i) => {
-			const amb =
-				p.frameCount > 1
-					? ` <span style="color:#9F9700">(\u00d7${p.frameCount} ambiguous)</span>`
-					: "";
 			const orch =
 				p.efficiencyScore < 0.5
 					? ` <span style="color:#505C6D">(orchestrator)</span>`
 					: "";
 			return `<tr>
         <td>${i + 1}</td>
-        <td>${escapeHtml(p.finding.title)}${amb}</td>
+        <td>${renderFusionFindingCell(p)}</td>
         <td>${escapeHtml(p.finding.detector)}</td>
         <td style="font-family:monospace">${escapeHtml(p.functionName)}${orch}</td>
         <td>${p.selfTimePercent.toFixed(1)}</td>

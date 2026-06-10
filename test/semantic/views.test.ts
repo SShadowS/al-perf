@@ -11,6 +11,7 @@ import {
 	prioritizeFindings,
 } from "../../src/semantic/views.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
+import type { SemanticAttribution } from "../../src/types/fused.js";
 
 const APP_GUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const APP_NAME = "FusionMinimal";
@@ -355,5 +356,176 @@ describe("annotateHotspots", () => {
 		const ann = annotateHotspots(fused, methods);
 		expect(ann[0].matchedClean).toBe(true);
 		expect(ann[0].reason).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Per-finding corroboratingPatterns (P3.1, R3-6 / R2-12)
+// ---------------------------------------------------------------------------
+
+describe("prioritizeFindings — per-finding corroboratingPatterns (P3.1)", () => {
+	/**
+	 * Build a minimal fused model with a single matched attribution that already
+	 * has corroboratingPatterns set (as corroborate.ts would do in production).
+	 * We inject via attributions.set after correlate(), then override the field.
+	 */
+	function makeFusedWithCorroboration(
+		method: MethodBreakdown,
+		_findings: FindingSummary[],
+		corroboratingPatterns: string[],
+		engine: EngineAnalysis,
+	) {
+		const fused = correlate([method], engine);
+		const key = `${method.functionName}_${method.objectType}_${method.objectId}`;
+		const existing = fused.attributions.get(key);
+		if (existing) {
+			// Inject attribution-level corroborating patterns (as corroborate.ts would)
+			(existing as SemanticAttribution).corroboratingPatterns =
+				corroboratingPatterns;
+		}
+		return fused;
+	}
+
+	it("a finding whose detector is corroborated carries the pattern id (per-finding precision)", () => {
+		const method = makeMethod("ProcessItems", "Codeunit", 50100, 40, 50);
+		const findingD1 = makeFinding(
+			"FD1",
+			"fpD1",
+			"d1-db-op-in-loop",
+			"ProcessItems",
+			"Codeunit",
+			50100,
+		);
+		const engine = makeEngine(
+			[makeRoutine("ProcessItems", 50100, "Codeunit", "r0")],
+			[findingD1],
+		);
+		const fused = makeFusedWithCorroboration(
+			method,
+			[findingD1],
+			["repeated-siblings"],
+			engine,
+		);
+		const { weighted } = prioritizeFindings(fused, [method]);
+		const row = weighted.find((r) => r.finding.id === "FD1");
+		expect(row).toBeDefined();
+		expect(row?.corroboratingPatterns).toEqual(["repeated-siblings"]);
+	});
+
+	it("a sibling finding on the same routine with an unmapped detector does NOT carry corroboratingPatterns", () => {
+		const method = makeMethod("ProcessItems", "Codeunit", 50100, 40, 50);
+		const findingD1 = makeFinding(
+			"FD1",
+			"fpD1",
+			"d1-db-op-in-loop",
+			"ProcessItems",
+			"Codeunit",
+			50100,
+		);
+		const findingD14 = makeFinding(
+			"FD14",
+			"fpD14",
+			"d14-dead-routine",
+			"ProcessItems",
+			"Codeunit",
+			50100,
+		);
+		const engine = makeEngine(
+			[makeRoutine("ProcessItems", 50100, "Codeunit", "r0")],
+			[findingD1, findingD14],
+		);
+		const fused = makeFusedWithCorroboration(
+			method,
+			[findingD1, findingD14],
+			["repeated-siblings"],
+			engine,
+		);
+		const { weighted } = prioritizeFindings(fused, [method]);
+
+		// d1 → corroborated (repeated-siblings maps to d1-db-op-in-loop)
+		const rowD1 = weighted.find((r) => r.finding.id === "FD1");
+		expect(rowD1?.corroboratingPatterns).toEqual(["repeated-siblings"]);
+
+		// d14 → NOT corroborated (repeated-siblings does NOT map to d14-dead-routine)
+		const rowD14 = weighted.find((r) => r.finding.id === "FD14");
+		expect(rowD14?.corroboratingPatterns).toBeUndefined();
+	});
+
+	it("cold / unweighted findings NEVER carry corroboratingPatterns (R2-12)", () => {
+		// Method is in the profile (hot), but the cold finding is on a routine NOT in methods[]
+		const hotMethod = makeMethod("Hot", "Codeunit", 50000, 50, 50);
+		const findingHot = makeFinding(
+			"FH",
+			"fpH",
+			"d1-db-op-in-loop",
+			"Hot",
+			"Codeunit",
+			50000,
+		);
+		const findingCold = makeFinding(
+			"FC",
+			"fpC",
+			"d1-db-op-in-loop",
+			"ColdRoutine",
+			"Codeunit",
+			50002,
+		);
+		const engine = makeEngine(
+			[
+				makeRoutine("Hot", 50000, "Codeunit", "r0"),
+				makeRoutine("ColdRoutine", 50002, "Codeunit", "r2"),
+			],
+			[findingHot, findingCold],
+		);
+		const fused = correlate([hotMethod], engine);
+		// Inject corroboratingPatterns on the hot attribution
+		const hotKey = "Hot_Codeunit_50000";
+		const hotAttr = fused.attributions.get(hotKey);
+		if (hotAttr)
+			(hotAttr as SemanticAttribution).corroboratingPatterns = [
+				"repeated-siblings",
+			];
+
+		const { weighted, unweighted } = prioritizeFindings(fused, [hotMethod]);
+
+		// Hot finding has corroboratingPatterns (it's weighted, detector is corroborated)
+		const hotRow = weighted.find((r) => r.finding.id === "FH");
+		expect(hotRow?.corroboratingPatterns).toEqual(["repeated-siblings"]);
+
+		// Cold finding is in unweighted and NEVER has corroboratingPatterns
+		const coldRow = unweighted.find((r) => r.finding.id === "FC");
+		expect(coldRow).toBeDefined();
+		expect(coldRow?.corroboratingPatterns).toBeUndefined();
+	});
+
+	it("is deterministic across two runs (R2-14)", () => {
+		const method = makeMethod("ProcessItems", "Codeunit", 50100, 40, 50);
+		const findingD1 = makeFinding(
+			"FD1",
+			"fpD1",
+			"d1-db-op-in-loop",
+			"ProcessItems",
+			"Codeunit",
+			50100,
+		);
+		const engine = makeEngine(
+			[makeRoutine("ProcessItems", 50100, "Codeunit", "r0")],
+			[findingD1],
+		);
+		const fused1 = makeFusedWithCorroboration(
+			method,
+			[findingD1],
+			["repeated-siblings"],
+			engine,
+		);
+		const fused2 = makeFusedWithCorroboration(
+			method,
+			[findingD1],
+			["repeated-siblings"],
+			engine,
+		);
+		const r1 = prioritizeFindings(fused1, [method]);
+		const r2 = prioritizeFindings(fused2, [method]);
+		expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));
 	});
 });

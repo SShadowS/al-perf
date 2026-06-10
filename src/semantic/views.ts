@@ -20,6 +20,7 @@ import type {
 } from "../types/fused.js";
 import type { FindingSummary } from "./contracts.js";
 import { methodAttrKey } from "./correlate.js";
+import { corroboratesDetector } from "./corroboration-map.js";
 
 // ---------------------------------------------------------------------------
 // Output types (defined once here; reused by AnalysisResult + renderers)
@@ -84,6 +85,14 @@ export interface PrioritizedFinding {
 	 * per-method `status`). Carried so renderers don't flatten the distinction.
 	 */
 	bucket?: "cold" | "orphan" | "unkeyable";
+	/**
+	 * Runtime-corroboration patterns (P3.1, R3-6): subset of the attribution's
+	 * `corroboratingPatterns` whose map entry actually corroborates THIS finding's
+	 * `detector`. Per-finding precision: a sibling finding on the same routine whose
+	 * detector is NOT in the map gets nothing. Weighted-only (R2-12): never set on
+	 * unweighted/cold rows. Omitted when empty.
+	 */
+	corroboratingPatterns?: string[];
 }
 
 /**
@@ -170,6 +179,8 @@ export function prioritizeFindings(
 		attributionConfidence: AttributionConfidence;
 		// representative frame (highest selfTime; tiebreak by functionName asc)
 		rep: MethodBreakdown;
+		// attribution-level corroborating patterns (union across all frames for this finding)
+		attrCorroboratingPatterns?: string[];
 	}
 
 	const acc = new Map<string, Acc>(); // keyed by finding.fingerprint
@@ -189,6 +200,7 @@ export function prioritizeFindings(
 					status: attr.status,
 					attributionConfidence: attr.attributionConfidence,
 					rep: m,
+					attrCorroboratingPatterns: attr.corroboratingPatterns,
 				});
 			} else {
 				existing.selfTimePercent += m.selfTimePercent; // SUM (R2-8)
@@ -203,24 +215,42 @@ export function prioritizeFindings(
 				) {
 					existing.rep = m;
 				}
+				// union corroborating patterns across frames (union = same as first non-empty,
+				// since all frames for the same finding share the attribution-level set)
+				if (!existing.attrCorroboratingPatterns && attr.corroboratingPatterns) {
+					existing.attrCorroboratingPatterns = attr.corroboratingPatterns;
+				}
 			}
 		}
 	}
 
-	const toPrioritized = (a: Acc): PrioritizedFinding => ({
-		finding: a.finding,
-		functionName: a.rep.functionName,
-		objectType: a.rep.objectType,
-		objectId: a.rep.objectId,
-		appName: a.rep.appName,
-		selfTimePercent: a.selfTimePercent,
-		totalTimePercent: a.totalTimePercent,
-		gapTime: a.gapTime > 0 ? a.gapTime : undefined,
-		efficiencyScore: a.rep.efficiencyScore,
-		frameCount: a.frameCount,
-		status: a.status,
-		attributionConfidence: a.attributionConfidence,
-	});
+	const toPrioritized = (a: Acc): PrioritizedFinding => {
+		// Per-finding precision (R3-6): filter attribution-level patterns to only
+		// those that actually corroborate THIS finding's detector.
+		const perFindingPatterns = a.attrCorroboratingPatterns?.filter((pid) =>
+			corroboratesDetector(pid, a.finding.detector),
+		);
+		return {
+			finding: a.finding,
+			functionName: a.rep.functionName,
+			objectType: a.rep.objectType,
+			objectId: a.rep.objectId,
+			appName: a.rep.appName,
+			selfTimePercent: a.selfTimePercent,
+			totalTimePercent: a.totalTimePercent,
+			gapTime: a.gapTime > 0 ? a.gapTime : undefined,
+			efficiencyScore: a.rep.efficiencyScore,
+			frameCount: a.frameCount,
+			status: a.status,
+			attributionConfidence: a.attributionConfidence,
+			// Weighted-only (R2-12): omit when empty (perFindingPatterns is
+			// undefined or []) — the toPrioritized helper is only called for
+			// weighted findings; unweighted rows use toUnweighted (no corroboration).
+			...(perFindingPatterns && perFindingPatterns.length > 0
+				? { corroboratingPatterns: perFindingPatterns }
+				: {}),
+		};
+	};
 
 	// R2-12: `weighted` is self-time>0 ONLY. Filter on the SUMMED selfTimePercent
 	// (after the ambiguous-frame accumulation), not per-frame — so an ambiguous

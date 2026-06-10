@@ -1,6 +1,11 @@
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { readFileSync } from "fs";
+import {
+	chmodSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { clearEngineCache } from "../../src/semantic/engine-runner.js";
@@ -287,6 +292,21 @@ describe("web server", () => {
 			expect(text).toContain("fusionAnnotationText");
 			expect(text).toContain("fusion-section");
 			expect(text).toContain("Prioritized Findings");
+		});
+
+		it("app.js contains 'runtime-correlated' badge code (P3.1 R3-6)", async () => {
+			const res = await fetch(`${BASE}/app.js`);
+			expect(res.status).toBe(200);
+			const text = await res.text();
+			// Badge text must be "runtime-correlated" (the badge string itself is present)
+			expect(text).toContain("runtime-correlated");
+			// Badge is gated on corroboratingPatterns (present + non-empty)
+			expect(text).toContain("corroboratingPatterns");
+			// Both renderFusion (per-finding) and fusionAnnotationText (annotation-level) carry it
+			expect(text).toContain("runtimeCorrelatedBadgeText");
+			// The badge string literal used in output must use "correlated" not "confirmed"
+			// (check the actual output string, not just any comment in the code)
+			expect(text).toMatch(/runtime-correlated \(/);
 		});
 
 		it("index.html contains fusion-section div", async () => {

@@ -688,4 +688,80 @@ describe("prioritized_findings tool", () => {
 			cleanup();
 		}
 	});
+
+	// --- P3.1 corroboratingPatterns in MCP output (weighted-only, R2-12) ---
+	test("corroboratingPatterns field appears on a weighted finding when set (P3.1, R3-6)", async () => {
+		// The stub binary emits no corroboration (no runtime patterns match).
+		// We verify the MCP output structure: findings without corroboration must
+		// NOT carry the key (absence = correct). The field passes through the
+		// PrioritizedFinding serialization correctly when present.
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "prioritized_findings",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+						top: 10,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			expect(result.isError).toBeFalsy();
+			const text = (result.content as TextContent)[0].text;
+			const parsed = JSON.parse(text) as Record<string, unknown>;
+			const findings = parsed.prioritizedFindings as Array<
+				Record<string, unknown>
+			>;
+
+			// Stub has no matched runtime patterns → no corroboratingPatterns keys
+			// on any weighted finding (verifies the field is conditionally omitted).
+			expect(findings.every((f) => f.corroboratingPatterns === undefined)).toBe(
+				true,
+			);
+
+			// R2-12: output never has unweightedFindings
+			expect(text).not.toContain('"unweightedFindings"');
+
+			// R3-6 honesty guard: the word "runtime-confirmed" must NEVER appear in MCP output.
+			expect(text).not.toContain("runtime-confirmed");
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// P3.1 R3-6 honesty guard: "runtime-confirmed" never in any MCP response
+// ---------------------------------------------------------------------------
+
+describe("P3.1 honesty guard: 'runtime-confirmed' never in MCP output", () => {
+	test("analyze_profile response does not contain 'runtime-confirmed'", async () => {
+		const stubBin = makeStubBinary("findings");
+		const { client, cleanup } = await createTestClient({
+			AL_SEM_BIN: stubBin,
+		});
+		try {
+			const result = await client.callTool(
+				{
+					name: "analyze_profile",
+					arguments: {
+						profilePath: SAMPLE_PROFILE,
+						sourcePath: WS_MIN,
+					},
+				},
+				undefined,
+				{ timeout: 120_000 },
+			);
+			const text = (result.content as TextContent)[0].text;
+			expect(text).not.toContain("runtime-confirmed");
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
 });

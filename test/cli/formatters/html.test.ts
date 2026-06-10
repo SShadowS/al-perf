@@ -4,6 +4,7 @@ import { analyzeProfile } from "../../../src/core/analyzer.js";
 import type {
 	FusionViews,
 	HotspotAnnotation,
+	PrioritizedFinding,
 } from "../../../src/semantic/views.js";
 
 const FIXTURES = "test/fixtures";
@@ -389,5 +390,191 @@ describe("formatAnalysisHtml — fusion section", () => {
 		out = formatAnalysisHtml(result);
 		expect(out).toContain("no static findings");
 		expect(out).not.toContain("coverage incomplete");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runtime-correlated badge tests (P3.1, R3-6)
+// ---------------------------------------------------------------------------
+
+const BASE_FINDING_HTML: PrioritizedFinding = {
+	finding: {
+		id: "F1",
+		fingerprint: "fp1",
+		detector: "d1-db-op-in-loop",
+		title: "DB op in loop",
+		rootCause: "loop",
+		severity: "high",
+		confidence: { level: "likely" },
+		primaryLocation: {
+			file: "src/X.al",
+			line: 5,
+			column: 1,
+			objectId: "g/Codeunit/1",
+			objectName: "X",
+		},
+		affectedObjects: [],
+		affectedTables: [],
+	},
+	functionName: "ProcessLine",
+	objectType: "Codeunit",
+	objectId: 1,
+	appName: "App",
+	selfTimePercent: 42,
+	totalTimePercent: 50,
+	efficiencyScore: 0.84,
+	frameCount: 1,
+	status: "matched",
+	attributionConfidence: "exact",
+};
+
+describe("formatAnalysisHtml — runtime-correlated badge (P3.1)", () => {
+	test("badge present in prioritized findings row when corroboratingPatterns is set", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [
+				{ ...BASE_FINDING_HTML, corroboratingPatterns: ["repeated-siblings"] },
+			],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).toContain("runtime-correlated");
+		expect(out).toContain("repeated-siblings");
+	});
+
+	test("badge absent when corroboratingPatterns not set", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [BASE_FINDING_HTML],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).not.toContain("runtime-correlated");
+	});
+
+	test("NEVER uses the word 'runtime-confirmed' (R3-6 honesty guard)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [
+				{ ...BASE_FINDING_HTML, corroboratingPatterns: ["repeated-siblings"] },
+			],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).not.toContain("runtime-confirmed");
+	});
+
+	test("badge content is HTML-escaped", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		// Pattern ids from CORROBORATION_MAP are always safe short strings,
+		// but if a <xss> id ever appeared it must be escaped.
+		result.fusionViews = {
+			hotspotAnnotations: [],
+			prioritizedFindings: [
+				{ ...BASE_FINDING_HTML, corroboratingPatterns: ["<xss-test>"] },
+			],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).not.toContain("<xss-test>");
+		expect(out).toContain("&lt;xss-test&gt;");
+	});
+
+	test("badge present in in-place hotspot annotation when annotation has corroboratingPatterns", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const h = result.hotspots[0];
+		const annotationWithBadge: HotspotAnnotation = {
+			attrKey: `${h.functionName}_${h.objectType}_${h.objectId}`,
+			status: "matched",
+			attributionConfidence: "exact",
+			findings: [
+				{
+					id: "F1",
+					fingerprint: "fp1",
+					detector: "d1-db-op-in-loop",
+					title: "DB op in loop",
+					rootCause: "loop",
+					severity: "high",
+					confidence: { level: "likely" },
+					primaryLocation: {
+						file: "src/X.al",
+						line: 5,
+						column: 1,
+						objectId: "g/Codeunit/1",
+						objectName: "X",
+					},
+					affectedObjects: [],
+					affectedTables: [],
+				},
+			],
+			corroboratingPatterns: ["repeated-siblings"],
+		};
+		result.fusionViews = {
+			hotspotAnnotations: [annotationWithBadge],
+			prioritizedFindings: [],
+			unweightedFindings: [],
+			correlationSummary: {
+				matched: 1,
+				matchedClean: 0,
+				ambiguous: 0,
+				blindSpot: 0,
+				coldCount: 0,
+				unkeyableCount: 0,
+				orphanCount: 0,
+			},
+		};
+		const out = formatAnalysisHtml(result);
+		expect(out).toContain("runtime-correlated");
+		expect(out).toContain("repeated-siblings");
+		expect(out).not.toContain("runtime-confirmed");
 	});
 });
