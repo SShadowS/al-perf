@@ -138,6 +138,114 @@ rendered by the comparison formatters / MCP.
 6. **Parity/contract:** `alsem diff` is byte-parity-stable (1.0.0) — al-perf pins it. Confirm the diff
    schema/subject shapes consumed match exactly (a real-binary smoke).
 
+---
+
+## Revision 2 — folded from the three-reviewer adversarial pass (2× opus + gemini-3.1-pro)
+
+The design body above is SUPERSEDED where it conflicts here. The reviewers (one verifying against the
+real `.alcpuprofile` data) found that the CORE correlation model was unsound as written. Implement P4 to
+THIS revision.
+
+### PR2-1 — The self-time-attribution collapse: I/O deltas need TOTAL time, not self (MUST) [gemini, confirmed against real profiles]
+**Verified against `exampledata/`:** AL DB operations are SEPARATE SQL frames (`DELETE FROM dbo."…"`,
+`SELECT …` are their own `callFrame` nodes, children of the AL routine). So a routine that gains a
+DB-read/write/commit/http delta sees the cost land in a CHILD SQL/builtin frame → its **self-time stays
+flat, its TOTAL time grows.** But `compareProfiles` builds `regressions[]` on `deltaSelfTime` ONLY
+(`MethodDelta` has no `deltaTotalTime`) → **a routine that gained an I/O capability never enters the
+regression list.** Correlating I/O capability gains against the self-time regression list is therefore
+structurally broken — it silently misses exactly the regressions it targets.
+**FIX (matrix the correlation by basis):**
+- Add `deltaTotalTime` + `deltaTotalPercent` to `MethodDelta` and compute them in `compareProfiles`
+  (additive base-comparison enhancement; the comparison JSON gains the field always — update any
+  comparison snapshot; this is al-perf's own output, not a parity surface). Build the regression set so
+  a routine is a candidate if `deltaSelfTime > 0` OR `deltaTotalTime > 0`.
+- Each diff delta kind has a CORRELATION BASIS: **I/O capability gains (read/write/commit/http/file)
+  → correlate against `deltaTotalTime`** (the cost is in the child SQL/builtin frame); **CPU/structural
+  deltas (procedure-added/removed, procedure-signature-changed, dynamic-dispatch) → correlate against
+  `deltaSelfTime`** (caller's own cycles). A delta only annotates a regression when the regression
+  exists on the delta's basis.
+
+### PR2-2 — Perf-relevance classifier as a real mechanism (basis + strength) (MUST) [opus-2, gemini]
+The named #1 deliverable was only a parenthetical. Add a PURE `classifyDelta(category, kind) →
+{ basis: "self" | "total" | "none", strength: "strong" | "moderate" | "weak" }` in
+`regression-correlate.ts`, and a `perfRelevance`/`basis` field on `DiffDeltaSummary`. Per-kind (verified
+against the real attribution model):
+- `capability-gained-commit/write/read` → basis **total**, strength **strong** (DB cost in child frame).
+- `capability-gained-http/file` → basis **total**, strength **moderate** (blocking I/O in a child frame).
+- `procedure-signature-changed`, `capability-gained-dynamic-dispatch` → basis **self**, strength
+  **moderate** (new caller-side cycles / indirection).
+- `procedure-added` → basis **self**, strength **strong** for a NEW hot method (see PR2-5).
+- `capability-gained-telemetry/isolated-storage` → strength **weak**, basis self (cheap, rarely causal).
+- `capability-gained-event-publish` + event publisher/subscriber deltas → **cross-boundary** (PR2-7),
+  NOT a local self/total correlation.
+Status tiers: `correlated` (regressed on the delta's basis + a strong/moderate delta of that basis);
+`weakly-correlated` (regressed + only weak deltas — rendered muted, "runtime-neutral; unlikely to
+explain the regression"); `unexplained-static` (regressed, no matching-basis delta in this routine).
+A telemetry-only coincidence MUST NOT wear the same badge as a Commit gain.
+
+### PR2-3 — The join: exact `:`-form stableId + UNION on collision (MUST) [opus-1]
+Join on EXACT `:`-form `newStableId ?? normalizedStableId` against the after-WS inventory
+`stableRoutineId` SET for the MethodDelta's canonical join key — do NOT hash-strip via a single
+`makeMethodJoinKey` first-hit (the inventory has multiple routines per `(objType,num,name)` for
+overloads/field-triggers; first-hit can mis-attribute across siblings). On key collision (overloads,
+field triggers) attach the UNION of all matched deltas with an `ambiguous` marker (mirroring
+`correlate.ts`'s ambiguous union). **Field-trigger attribution is UNION-grade, NOT precise** — the
+`DiffSubject` carries no `enclosingMember`, so P3.2's RE-11 precise disambiguation CANNOT carry over;
+document this. `newStableId` is the JOIN key (matches the after profile/inventory); `oldOriginalStableId`
+is DISPLAY-ONLY (renamed-from provenance, points at the before id the after profile lacks). The
+after-inventory MUST be fingerprinted on the AFTER source so the new signature hash is present.
+
+### PR2-4 — Version-correspondence guard (MUST) [gemini]
+The diff is between two WORKSPACE versions; the profiles are two POINTS IN TIME. A mismatched pair
+(profile v1/v2 but diff v0/v3) injects confident misinformation. The `.alcpuprofile` carries
+`declaringApplication.appVersion`/`appId` per frame; the workspace `app.json` carries its version.
+`runEngineDiff`/`correlateRegressions` MUST cross-check the before-profile's app version against the
+before-workspace `app.json`, and after vs after. On mismatch: emit a `versionMismatch` warning in
+`correlationSummary` and render a prominent "⚠ profile version (X) ≠ source version (Y); correlations
+may be inaccurate" — do NOT fail hard (allow local uncommitted testing), NEVER correlate silently.
+
+### PR2-5 — Elevate new/removed-method ↔ procedure-added/-removed to the HEADLINE (MUST) [opus-2, gemini]
+Because the self-time basis cleanly aligns with structural deltas, the STRONGEST/cleanest signal is:
+a NEW hot method (`newMethods`, `MethodBreakdown[]`) matching a `procedure-added` diff delta, and a
+`removedMethod` matching `procedure-removed`. This is an existence-delta match on BOTH sides — higher
+confidence than capability correlation. Reframe P4's primary value to "method X regressed in self-time
+AND its signature changed / it is newly introduced" + "new hot method X is confirmed a new procedure."
+Correlate `newMethods`/`removedMethods` (note: `MethodBreakdown` not `MethodDelta` — handle the shape)
+to `procedure-added`/`-removed`; surface as a first-class `newMethodCorrelations`/`removedMethodCorrelations`
+(or annotate within the fusion). Capability-correlation (PR2-1/2) is the secondary signal.
+
+### PR2-6 — One-workspace fallback to single-snapshot fusion (SHOULD) [opus-1]
+`--before-source`/`--after-source` are not strictly both-or-nothing. When ONLY `--after-source` is
+present (common: you have the current checkout + a before/after profile), fall back to the existing
+single-snapshot P1–P3 fusion on the AFTER profile (annotate the after side's hotspots with static
+findings) — strictly more useful than plain compare; the machinery (`runEngine`/`correlate`/`views`)
+exists. Both sources → full regression fusion; after-only → single-snapshot fusion on after; neither →
+plain compare (byte-unchanged). Document each tier.
+
+### PR2-7 — Event-publish is CROSS-BOUNDARY (externalized cost), not local (MUST note) [gemini]
+A routine gaining `event-publish` externalizes its cost to SUBSCRIBERS (which regress but have NO local
+static delta → they land in `unexplained-static`; the true cause publishes elsewhere). Do NOT rate
+event-publish as a local self/total correlation. Mark it `cross-boundary`/`externalized-cost` and
+DOCUMENT that publisher→subscriber causal tracing is OUT OF SCOPE for P4 (a candidate P4.3 if
+`alsem diff`/events expose the linkage). This aligns with the open-world event reasoning limits.
+
+### PR2-8 — Determinism + additivity (MUST) [opus-1, opus-2]
+- Build each regression's `staticDeltas` by FILTERING the engine-ordered `diff.findings[]`, never by
+  Map iteration (no Map-order leak — the R2-1 lesson). Drive `annotatedRegressions` off the ordered
+  `regressions[]`. Total tiebreaks.
+- `ComparisonResult.regressionFusion` MUST be left `undefined` (NOT `{}`) when off, so the comparison
+  JSON is byte-unchanged. Gate the "fusion-off byte-unchanged" test against a PRE-P4 comparison golden;
+  include a real-binary smoke (`alsem diff` on two corpus fixtures → al-perf parses + correlates).
+  NOTE: the `deltaTotalTime` base addition (PR2-1) DOES change the base comparison output always — that
+  is a deliberate additive enhancement (update comparison snapshots), distinct from the opt-in
+  regressionFusion block.
+
+### PR2 — re-staging
+P4.0a: add `deltaTotalTime` to MethodDelta/compareProfiles (+ snapshot update). P4.0b: diff-runner +
+`classifyDelta` + `correlateRegressions` (the matrix join, version guard, new/removed correlation,
+union-on-collision). P4.1: comparison surface (CLI/MCP) with the tiered render + version warning.
+P4.2: one-workspace fallback + full gate + real-binary smoke.
+
 ## Non-goals (P4)
 Web comparison (doesn't exist today). Analyzer-finding-appeared deltas (`alsem diff` doesn't emit them).
 Changing al-perf's compareProfiles delta computation or `alsem diff` itself. The single-snapshot fusion
