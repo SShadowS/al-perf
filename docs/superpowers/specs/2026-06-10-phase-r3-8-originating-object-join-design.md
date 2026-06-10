@@ -107,8 +107,33 @@ The review must recommend A or B (and if A, scope the blast radius). The user va
 solution") — A is likely right IF the blast radius is contained, but the empirical collision frequency
 governs whether it's worth the base-output churn.
 
+## Revision 2 — empirical resolution (decides the Option A/B fork)
+**Measured against the real multi-app profile (`exampledata/`, 132 distinct objects across Base/Continia/
+Bishops Core/System/…): ZERO cross-app object-number collisions.** AppSource apps get unique object
+ranges, so the cross-app conflation (Option A's motivation) is theoretical (rare PTE 50000-99999 overlap)
+and ABSENT in real data. Decision: **Option B** — carry first-seen `appId` on `MethodBreakdown`, do NOT
+re-key the base aggregation (the broad-blast-radius Option A isn't justified for a non-occurring
+collision). Document the aggregation conflation as a known theoretical edge (0 occurrences observed).
+
+Consequence — R3-8's value narrows to two real, low-risk additions:
+1. **Provenance DISPLAY (the durable value):** carry `originatingObject` onto the fusion view and render
+   "(declared in <displayName>)" when a matched member-trigger's `originatingObject` names a different
+   object than the hotspot (an extension-declared member). Always-useful, purely additive.
+2. **Defensive app-scope gate:** in correlate, when BOTH the method's `appId` AND the candidate routine's
+   `originatingObject` are present, require their normalized app GUIDs to match (rejects a theoretical
+   cross-app false match; rarely fires given the empirical data, but sound). Graceful fallback to today's
+   app-agnostic match when either identity is absent (old engine / System frames).
+The residual two-extensions member-collision disambiguation (original risk #1) is DEFERRED/dropped — each
+extension owns its object number so the precise (objectType, objectNumber, member, trigger) key does not
+collide across extensions in practice; the app-scope gate covers any residual defensively.
+
+### R3-8 re-staging (lean)
+T1: carry `appId` on `MethodBreakdown` (aggregator) + the app-scope gate in correlate (graceful). T2:
+provenance display in the fusion views/renderers + verify (fusion-off byte-unchanged; graceful old-engine).
+
 ## Self-review notes
-- The HEADLINE value is app-scoping (risk #1/#3), not the rare two-extensions edge — the design must
-  confirm the real collision class before implementing.
+- Empirical data (0 cross-app collisions) decided Option B — no base aggregation re-key; the conflation is
+  a documented theoretical edge.
+- The durable value is provenance DISPLAY + a defensive app-scope gate; both additive + graceful (tighten
+  only when both app identities present).
 - Reuses P4.2's `normalizeAppGuid` + the appId-on-node threading; the canonical join helpers.
-- Additive + graceful; tightens only when both app identities are present.
