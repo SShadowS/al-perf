@@ -77,7 +77,7 @@ function makeRoutineJoinKey(r: RoutineIdentity): JoinKey {
 }
 
 /** al-perf's canonical method attribution key. */
-function methodAttrKey(m: MethodBreakdown): string {
+export function methodAttrKey(m: MethodBreakdown): string {
 	return `${m.functionName}_${m.objectType}_${m.objectId}`;
 }
 
