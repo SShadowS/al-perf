@@ -25,12 +25,12 @@ describe("computeCallCost", () => {
 	test("opus pricing", () => {
 		const cost = computeCallCost(
 			"deep",
-			"claude-opus-4-6",
+			"claude-opus-4-8",
 			1_000_000,
 			1_000_000,
 		);
-		// 1M input * $15/M + 1M output * $75/M = $90
-		expect(cost.cost).toBeCloseTo(90, 4);
+		// 1M input * $5/M + 1M output * $25/M = $30
+		expect(cost.cost).toBeCloseTo(30, 4);
 	});
 
 	test("unknown model uses default (sonnet) pricing", () => {

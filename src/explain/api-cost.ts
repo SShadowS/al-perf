@@ -16,7 +16,7 @@ export interface ApiCostSummary {
 // Pricing per million tokens — keep in sync with MODEL_IDS in explainer.ts
 const PRICING: Record<string, { input: number; output: number }> = {
 	"claude-sonnet-4-6": { input: 3, output: 15 },
-	"claude-opus-4-6": { input: 15, output: 75 },
+	"claude-opus-4-8": { input: 5, output: 25 },
 	// Fallback for unknown models (uses Sonnet pricing)
 	default: { input: 3, output: 15 },
 };
