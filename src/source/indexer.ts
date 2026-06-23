@@ -482,7 +482,12 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 	for (const child of procedureNode.namedChildren) {
 		if (child.type !== "var_section") continue;
 
-		for (const varDecl of child.namedChildren) {
+		// tree-sitter-al v3: variable declarations are nested under a `var_body`
+		// node (body field) rather than being direct children of var_section.
+		// Fall back to var_section itself for older grammars / empty sections.
+		const varBody = child.namedChildren.find((c) => c.type === "var_body");
+		const declContainer = varBody ?? child;
+		for (const varDecl of declContainer.namedChildren) {
 			if (varDecl.type !== "variable_declaration") continue;
 
 			const nameNode = varDecl.namedChildren.find(
@@ -645,6 +650,17 @@ function findTableRelationTarget(node: SyntaxNode): string | undefined {
 }
 
 /**
+ * tree-sitter-al v3 nests a declaration's inner `{ ... }` content under a
+ * `declaration_body` node (body field) instead of as direct children. This
+ * returns a declaration's direct named children plus its body's children, so
+ * property lookups (CalcFormula, Clustered, …) work across v2 and v3 grammars.
+ */
+function declarationChildren(node: SyntaxNode): SyntaxNode[] {
+	const body = node.namedChildren.find((c) => c.type === "declaration_body");
+	return body ? [...node.namedChildren, ...body.namedChildren] : node.namedChildren;
+}
+
+/**
  * Extract table field declarations from a table declaration node.
  */
 function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
@@ -659,7 +675,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 			let calcFormulaTable: string | undefined;
 			let tableRelationTarget: string | undefined;
 
-			for (const child of node.namedChildren) {
+			for (const child of declarationChildren(node)) {
 				if (child.type === "integer" && id === 0) {
 					id = parseInt(child.text, 10);
 				} else if (child.type === "quoted_identifier" && !name) {
@@ -775,7 +791,7 @@ function extractTableKeys(declNode: SyntaxNode): TableKeyInfo[] {
 			}
 
 			let clustered = false;
-			for (const child of node.namedChildren) {
+			for (const child of declarationChildren(node)) {
 				if (isPropertyNamed(child, "Clustered")) {
 					const value = child.childForFieldName("value")?.text;
 					clustered = value?.toLowerCase() === "true";
