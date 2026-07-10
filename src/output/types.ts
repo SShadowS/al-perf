@@ -99,6 +99,13 @@ export interface ComparisonResult {
 		beforeType: "sampling" | "instrumentation";
 		afterType: "sampling" | "instrumentation";
 		analyzedAt: string;
+		/**
+		 * Present when the two profiles' capture kinds or wire formats differ —
+		 * statistical sampling times and exact instrumentation times are never
+		 * comparable (umbrella spec §4 baseline keying). Absent when they match,
+		 * keeping matched-kind compare output byte-unchanged.
+		 */
+		comparabilityWarning?: string;
 	};
 	summary: {
 		oneLiner: string;

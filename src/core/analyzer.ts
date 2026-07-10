@@ -384,6 +384,40 @@ export async function analyzeProfile(
 }
 
 /**
+ * Comparability guard (umbrella spec §4): statistical sampling self-time and
+ * exact instrumentation ticks are never comparable, and profiles from
+ * different wire formats measure different things. Returns a warning string
+ * when the two profiles' capture kinds or source formats differ; undefined
+ * when they match (the field stays absent → compare output byte-unchanged).
+ *
+ * Exported for unit testing and library use.
+ */
+export function comparabilityWarning(
+	before: {
+		captureKind: "sampling" | "instrumentation";
+		sourceFormat?: "alcpuprofile" | "ir-json";
+	},
+	after: {
+		captureKind: "sampling" | "instrumentation";
+		sourceFormat?: "alcpuprofile" | "ir-json";
+	},
+): string | undefined {
+	const beforeFormat = before.sourceFormat ?? "alcpuprofile";
+	const afterFormat = after.sourceFormat ?? "alcpuprofile";
+	const parts: string[] = [];
+	if (before.captureKind !== after.captureKind) {
+		parts.push(
+			`capture kinds differ (${before.captureKind} vs ${after.captureKind}) — statistical sampling times and exact instrumentation times are not comparable`,
+		);
+	}
+	if (beforeFormat !== afterFormat) {
+		parts.push(`wire formats differ (${beforeFormat} vs ${afterFormat})`);
+	}
+	if (parts.length === 0) return undefined;
+	return `before/after profiles are not directly comparable: ${parts.join("; ")}. Deltas may be misleading.`;
+}
+
+/**
  * Compare two profiles and return a ComparisonResult with regressions,
  * improvements, and new/removed methods.
  */
@@ -588,6 +622,17 @@ export async function compareProfiles(
 	const sign = deltaTime >= 0 ? "+" : "";
 	const oneLiner = `${sign}${formatTime(deltaTime)} (${sign}${deltaPercent.toFixed(1)}%), ${formatTime(beforeTotalTime)} -> ${formatTime(afterTotalTime)}`;
 
+	const comparability = comparabilityWarning(
+		{
+			captureKind: beforeProcessed.type,
+			sourceFormat: beforeProcessed.sourceFormat,
+		},
+		{
+			captureKind: afterProcessed.type,
+			sourceFormat: afterProcessed.sourceFormat,
+		},
+	);
+
 	const baseResult: ComparisonResult = {
 		meta: {
 			beforePath,
@@ -595,6 +640,9 @@ export async function compareProfiles(
 			beforeType: beforeProcessed.type,
 			afterType: afterProcessed.type,
 			analyzedAt: new Date().toISOString(),
+			...(comparability !== undefined
+				? { comparabilityWarning: comparability }
+				: {}),
 		},
 		summary: {
 			oneLiner,

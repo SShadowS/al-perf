@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { analyzeProfile, compareProfiles } from "../../src/core/analyzer.js";
+import {
+	analyzeProfile,
+	comparabilityWarning,
+	compareProfiles,
+} from "../../src/core/analyzer.js";
 import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
 
 const FIXTURES = "test/fixtures";
@@ -244,5 +248,40 @@ describe("analyzeProfile fingerprint wiring", () => {
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
 		expect(result.meta.fingerprintAlgoVersion).toBe(FINGERPRINT_ALGO_VERSION);
+	});
+});
+
+describe("compareProfiles comparability guard", () => {
+	test("flags sampling-vs-instrumentation comparisons", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/instrumentation-minimal.alcpuprofile`,
+		);
+		expect(result.meta.comparabilityWarning).toContain("capture kinds differ");
+	});
+
+	test("same capture kind and wire format → no warning field (byte-unchanged)", async () => {
+		const result = await compareProfiles(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.meta.comparabilityWarning).toBeUndefined();
+	});
+
+	test("comparabilityWarning flags wire-format differences", () => {
+		const warning = comparabilityWarning(
+			{ captureKind: "instrumentation", sourceFormat: "ir-json" },
+			{ captureKind: "instrumentation", sourceFormat: "alcpuprofile" },
+		);
+		expect(warning).toContain("wire formats differ");
+	});
+
+	test("comparabilityWarning treats an absent sourceFormat as alcpuprofile", () => {
+		expect(
+			comparabilityWarning(
+				{ captureKind: "sampling" },
+				{ captureKind: "sampling", sourceFormat: "alcpuprofile" },
+			),
+		).toBeUndefined();
 	});
 });
