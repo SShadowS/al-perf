@@ -17,11 +17,13 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-	computePatternFingerprint,
 	FINGERPRINT_ALGO_VERSION,
 	type FingerprintRoutineIdentity,
+	computePatternFingerprint,
+	computeTelemetryFingerprint,
 	formatFingerprint,
 	normalizeSalientLocation,
+	wrapAlsemFingerprint,
 } from "../../src/lifecycle/fingerprint.js";
 
 // ---------------------------------------------------------------------------
@@ -287,5 +289,126 @@ describe("formatFingerprint", () => {
 			APP_ID,
 		);
 		expect(formatFingerprint(fp)).toBe(`pattern:${fp.value}`);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// wrapAlsemFingerprint
+// ---------------------------------------------------------------------------
+
+describe("wrapAlsemFingerprint", () => {
+	it("passes the native alsem fingerprint through verbatim (never re-hashed)", () => {
+		const fp = wrapAlsemFingerprint("alsem-native-fp-xyz");
+		expect(fp.value).toBe("alsem-native-fp-xyz");
+	});
+
+	it("stamps namespace 'alsem' and the current algo version", () => {
+		const fp = wrapAlsemFingerprint("alsem-native-fp-xyz");
+		expect(fp.namespace).toBe("alsem");
+		expect(fp.algoVersion).toBe(FINGERPRINT_ALGO_VERSION);
+	});
+
+	it("string form prefixes the namespace exactly once", () => {
+		const fp = wrapAlsemFingerprint("native:with:colons");
+		expect(formatFingerprint(fp)).toBe("alsem:native:with:colons");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// computeTelemetryFingerprint
+// ---------------------------------------------------------------------------
+
+describe("computeTelemetryFingerprint", () => {
+	const INPUT = {
+		signalId: "RT0018",
+		appId: "437dbf0e-84ff-417a-965d-ed2bb9650972",
+		objectType: "Codeunit",
+		objectNumber: 50100,
+		routineName: "ProcessRecords",
+	};
+
+	it("is deterministic and emits a 16-char lowercase hex value", () => {
+		const a = computeTelemetryFingerprint(INPUT);
+		const b = computeTelemetryFingerprint(INPUT);
+		expect(a).toEqual(b);
+		expect(a.value).toMatch(/^[0-9a-f]{16}$/);
+	});
+
+	it("stamps namespace 'telemetry' and the current algo version", () => {
+		const fp = computeTelemetryFingerprint(INPUT);
+		expect(fp.namespace).toBe("telemetry");
+		expect(fp.algoVersion).toBe(FINGERPRINT_ALGO_VERSION);
+	});
+
+	it("different signalId on the same routine → different identity (RT0018 ≠ RT0005)", () => {
+		const rt18 = computeTelemetryFingerprint(INPUT);
+		const rt05 = computeTelemetryFingerprint({ ...INPUT, signalId: "RT0005" });
+		expect(rt18.value).not.toBe(rt05.value);
+	});
+
+	it("normalizes like the pattern fallback key: casing, appId dashes, trigger prefix", () => {
+		const canonical = computeTelemetryFingerprint(INPUT);
+		const messy = computeTelemetryFingerprint({
+			signalId: "RT0018",
+			appId: "437DBF0E84FF417A965DED2BB9650972",
+			objectType: "CodeUnit",
+			objectNumber: 50100,
+			routineName: "PROCESSRECORDS",
+		});
+		expect(messy.value).toBe(canonical.value);
+
+		// Field-trigger names get the "<member> - " prefix stripped, like the join key.
+		const bare = computeTelemetryFingerprint({
+			...INPUT,
+			routineName: "OnValidate",
+		});
+		const compound = computeTelemetryFingerprint({
+			...INPUT,
+			routineName: "Sell-to Customer No. - OnValidate",
+		});
+		expect(compound.value).toBe(bare.value);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Namespace non-collision
+// ---------------------------------------------------------------------------
+
+describe("namespace non-collision", () => {
+	const FALLBACK: FingerprintRoutineIdentity = {
+		kind: "fallback",
+		appId: "437dbf0e84ff417a965ded2bb9650972",
+		canonicalObjectType: "Codeunit",
+		objectNumber: 50100,
+		normalizedRoutineName: "processrecords",
+	};
+
+	it("pattern and telemetry over the same routine never share an identity", () => {
+		const pattern = computePatternFingerprint(
+			{ patternId: "high-hit-count" },
+			FALLBACK,
+			"437dbf0e-84ff-417a-965d-ed2bb9650972",
+		);
+		const telemetry = computeTelemetryFingerprint({
+			signalId: "high-hit-count", // adversarial: same discriminator string
+			appId: "437dbf0e-84ff-417a-965d-ed2bb9650972",
+			objectType: "Codeunit",
+			objectNumber: 50100,
+			routineName: "ProcessRecords",
+		});
+		// The domain token makes even the raw hashes differ …
+		expect(pattern.value).not.toBe(telemetry.value);
+		// … and the namespace prefix guarantees distinct string forms regardless.
+		expect(formatFingerprint(pattern)).not.toBe(formatFingerprint(telemetry));
+	});
+
+	it("an alsem native value equal to a pattern hash still cannot collide", () => {
+		const pattern = computePatternFingerprint(
+			{ patternId: "high-hit-count" },
+			FALLBACK,
+			"437dbf0e-84ff-417a-965d-ed2bb9650972",
+		);
+		const alsem = wrapAlsemFingerprint(pattern.value);
+		expect(formatFingerprint(alsem)).not.toBe(formatFingerprint(pattern));
 	});
 });

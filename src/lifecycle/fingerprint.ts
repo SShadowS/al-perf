@@ -42,7 +42,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { normalizeAppGuid } from "../semantic/identity.js";
+import {
+	canonicalObjectType,
+	normalizeAppGuid,
+	normalizeTriggerName,
+} from "../semantic/identity.js";
 
 // ---------------------------------------------------------------------------
 // Version constant (the contract pin)
@@ -256,6 +260,68 @@ export function computePatternFingerprint(
 	return {
 		value: sha256Hex16(tokens),
 		namespace: "pattern",
+		algoVersion: FINGERPRINT_ALGO_VERSION,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// wrapAlsemFingerprint
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap an alsem-native fingerprint (FindingSummary.fingerprint from
+ * `src/semantic/contracts.ts`) under the `alsem:` namespace. PASSTHROUGH —
+ * the native value is the identity; it is never re-hashed, so alsem's own
+ * identity stability guarantees carry over unchanged.
+ */
+export function wrapAlsemFingerprint(native: string): FindingFingerprint {
+	return {
+		value: native,
+		namespace: "alsem",
+		algoVersion: FINGERPRINT_ALGO_VERSION,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// computeTelemetryFingerprint
+// ---------------------------------------------------------------------------
+
+/**
+ * The coarse routine-level key for telemetry findings (no call trees in
+ * telemetry — object/method granularity is all there is).
+ */
+export interface TelemetryFingerprintInput {
+	/** The signal discriminator, e.g. "RT0018" (long-running AL) or "RT0005" (long-running SQL). */
+	signalId: string;
+	appId: string;
+	/** Any casing/spelling — canonicalized internally. */
+	objectType: string;
+	objectNumber: number;
+	/** Raw routine name — trigger-normalized and lowercased internally. */
+	routineName: string;
+}
+
+/**
+ * Mint a `telemetry:` fingerprint over the coarse key
+ * (signalId, appId, objectType, objectNumber, routineName), with the same
+ * normalization as the pattern fallback key so a later deep-capture pattern
+ * finding on the same routine correlates cleanly at the routine level.
+ */
+export function computeTelemetryFingerprint(
+	input: TelemetryFingerprintInput,
+): FindingFingerprint {
+	const tokens = [
+		`v${FINGERPRINT_ALGO_VERSION}`,
+		"telemetry",
+		input.signalId,
+		normalizeAppGuid(input.appId),
+		canonicalObjectType(input.objectType),
+		String(input.objectNumber),
+		normalizeTriggerName(input.routineName).toLowerCase(),
+	];
+	return {
+		value: sha256Hex16(tokens),
+		namespace: "telemetry",
 		algoVersion: FINGERPRINT_ALGO_VERSION,
 	};
 }
