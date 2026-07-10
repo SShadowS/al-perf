@@ -1229,3 +1229,37 @@ describe("fusionAnnotationNote rendering — R3-8 (per-surface spot checks)", ()
 		expect(formatOriginatingObjectNote(ann[0] ?? {})).toBe("");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// prioritizeFindings lifecycle fingerprints
+// ---------------------------------------------------------------------------
+
+describe("prioritizeFindings lifecycle fingerprints", () => {
+	it("weighted rows carry the alsem:-wrapped native fingerprint", () => {
+		const methods = [makeMethod("HotLeaf", "Codeunit", 50001, 80, 80)];
+		const engine = makeEngine(
+			[makeRoutine("HotLeaf", 50001, "Codeunit", "r1")],
+			[makeFinding("FL", "fpL", "d1", "HotLeaf", "Codeunit", 50001)],
+		);
+		const fused = correlate(methods, engine);
+		const { weighted } = prioritizeFindings(fused, methods);
+		expect(weighted).toHaveLength(1);
+		expect(weighted[0].fingerprint).toBe("alsem:fpL");
+	});
+
+	it("unweighted (cold) rows carry the alsem:-wrapped native fingerprint too", () => {
+		const methods = [makeMethod("HotLeaf", "Codeunit", 50001, 80, 80)];
+		const engine = makeEngine(
+			[
+				makeRoutine("HotLeaf", 50001, "Codeunit", "r1"),
+				makeRoutine("ColdProc", 50002, "Codeunit", "r2"),
+			],
+			[makeFinding("FC", "fpC", "d1", "ColdProc", "Codeunit", 50002)],
+		);
+		const fused = correlate(methods, engine);
+		const { unweighted } = prioritizeFindings(fused, methods);
+		const cold = unweighted.find((r) => r.finding.id === "FC");
+		expect(cold?.bucket).toBe("cold");
+		expect(cold?.fingerprint).toBe("alsem:fpC");
+	});
+});

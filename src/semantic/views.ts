@@ -11,6 +11,10 @@
  *            R2-12 (cold→unweighted split), R2-14 (determinism off ordered methods[]).
  */
 
+import {
+	formatFingerprint,
+	wrapAlsemFingerprint,
+} from "../lifecycle/fingerprint.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type {
 	AttributionConfidence,
@@ -129,6 +133,14 @@ export interface CausalStep {
  */
 export interface PrioritizedFinding {
 	finding: FindingSummary;
+	/**
+	 * Canonical lifecycle identity in string form (`alsem:<native>`): the
+	 * alsem-native fingerprint wrapped under the `alsem:` namespace
+	 * (wrapAlsemFingerprint — passthrough, never re-hashed). Present on
+	 * weighted AND unweighted rows so the lifecycle engine (phase 3) can track
+	 * cold/orphan/unkeyable findings too.
+	 */
+	fingerprint?: string;
 	/** Representative method (highest self-time frame; tiebroken by functionName). */
 	functionName: string;
 	objectType: string;
@@ -564,6 +576,9 @@ export function prioritizeFindings(
 
 		return {
 			finding: a.finding,
+			fingerprint: formatFingerprint(
+				wrapAlsemFingerprint(a.finding.fingerprint),
+			),
 			functionName: a.rep.functionName,
 			objectType: a.rep.objectType,
 			objectId: a.rep.objectId,
@@ -611,6 +626,7 @@ export function prioritizeFindings(
 		bucket: "cold" | "orphan" | "unkeyable",
 	): PrioritizedFinding => ({
 		finding,
+		fingerprint: formatFingerprint(wrapAlsemFingerprint(finding.fingerprint)),
 		functionName: finding.primaryLocation.routineName ?? "",
 		objectType: "",
 		objectId: 0,
