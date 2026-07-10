@@ -22,6 +22,7 @@ import {
 } from "../storage.ts";
 
 const KEY_VERSION_POC = "1";
+const DEFAULT_MAX_PROFILE_BYTES = 134_217_728; // 128 MiB decompressed
 
 interface TenantRecord {
 	publicKeyXml?: string;
@@ -118,7 +119,31 @@ export async function handleIngest(
 	}
 
 	const manifestBytes = Buffer.from(await manifestPart.arrayBuffer());
-	const profileBytes = Buffer.from(await profilePart.arrayBuffer());
+	let profileBytes = Buffer.from(await profilePart.arrayBuffer());
+
+	// gzip transfer encoding, detected by content (magic bytes 0x1f 0x8b) —
+	// multipart part headers are not visible through req.formData(), so the
+	// contract is: gzip the profile bytes themselves before appending the part.
+	if (
+		profileBytes.length >= 2 &&
+		profileBytes[0] === 0x1f &&
+		profileBytes[1] === 0x8b
+	) {
+		try {
+			profileBytes = Buffer.from(Bun.gunzipSync(profileBytes));
+		} catch {
+			return jsonResponse(400, { error: "invalid_gzip" });
+		}
+	}
+
+	// Size budget on DECOMPRESSED bytes (gzip-bomb guard). Read per request so
+	// tests can override; the invocation-count budget lives in the parser.
+	const maxProfileBytes = Number(
+		process.env.AL_PERF_MAX_PROFILE_BYTES ?? DEFAULT_MAX_PROFILE_BYTES,
+	);
+	if (profileBytes.length > maxProfileBytes) {
+		return jsonResponse(413, { error: "payload_too_large" });
+	}
 
 	let manifest: Record<string, unknown>;
 	try {
@@ -128,6 +153,15 @@ export async function handleIngest(
 		>;
 	} catch {
 		return jsonResponse(400, { error: "manifest_not_json" });
+	}
+
+	const captureKind = manifest.captureKind;
+	if (
+		captureKind !== undefined &&
+		captureKind !== "sampling" &&
+		captureKind !== "instrumentation"
+	) {
+		return jsonResponse(400, { error: "invalid_capture_kind" });
 	}
 
 	mkdirSync(profileDir, { recursive: true });
@@ -204,6 +238,8 @@ function extractMetrics(
 		activityId: manifest.activityId,
 		scheduleId: manifest.scheduleId,
 		activityType: manifest.activityType,
+		captureKind: manifest.captureKind ?? meta.captureKind ?? null,
+		sourceFormat: meta.sourceFormat ?? null,
 		startTime: manifest.startTime,
 		activityDuration: manifest.activityDuration,
 		alExecutionDuration: manifest.alExecutionDuration,
