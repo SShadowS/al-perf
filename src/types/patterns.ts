@@ -13,6 +13,15 @@ export interface DetectedPattern {
 	estimatedSavings?: number;
 	/** Human-readable explanation of the savings estimate */
 	savingsExplanation?: string;
+	/**
+	 * Canonical finding identity in string form (`pattern:<16-hex>`), minted by
+	 * `fingerprintPatterns` (src/lifecycle/wire.ts) per the anchor policy
+	 * (anchor = involvedMethods[0]). Fallback-key identity unless al-sem fusion
+	 * upgraded the anchor to a stable routine identity (fuseProfile re-mints).
+	 * Absent only on pattern objects constructed outside analyzeProfile
+	 * (e.g. detector unit tests).
+	 */
+	fingerprint?: string;
 }
 
 export type PatternDetector = (
