@@ -75,6 +75,34 @@ describe("buildDigest", () => {
 		store.close();
 	});
 
+	it("locks the DigestFindingEntry contract shape (all 11 fields)", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", {
+			fingerprint: "pattern:fpcontract0001",
+			title: "Contract check",
+			severity: "info",
+			appName: "Contract App",
+			patternId: "modify-in-loop",
+			firstSeenAt: "2026-07-02T00:00:00Z",
+			lastSeenAt: "2026-07-03T00:00:00Z",
+		});
+		const digest = buildDigest(store, { tenant: "t1" });
+		expect(digest.newFindings[0]).toEqual({
+			fingerprint: "pattern:fpcontract0001",
+			title: "Contract check",
+			severity: "info",
+			state: "new",
+			needsTriage: false,
+			appName: "Contract App",
+			patternId: "modify-in-loop",
+			firstSeenAt: "2026-07-02T00:00:00Z",
+			lastSeenAt: "2026-07-03T00:00:00Z",
+			occurrenceCount: 0,
+			lastEvent: null,
+		});
+		store.close();
+	});
+
 	it("since filters sections by their relevant timestamp", () => {
 		const store = new LifecycleStore(":memory:");
 		seed(store, "new", { firstSeenAt: "2026-06-01T00:00:00Z" }); // old — excluded
@@ -109,6 +137,26 @@ describe("renderDigestMarkdown", () => {
 		expect(md).toContain("CalcFields storm");
 		expect(md).toContain("critical");
 		expect(md).toContain("pattern:fp"); // fingerprint shown for gh-recipe dedup
+		store.close();
+	});
+
+	it("escapes @-mentions and markdown-breaking characters in finding text", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "regressed", {
+			title: "](x)|@user",
+			appName: "@other|app",
+			patternId: "pattern]with|pipe@at",
+		});
+		const md = renderDigestMarkdown(buildDigest(store, { tenant: "t1" }));
+		// The raw, unescaped injection must not appear anywhere in the output —
+		// this markdown is the documented gh-recipe input (docs/lifecycle-gh-recipe.md)
+		// and an unescaped @mention would ping a real GitHub user.
+		expect(md).not.toContain("](x)|@user");
+		expect(md).not.toContain("@other|app");
+		expect(md).not.toContain("pattern]with|pipe@at");
+		expect(md).toContain("\\](x)\\|\\@user");
+		expect(md).toContain("\\@other\\|app");
+		expect(md).toContain("pattern\\]with\\|pipe\\@at");
 		store.close();
 	});
 });

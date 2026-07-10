@@ -121,11 +121,12 @@ export function buildDigest(
 	};
 }
 
-/** Neutralizes markdown link/emphasis/table syntax in attacker-influenceable
- * finding text (routine names, titles) so it can't break out of list/table
- * formatting or inject links when rendered. */
+/** Neutralizes markdown link/emphasis/table syntax and @-mentions in
+ * attacker-influenceable finding text (routine names, titles) so it can't
+ * break out of list/table formatting, inject links, or ping a GitHub user
+ * when rendered through the gh-recipe (docs/lifecycle-gh-recipe.md). */
 function escapeMarkdown(text: string): string {
-	return text.replace(/[\\`*_[\]<>|]/g, (ch) => `\\${ch}`);
+	return text.replace(/[\\`*_[\]<>|@]/g, (ch) => `\\${ch}`);
 }
 
 function renderSection(title: string, entries: DigestFindingEntry[]): string {
