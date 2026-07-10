@@ -86,7 +86,7 @@ AI findings are stored in `result.aiFindings[]` (typed `AIFinding[]`) and `resul
 
 ### Data Flow
 
-1. **Parse** `.alcpuprofile` → `RawProfile`
+1. **Parse** `.alcpuprofile` → `RawProfile`, or `ir-json` (bc-mdc-converter's lossless per-invocation instrumentation IR) → synthesized per-invocation nodes. Format is sniffed from content, not extension — `analyzeProfile(path)` accepts both.
 2. **Process**: build call tree, compute times, aggregate → `ProcessedProfile`
 3. **Detect patterns** (algorithmic, no AI) → `DetectedPattern[]`
 4. **Source correlation** (optional, if `--source` provided): index AL files with tree-sitter-al, map hotspots to source, run anti-pattern queries → `SourceCorrelation[]`
@@ -103,6 +103,28 @@ Three categories (18 detectors):
 - **Profile-only** (7): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, recursive-call, event-chain
 - **Source-correlated** (5): calcfields-in-loop (with CalcFormula severity graduation), modify-in-loop, record-op-in-loop, missing-setloadfields, incomplete-setloadfields
 - **Source-only** (6): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, dangerous-call-in-loop, unindexed-filter
+
+### ir-json Ingestion
+
+`ir-json` is the lossless instrumentation interchange format produced by
+`bc-mdc-converter --format ir-json` (spec: that repo's
+`docs/superpowers/specs/2026-07-06-ir-json-format-design.md`). Key facts:
+
+- Pinned to integer `schemaVersion` 1 via `IRJSON_SCHEMA_VERSION` in
+  `src/types/irjson.ts` (contract test: `test/core/irjson-contract.test.ts`).
+  Unknown keys are ignored (additive changes don't bump the version).
+- `src/core/irjson-parser.ts` synthesizes one node per invocation
+  (hitCount = 1 → aggregated hitCounts are EXACT invocation counts), builds
+  the temporal call tree from `temporalParentIx`, converts 100 ns ticks to µs,
+  and shifts 0-based wire lines to 1-based display lines — all exactly once.
+- `ProcessedProfile.sourceFormat` is `"ir-json"` for these profiles;
+  `meta.captureKind`, `meta.sourceFormat`, and `meta.incompleteInvocations`
+  surface capture facts. Incomplete captures are analyzed and flagged.
+- `repeated-siblings` and `high-hit-count` use exact counts (not statistical
+  inference) on ir-json profiles.
+- `/api/ingest` accepts gzipped profile parts (magic-byte detection);
+  decompressed size budget `AL_PERF_MAX_PROFILE_BYTES` (default 128 MiB),
+  invocation budget `config.irJson.maxInvocations` (500,000).
 
 ## Testing Conventions
 

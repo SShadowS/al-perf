@@ -29,3 +29,12 @@ describe("ir-json schemaVersion contract pin", () => {
 		expect(doc.capture.exceptionCount).toBe(1);
 	});
 });
+
+describe("library API surface", () => {
+	test("ir-json parser and pin are exported from the package root", async () => {
+		const api = await import("../../src/index.js");
+		expect(typeof api.parseIrJson).toBe("function");
+		expect(typeof api.isIrJsonDocument).toBe("function");
+		expect(api.IRJSON_SCHEMA_VERSION).toBe(1);
+	});
+});

@@ -12,6 +12,7 @@ export { analyzeProfile, compareProfiles } from "./core/analyzer.js";
 export type { BatchOptions } from "./core/batch-analyzer.js";
 export { aggregateResults, analyzeBatch } from "./core/batch-analyzer.js";
 export { drilldownMethod } from "./core/drilldown.js";
+export { isIrJsonDocument, parseIrJson } from "./core/irjson-parser.js";
 export {
 	detectProfileType,
 	parseProfile,
@@ -123,6 +124,13 @@ export type {
 	SemanticAttribution,
 } from "./types/fused.js";
 export type { HistoryEntry, HistoryQuery } from "./types/history.js";
+export type {
+	IrJsonApp,
+	IrJsonCapture,
+	IrJsonDocument,
+	IrJsonInvocation,
+} from "./types/irjson.js";
+export { IRJSON_SCHEMA_VERSION } from "./types/irjson.js";
 export type { DetectedPattern, PatternSeverity } from "./types/patterns.js";
 export type { ProcessedNode, ProcessedProfile } from "./types/processed.js";
 // Types
