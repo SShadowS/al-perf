@@ -11,6 +11,7 @@ import {
 	DEFAULT_LIFECYCLE_CONFIG,
 	LIFECYCLE_SCHEMA_VERSION,
 } from "../../src/lifecycle/config.js";
+import type { NewFinding } from "../../src/lifecycle/store.js";
 import { LifecycleStore } from "../../src/lifecycle/store.js";
 
 describe("DEFAULT_LIFECYCLE_CONFIG", () => {
@@ -84,6 +85,163 @@ describe("LifecycleStore schema", () => {
 		insert("closed");
 		insert("open");
 		expect(() => insert("new")).toThrow(); // second active row violates partial unique index
+		store.close();
+	});
+});
+
+function baseFinding(overrides?: Partial<NewFinding>): NewFinding {
+	return {
+		tenant: "t1",
+		fingerprint: "pattern:deadbeef00000000",
+		algoVersion: 1,
+		state: "new",
+		source: "pattern",
+		patternId: "calcfields-in-loop",
+		title: "CalcFields inside loop",
+		severity: "warning",
+		appId: "abc123",
+		appName: "My App",
+		routineKey: "abc123|codeunit|50100|postorder",
+		firstSeenAt: "2026-07-01T10:00:00Z",
+		lastSeenAt: "2026-07-01T10:00:00Z",
+		lastEventAt: "2026-07-01T10:00:00Z",
+		observedKinds: ["sampling"],
+		observedStreams: ["nightly"],
+		...overrides,
+	};
+}
+
+describe("LifecycleStore CRUD", () => {
+	it("recordRun is idempotent per (tenant, profileId)", () => {
+		const store = new LifecycleStore(":memory:");
+		const run = {
+			tenant: "t1",
+			stream: "nightly",
+			profileId: "p-001",
+			captureKind: "sampling" as const,
+			captureTime: "2026-07-01T10:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: ["abc123"], names: ["my app"] },
+		};
+		const first = store.recordRun(run);
+		expect(first.duplicate).toBe(false);
+		const second = store.recordRun(run);
+		expect(second.duplicate).toBe(true);
+		expect(second.runId).toBe(first.runId);
+		const stored = store.getRun("t1", "p-001");
+		expect(stored?.exercisedApps.ids).toEqual(["abc123"]);
+		store.close();
+	});
+
+	it("insertFinding + getActiveFinding roundtrip; closed rows are not active", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(baseFinding());
+		const row = store.getActiveFinding("t1", "pattern:deadbeef00000000");
+		expect(row?.id).toBe(id);
+		expect(row?.state).toBe("new");
+		expect(row?.observedKinds).toEqual(["sampling"]);
+		store.updateFindingState(id, {
+			state: "closed",
+			closedAt: "2026-07-02T00:00:00Z",
+		});
+		expect(store.getActiveFinding("t1", "pattern:deadbeef00000000")).toBeNull();
+		expect(
+			store.getLatestClosedFinding("t1", "pattern:deadbeef00000000")?.id,
+		).toBe(id);
+		store.close();
+	});
+
+	it("recordOccurrence is idempotent per (findingId, runId)", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		const { runId } = store.recordRun({
+			tenant: "t1",
+			stream: "nightly",
+			profileId: "p-001",
+			captureKind: "sampling",
+			captureTime: "2026-07-01T10:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		const occ = {
+			findingId,
+			runId,
+			captureTime: "2026-07-01T10:00:00Z",
+			severity: "warning",
+			impact: 5000,
+		};
+		expect(store.recordOccurrence(occ)).toBe(true);
+		expect(store.recordOccurrence(occ)).toBe(false);
+		expect(store.countOccurrences(findingId)).toBe(1);
+		store.close();
+	});
+
+	it("markSeen merges observed kinds/streams, resets absence, clears resolved_at", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(baseFinding());
+		store.markAbsent(id, {
+			state: "resolved",
+			absenceCount: 3,
+			captureTime: "2026-07-03T10:00:00Z",
+		});
+		expect(store.getFinding(id)?.resolvedAt).toBe("2026-07-03T10:00:00Z");
+		store.markSeen(id, {
+			state: "regressed",
+			severity: "critical",
+			captureTime: "2026-07-04T10:00:00Z",
+			captureKind: "instrumentation",
+			stream: "adhoc",
+		});
+		const row = store.getFinding(id);
+		expect(row?.state).toBe("regressed");
+		expect(row?.severity).toBe("critical");
+		expect(row?.absenceCount).toBe(0);
+		expect(row?.resolvedAt).toBeNull();
+		expect(row?.observedKinds).toEqual(["sampling", "instrumentation"]);
+		expect(row?.observedStreams).toEqual(["nightly", "adhoc"]);
+		expect(row?.lastEventAt).toBe("2026-07-04T10:00:00Z");
+		store.close();
+	});
+
+	it("listAbsenceCandidates returns only active-state findings for the tenant", () => {
+		const store = new LifecycleStore(":memory:");
+		store.insertFinding(
+			baseFinding({ fingerprint: "pattern:aaa", state: "open" }),
+		);
+		store.insertFinding(
+			baseFinding({ fingerprint: "pattern:bbb", state: "resolved" }),
+		);
+		store.insertFinding(
+			baseFinding({ fingerprint: "pattern:ccc", tenant: "t2", state: "open" }),
+		);
+		const rows = store.listAbsenceCandidates("t1");
+		expect(rows.map((r) => r.fingerprint)).toEqual(["pattern:aaa"]);
+		store.close();
+	});
+
+	it("logEvent/listEvents roundtrip in insertion order", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(baseFinding());
+		store.logEvent({
+			findingId: id,
+			event: "first-seen",
+			fromState: null,
+			toState: "new",
+			at: "2026-07-01T10:00:00Z",
+		});
+		store.logEvent({
+			findingId: id,
+			event: "seen",
+			fromState: "new",
+			toState: "open",
+			at: "2026-07-02T10:00:00Z",
+			detail: JSON.stringify({ metricClass: "normal" }),
+		});
+		const events = store.listEvents(id);
+		expect(events.map((e) => e.event)).toEqual(["first-seen", "seen"]);
+		expect(events[1].fromState).toBe("new");
 		store.close();
 	});
 });

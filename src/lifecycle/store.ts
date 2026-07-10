@@ -16,6 +16,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import { LIFECYCLE_SCHEMA_VERSION } from "./config.js";
+import type { FindingState } from "./states.js";
 
 export { LIFECYCLE_SCHEMA_VERSION };
 
@@ -146,6 +147,76 @@ const MIGRATIONS: string[][] = [
 	],
 ];
 
+export interface ExercisedApps {
+	ids: string[];
+	names: string[];
+}
+
+export interface RunInput {
+	tenant: string;
+	stream: string;
+	profileId: string;
+	captureKind: "sampling" | "instrumentation";
+	captureTime: string;
+	versionStamp: string;
+	incomplete: boolean;
+	exercisedApps: ExercisedApps;
+}
+
+export interface StoredRun extends RunInput {
+	id: number;
+	createdAt: string;
+}
+
+export type FindingSeverity = "critical" | "warning" | "info";
+export type FindingSource = "pattern" | "alsem" | "telemetry";
+
+export interface FindingRow {
+	id: number;
+	tenant: string;
+	fingerprint: string;
+	algoVersion: number;
+	state: FindingState;
+	needsTriage: boolean;
+	source: FindingSource;
+	patternId: string;
+	title: string;
+	severity: FindingSeverity;
+	appId: string;
+	appName: string;
+	routineKey: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	lastEventAt: string;
+	absenceCount: number;
+	observedKinds: string[];
+	observedStreams: string[];
+	resolvedAt: string | null;
+	closedAt: string | null;
+	supersedes: number | null;
+}
+
+export interface NewFinding {
+	tenant: string;
+	fingerprint: string;
+	algoVersion: number;
+	state: FindingState;
+	source: FindingSource;
+	patternId: string;
+	title: string;
+	severity: FindingSeverity;
+	appId: string;
+	appName: string;
+	routineKey: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	lastEventAt: string;
+	observedKinds: string[];
+	observedStreams: string[];
+	needsTriage?: boolean;
+	supersedes?: number;
+}
+
 export class LifecycleStore {
 	readonly db: Database;
 
@@ -178,5 +249,334 @@ export class LifecycleStore {
 
 	close(): void {
 		this.db.close();
+	}
+
+	recordRun(run: RunInput): { runId: number; duplicate: boolean } {
+		const existing = this.db
+			.query<{ id: number }, [string, string]>(
+				"SELECT id FROM runs WHERE tenant = ? AND profile_id = ?",
+			)
+			.get(run.tenant, run.profileId);
+		if (existing) return { runId: existing.id, duplicate: true };
+		const res = this.db.run(
+			`INSERT INTO runs (tenant, stream, profile_id, capture_kind, capture_time, version_stamp, incomplete, exercised_apps, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				run.tenant,
+				run.stream,
+				run.profileId,
+				run.captureKind,
+				run.captureTime,
+				run.versionStamp,
+				run.incomplete ? 1 : 0,
+				JSON.stringify(run.exercisedApps),
+				new Date().toISOString(),
+			],
+		);
+		return { runId: Number(res.lastInsertRowid), duplicate: false };
+	}
+
+	getRun(tenant: string, profileId: string): StoredRun | null {
+		const row = this.db
+			.query<Record<string, unknown>, [string, string]>(
+				"SELECT * FROM runs WHERE tenant = ? AND profile_id = ?",
+			)
+			.get(tenant, profileId);
+		if (!row) return null;
+		return {
+			id: row.id as number,
+			tenant: row.tenant as string,
+			stream: row.stream as string,
+			profileId: row.profile_id as string,
+			captureKind: row.capture_kind as "sampling" | "instrumentation",
+			captureTime: row.capture_time as string,
+			versionStamp: row.version_stamp as string,
+			incomplete: (row.incomplete as number) === 1,
+			exercisedApps: JSON.parse(row.exercised_apps as string) as ExercisedApps,
+			createdAt: row.created_at as string,
+		};
+	}
+
+	insertFinding(f: NewFinding): number {
+		const res = this.db.run(
+			`INSERT INTO findings (tenant, fingerprint, algo_version, state, needs_triage, source, pattern_id, title, severity, app_id, app_name, routine_key, first_seen_at, last_seen_at, last_event_at, observed_kinds, observed_streams, supersedes)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				f.tenant,
+				f.fingerprint,
+				f.algoVersion,
+				f.state,
+				f.needsTriage ? 1 : 0,
+				f.source,
+				f.patternId,
+				f.title,
+				f.severity,
+				f.appId,
+				f.appName,
+				f.routineKey,
+				f.firstSeenAt,
+				f.lastSeenAt,
+				f.lastEventAt,
+				JSON.stringify(f.observedKinds),
+				JSON.stringify(f.observedStreams),
+				f.supersedes ?? null,
+			],
+		);
+		return Number(res.lastInsertRowid);
+	}
+
+	private rowToFinding(row: Record<string, unknown>): FindingRow {
+		return {
+			id: row.id as number,
+			tenant: row.tenant as string,
+			fingerprint: row.fingerprint as string,
+			algoVersion: row.algo_version as number,
+			state: row.state as FindingState,
+			needsTriage: (row.needs_triage as number) === 1,
+			source: row.source as FindingSource,
+			patternId: row.pattern_id as string,
+			title: row.title as string,
+			severity: row.severity as FindingSeverity,
+			appId: row.app_id as string,
+			appName: row.app_name as string,
+			routineKey: row.routine_key as string,
+			firstSeenAt: row.first_seen_at as string,
+			lastSeenAt: row.last_seen_at as string,
+			lastEventAt: row.last_event_at as string,
+			absenceCount: row.absence_count as number,
+			observedKinds: JSON.parse(row.observed_kinds as string) as string[],
+			observedStreams: JSON.parse(row.observed_streams as string) as string[],
+			resolvedAt: (row.resolved_at as string | null) ?? null,
+			closedAt: (row.closed_at as string | null) ?? null,
+			supersedes: (row.supersedes as number | null) ?? null,
+		};
+	}
+
+	getActiveFinding(tenant: string, fingerprint: string): FindingRow | null {
+		const row = this.db
+			.query<Record<string, unknown>, [string, string]>(
+				"SELECT * FROM findings WHERE tenant = ? AND fingerprint = ? AND state != 'closed'",
+			)
+			.get(tenant, fingerprint);
+		return row ? this.rowToFinding(row) : null;
+	}
+
+	getLatestClosedFinding(
+		tenant: string,
+		fingerprint: string,
+	): FindingRow | null {
+		const row = this.db
+			.query<Record<string, unknown>, [string, string]>(
+				"SELECT * FROM findings WHERE tenant = ? AND fingerprint = ? AND state = 'closed' ORDER BY id DESC LIMIT 1",
+			)
+			.get(tenant, fingerprint);
+		return row ? this.rowToFinding(row) : null;
+	}
+
+	getFinding(id: number): FindingRow | null {
+		const row = this.db
+			.query<Record<string, unknown>, [number]>(
+				"SELECT * FROM findings WHERE id = ?",
+			)
+			.get(id);
+		return row ? this.rowToFinding(row) : null;
+	}
+
+	listFindings(q?: {
+		tenant?: string;
+		state?: FindingState;
+		needsTriage?: boolean;
+		limit?: number;
+	}): FindingRow[] {
+		const where: string[] = [];
+		const params: (string | number)[] = [];
+		if (q?.tenant) {
+			where.push("tenant = ?");
+			params.push(q.tenant);
+		}
+		if (q?.state) {
+			where.push("state = ?");
+			params.push(q.state);
+		}
+		if (q?.needsTriage !== undefined) {
+			where.push("needs_triage = ?");
+			params.push(q.needsTriage ? 1 : 0);
+		}
+		let sql = "SELECT * FROM findings";
+		if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+		sql += " ORDER BY last_seen_at DESC, id DESC";
+		if (q?.limit !== undefined && q.limit > 0) {
+			sql += " LIMIT ?";
+			params.push(q.limit);
+		}
+		return this.db
+			.query<Record<string, unknown>, (string | number)[]>(sql)
+			.all(...params)
+			.map((row) => this.rowToFinding(row));
+	}
+
+	listAbsenceCandidates(tenant: string): FindingRow[] {
+		return this.db
+			.query<Record<string, unknown>, [string]>(
+				"SELECT * FROM findings WHERE tenant = ? AND state IN ('new','open','regressed','improving')",
+			)
+			.all(tenant)
+			.map((row) => this.rowToFinding(row));
+	}
+
+	markSeen(
+		id: number,
+		args: {
+			state: FindingState;
+			severity: FindingSeverity;
+			captureTime: string;
+			captureKind: string;
+			stream: string;
+		},
+	): void {
+		const row = this.getFinding(id);
+		if (!row) throw new Error(`markSeen: finding ${id} not found`);
+		const kinds = row.observedKinds.includes(args.captureKind)
+			? row.observedKinds
+			: [...row.observedKinds, args.captureKind];
+		const streams = row.observedStreams.includes(args.stream)
+			? row.observedStreams
+			: [...row.observedStreams, args.stream];
+		this.db.run(
+			`UPDATE findings SET state = ?, severity = ?, absence_count = 0, resolved_at = NULL,
+				last_seen_at = max(last_seen_at, ?), last_event_at = max(last_event_at, ?),
+				observed_kinds = ?, observed_streams = ? WHERE id = ?`,
+			[
+				args.state,
+				args.severity,
+				args.captureTime,
+				args.captureTime,
+				JSON.stringify(kinds),
+				JSON.stringify(streams),
+				id,
+			],
+		);
+	}
+
+	markAbsent(
+		id: number,
+		args: { state: FindingState; absenceCount: number; captureTime: string },
+	): void {
+		this.db.run(
+			`UPDATE findings SET state = ?, absence_count = ?, last_event_at = max(last_event_at, ?),
+				resolved_at = CASE WHEN ? = 'resolved' THEN ? ELSE resolved_at END WHERE id = ?`,
+			[
+				args.state,
+				args.absenceCount,
+				args.captureTime,
+				args.state,
+				args.captureTime,
+				id,
+			],
+		);
+	}
+
+	updateFindingState(
+		id: number,
+		patch: { state: FindingState; closedAt?: string },
+	): void {
+		this.db.run(
+			"UPDATE findings SET state = ?, closed_at = coalesce(?, closed_at) WHERE id = ?",
+			[patch.state, patch.closedAt ?? null, id],
+		);
+	}
+
+	setNeedsTriage(id: number, flag: boolean): void {
+		this.db.run("UPDATE findings SET needs_triage = ? WHERE id = ?", [
+			flag ? 1 : 0,
+			id,
+		]);
+	}
+
+	recordOccurrence(o: {
+		findingId: number;
+		runId: number;
+		captureTime: string;
+		severity: string;
+		impact?: number;
+		metricValue?: number;
+		metricClass?: string;
+		details?: string;
+	}): boolean {
+		const res = this.db.run(
+			`INSERT OR IGNORE INTO occurrences (finding_id, run_id, capture_time, severity, impact, metric_value, metric_class, details)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				o.findingId,
+				o.runId,
+				o.captureTime,
+				o.severity,
+				o.impact ?? null,
+				o.metricValue ?? null,
+				o.metricClass ?? null,
+				o.details ?? null,
+			],
+		);
+		return res.changes > 0;
+	}
+
+	countOccurrences(findingId: number): number {
+		const row = this.db
+			.query<{ n: number }, [number]>(
+				"SELECT count(*) AS n FROM occurrences WHERE finding_id = ?",
+			)
+			.get(findingId);
+		return row?.n ?? 0;
+	}
+
+	logEvent(e: {
+		findingId: number;
+		runId?: number;
+		event: string;
+		fromState: string | null;
+		toState: string;
+		at: string;
+		detail?: string;
+	}): void {
+		this.db.run(
+			`INSERT INTO finding_events (finding_id, run_id, event, from_state, to_state, at, detail)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			[
+				e.findingId,
+				e.runId ?? null,
+				e.event,
+				e.fromState,
+				e.toState,
+				e.at,
+				e.detail ?? null,
+			],
+		);
+	}
+
+	listEvents(findingId: number): Array<{
+		id: number;
+		findingId: number;
+		runId: number | null;
+		event: string;
+		fromState: string | null;
+		toState: string;
+		at: string;
+		detail: string | null;
+	}> {
+		return this.db
+			.query<Record<string, unknown>, [number]>(
+				"SELECT * FROM finding_events WHERE finding_id = ? ORDER BY id",
+			)
+			.all(findingId)
+			.map((row) => ({
+				id: row.id as number,
+				findingId: row.finding_id as number,
+				runId: (row.run_id as number | null) ?? null,
+				event: row.event as string,
+				fromState: (row.from_state as string | null) ?? null,
+				toState: row.to_state as string,
+				at: row.at as string,
+				detail: (row.detail as string | null) ?? null,
+			}));
 	}
 }
