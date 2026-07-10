@@ -17,11 +17,13 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-	FINGERPRINT_ALGO_VERSION,
-	type FingerprintRoutineIdentity,
 	computePatternFingerprint,
 	computeTelemetryFingerprint,
+	FINGERPRINT_ALGO_VERSION,
+	type FindingFingerprint,
+	type FingerprintRoutineIdentity,
 	formatFingerprint,
+	linkFingerprints,
 	normalizeSalientLocation,
 	routineIdentityFromCorrelation,
 	wrapAlsemFingerprint,
@@ -508,5 +510,88 @@ describe("routineIdentityFromCorrelation", () => {
 			objectNumber: 50100,
 			normalizedRoutineName: "processrecords",
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// linkFingerprints
+// ---------------------------------------------------------------------------
+
+describe("linkFingerprints", () => {
+	const FALLBACK: FingerprintRoutineIdentity = {
+		kind: "fallback",
+		appId: "437dbf0e84ff417a965ded2bb9650972",
+		canonicalObjectType: "Codeunit",
+		objectNumber: 50100,
+		normalizedRoutineName: "processrecords",
+	};
+	const STABLE: FingerprintRoutineIdentity = {
+		kind: "stable",
+		stableRoutineId:
+			"437dbf0e-84ff-417a-965d-ed2bb9650972:Codeunit:50100#a1b2c3d4",
+	};
+	const APP = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+
+	const v1Fp = computePatternFingerprint(
+		{ patternId: "calcfields-in-loop" },
+		FALLBACK,
+		APP,
+	);
+	// A future-algo fingerprint, constructed literally (FindingFingerprint is
+	// a plain data type; only THIS module can mint v-current hashes).
+	const v2Fp: FindingFingerprint = {
+		value: "0123456789abcdef",
+		namespace: "pattern",
+		algoVersion: 2,
+	};
+
+	it("produces a migration record with default reason 'algo-upgrade'", () => {
+		const migration = linkFingerprints(v1Fp, v2Fp);
+		expect(migration).toEqual({ from: v1Fp, to: v2Fp, reason: "algo-upgrade" });
+	});
+
+	it("algo-upgrade requires a strictly increasing algoVersion", () => {
+		expect(() => linkFingerprints(v2Fp, v1Fp, "algo-upgrade")).toThrow();
+		const sameVersion: FindingFingerprint = {
+			...v1Fp,
+			value: "fedcba9876543210",
+		};
+		expect(() => linkFingerprints(v1Fp, sameVersion, "algo-upgrade")).toThrow();
+	});
+
+	it("algo-upgrade requires the same namespace", () => {
+		const telemetryV2: FindingFingerprint = {
+			value: "0123456789abcdef",
+			namespace: "telemetry",
+			algoVersion: 2,
+		};
+		expect(() => linkFingerprints(v1Fp, telemetryV2, "algo-upgrade")).toThrow();
+	});
+
+	it("identity-upgrade links a fallback-key finding to its stable identity at the same version", () => {
+		const stableFp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			STABLE,
+			APP,
+		);
+		const migration = linkFingerprints(v1Fp, stableFp, "identity-upgrade");
+		expect(migration.reason).toBe("identity-upgrade");
+		expect(migration.from).toEqual(v1Fp);
+		expect(migration.to).toEqual(stableFp);
+	});
+
+	it("identity-upgrade requires the same namespace", () => {
+		const alsemFp = wrapAlsemFingerprint("native-x");
+		expect(() => linkFingerprints(v1Fp, alsemFp, "identity-upgrade")).toThrow();
+	});
+
+	it("manual-merge allows cross-namespace links (rename mitigation)", () => {
+		const alsemFp = wrapAlsemFingerprint("native-x");
+		const migration = linkFingerprints(v1Fp, alsemFp, "manual-merge");
+		expect(migration.reason).toBe("manual-merge");
+	});
+
+	it("refuses to link an identity to itself", () => {
+		expect(() => linkFingerprints(v1Fp, { ...v1Fp })).toThrow();
 	});
 });

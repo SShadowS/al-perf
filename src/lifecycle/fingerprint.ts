@@ -378,3 +378,78 @@ export function routineIdentityFromCorrelation(
 		).toLowerCase(),
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Fingerprint migration (algo upgrades, identity upgrades, manual merges)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why two fingerprints are the same finding:
+ *  - "algo-upgrade"     — FINGERPRINT_ALGO_VERSION bumped; the re-fingerprint
+ *                         migration links every old identity to its
+ *                         recomputed successor.
+ *  - "identity-upgrade" — a source registered later and the routine gained a
+ *                         confident alsem match; the fallback-key identity is
+ *                         linked to the stableRoutineId identity.
+ *  - "manual-merge"     — human-confirmed merge (e.g. after a rename severed
+ *                         stableRoutineId); the only reason permitted to
+ *                         cross namespaces.
+ */
+export type FingerprintMigrationReason =
+	| "algo-upgrade"
+	| "identity-upgrade"
+	| "manual-merge";
+
+/**
+ * A migration record linking an old identity to its successor. This module
+ * only DEFINES the record — executing migrations (rewriting store rows,
+ * guarding sinks against mass state transitions) is the phase-3 lifecycle
+ * store's job.
+ */
+export interface FingerprintMigration {
+	from: FindingFingerprint;
+	to: FindingFingerprint;
+	reason: FingerprintMigrationReason;
+}
+
+/**
+ * Build a migration record linking `oldFp` → `newFp`.
+ *
+ * Guards (throws TypeError on violation):
+ *  - from and to must not be the same identity (same string form AND version).
+ *  - "algo-upgrade": same namespace, and to.algoVersion > from.algoVersion.
+ *  - "identity-upgrade": same namespace (fallback→stable is within `pattern:`).
+ *  - "manual-merge": no structural guard (human judgement is the guard).
+ */
+export function linkFingerprints(
+	oldFp: FindingFingerprint,
+	newFp: FindingFingerprint,
+	reason: FingerprintMigrationReason = "algo-upgrade",
+): FingerprintMigration {
+	if (
+		formatFingerprint(oldFp) === formatFingerprint(newFp) &&
+		oldFp.algoVersion === newFp.algoVersion
+	) {
+		throw new TypeError(
+			"linkFingerprints: from and to are the same identity — nothing to link",
+		);
+	}
+	if (reason === "algo-upgrade") {
+		if (oldFp.namespace !== newFp.namespace) {
+			throw new TypeError(
+				`linkFingerprints: algo-upgrade cannot change namespace (${oldFp.namespace} → ${newFp.namespace})`,
+			);
+		}
+		if (newFp.algoVersion <= oldFp.algoVersion) {
+			throw new TypeError(
+				`linkFingerprints: algo-upgrade requires a version increase (${oldFp.algoVersion} → ${newFp.algoVersion})`,
+			);
+		}
+	}
+	if (reason === "identity-upgrade" && oldFp.namespace !== newFp.namespace) {
+		throw new TypeError(
+			`linkFingerprints: identity-upgrade cannot change namespace (${oldFp.namespace} → ${newFp.namespace})`,
+		);
+	}
+	return { from: oldFp, to: newFp, reason };
+}
