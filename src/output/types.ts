@@ -33,6 +33,8 @@ export interface AnalysisResult {
 		 * to be excluded from lifecycle run-counting in a later phase.
 		 */
 		incompleteInvocations?: number;
+		/** FINGERPRINT_ALGO_VERSION in effect when pattern fingerprints were minted. */
+		fingerprintAlgoVersion?: number;
 		sourceAvailable: boolean;
 		builtinSelfTime?: number;
 		/** Profile confidence score 0-100 */
