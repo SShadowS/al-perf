@@ -297,6 +297,10 @@ export class LifecycleStore {
 		};
 	}
 
+	/**
+	 * Throws (SQLite unique-constraint) if an active finding already exists
+	 * for (tenant, fingerprint) — callers must check getActiveFinding first.
+	 */
 	insertFinding(f: NewFinding): number {
 		const res = this.db.run(
 			`INSERT INTO findings (tenant, fingerprint, algo_version, state, needs_triage, source, pattern_id, title, severity, app_id, app_name, routine_key, first_seen_at, last_seen_at, last_event_at, observed_kinds, observed_streams, supersedes)
