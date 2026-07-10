@@ -605,3 +605,76 @@ describe("linkFingerprints", () => {
 		expect(() => linkFingerprints(v1Fp, { ...v1Fp }, "manual-merge")).toThrow();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// v1 golden digests
+//
+// Every other test in this file asserts on determinism, shape, or equality —
+// none of them pin an actual hex value. A refactor that reorders tokens or
+// changes normalization could stay internally consistent (deterministic,
+// 16 hex chars, namespace-stamped) and pass every one of them while silently
+// rebasing every fingerprint already stored downstream. These tests freeze
+// the v1 hash contract against concrete known-input → known-output pairs.
+// ---------------------------------------------------------------------------
+
+describe("v1 golden digests", () => {
+	const GOLDEN_FALLBACK: FingerprintRoutineIdentity = {
+		kind: "fallback",
+		appId: "437dbf0e84ff417a965ded2bb9650972",
+		canonicalObjectType: "Codeunit",
+		objectNumber: 50100,
+		normalizedRoutineName: "processrecords",
+	};
+	const GOLDEN_STABLE: FingerprintRoutineIdentity = {
+		kind: "stable",
+		stableRoutineId:
+			"437dbf0e-84ff-417a-965d-ed2bb9650972:Codeunit:50100#a1b2c3d4",
+	};
+	const GOLDEN_APP = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+
+	it("computePatternFingerprint with a fallback identity pins to a known v1 digest", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			GOLDEN_FALLBACK,
+			GOLDEN_APP,
+		);
+		// v1 golden — if this breaks, you changed the hash contract; bump
+		// FINGERPRINT_ALGO_VERSION instead of updating this value.
+		expect(fp.value).toBe("b9ebfc932b69da4c");
+	});
+
+	it("computePatternFingerprint with a stable identity pins to a known v1 digest", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			GOLDEN_STABLE,
+			GOLDEN_APP,
+		);
+		// v1 golden — if this breaks, you changed the hash contract; bump
+		// FINGERPRINT_ALGO_VERSION instead of updating this value.
+		expect(fp.value).toBe("77b792694c42884e");
+	});
+
+	it("computeTelemetryFingerprint pins to a known v1 digest", () => {
+		const fp = computeTelemetryFingerprint({
+			signalId: "RT0018",
+			appId: GOLDEN_APP,
+			objectType: "Codeunit",
+			objectNumber: 50100,
+			routineName: "ProcessRecords",
+		});
+		// v1 golden — if this breaks, you changed the hash contract; bump
+		// FINGERPRINT_ALGO_VERSION instead of updating this value.
+		expect(fp.value).toBe("022c19a8f134e9cb");
+	});
+
+	it("formatFingerprint pins the full 'pattern:<hex>' string for a known v1 digest", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			GOLDEN_FALLBACK,
+			GOLDEN_APP,
+		);
+		// v1 golden — if this breaks, you changed the hash contract; bump
+		// FINGERPRINT_ALGO_VERSION instead of updating this value.
+		expect(formatFingerprint(fp)).toBe("pattern:b9ebfc932b69da4c");
+	});
+});
