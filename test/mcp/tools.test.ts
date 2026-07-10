@@ -11,6 +11,7 @@ import { createMcpServer } from "../../src/mcp/server.js";
 async function createTestClient(options?: {
 	defaultSourcePath?: string;
 	historyDir?: string;
+	historyDb?: string;
 }) {
 	const server = createMcpServer(options);
 	const [clientTransport, serverTransport] =
@@ -659,7 +660,8 @@ describe("MCP Tool: history_list", () => {
 	test("returns empty list when no history exists", async () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
-		const { client } = await createTestClient({ historyDir });
+		const historyDb = join(historyDir, "lifecycle.sqlite");
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_list",
 			arguments: {},
@@ -673,9 +675,10 @@ describe("MCP Tool: history_list", () => {
 	test("returns entries when history exists", async () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
+		const historyDb = join(historyDir, "lifecycle.sqlite");
 
 		// Pre-populate history
-		const store = new HistoryStore(historyDir);
+		const store = new HistoryStore(historyDb);
 		const analysis = await analyzeProfile(
 			"test/fixtures/sampling-minimal.alcpuprofile",
 			{
@@ -684,7 +687,7 @@ describe("MCP Tool: history_list", () => {
 		);
 		store.save(analysis, { label: "test-run" });
 
-		const { client } = await createTestClient({ historyDir });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_list",
 			arguments: {},
@@ -699,8 +702,9 @@ describe("MCP Tool: history_list", () => {
 	test("filters by label", async () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
+		const historyDb = join(historyDir, "lifecycle.sqlite");
 
-		const store = new HistoryStore(historyDir);
+		const store = new HistoryStore(historyDb);
 		const analysis = await analyzeProfile(
 			"test/fixtures/sampling-minimal.alcpuprofile",
 			{
@@ -710,7 +714,7 @@ describe("MCP Tool: history_list", () => {
 		store.save(analysis, { label: "baseline" });
 		store.save(analysis, { label: "optimized" });
 
-		const { client } = await createTestClient({ historyDir });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_list",
 			arguments: { label: "baseline" },
@@ -736,7 +740,8 @@ describe("MCP Tool: history_trend", () => {
 	test("returns message when less than 2 entries", async () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
-		const { client } = await createTestClient({ historyDir });
+		const historyDb = join(historyDir, "lifecycle.sqlite");
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_trend",
 			arguments: {},
@@ -750,8 +755,9 @@ describe("MCP Tool: history_trend", () => {
 	test("computes trend deltas with 2+ entries", async () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
+		const historyDb = join(historyDir, "lifecycle.sqlite");
 
-		const store = new HistoryStore(historyDir);
+		const store = new HistoryStore(historyDb);
 		const analysis = await analyzeProfile(
 			"test/fixtures/sampling-minimal.alcpuprofile",
 			{
@@ -761,7 +767,7 @@ describe("MCP Tool: history_trend", () => {
 		store.save(analysis, { label: "run-1" });
 		store.save(analysis, { label: "run-2" });
 
-		const { client } = await createTestClient({ historyDir });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_trend",
 			arguments: {},

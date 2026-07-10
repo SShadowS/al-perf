@@ -67,6 +67,23 @@ export {
 } from "./explain/response-parser.js";
 // History
 export { HistoryStore } from "./history/store.js";
+// Lifecycle engine (phase 3) — baselines, config, digest, evaluation, store
+export type { RunVersions } from "./lifecycle/baselines.js";
+export { rollupRoutineMetrics } from "./lifecycle/baselines.js";
+export {
+	DEFAULT_LIFECYCLE_CONFIG,
+	type LifecycleConfig,
+} from "./lifecycle/config.js";
+export {
+	buildDigest,
+	type DigestData,
+	renderDigestMarkdown,
+} from "./lifecycle/digest.js";
+export {
+	type EvaluationOutcome,
+	evaluateRun,
+	type RunMetadata,
+} from "./lifecycle/evaluate.js";
 // Lifecycle (phase 2) — finding-identity contract + fingerprint wiring
 export type {
 	CaptureKind,
@@ -89,6 +106,7 @@ export {
 	routineIdentityFromCorrelation,
 	wrapAlsemFingerprint,
 } from "./lifecycle/fingerprint.js";
+export { LifecycleStore } from "./lifecycle/store.js";
 export type { PatternAnchor } from "./lifecycle/wire.js";
 export {
 	buildMethodLabelMap,

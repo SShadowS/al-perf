@@ -43,13 +43,14 @@ When asked to restart the server, first check if it was started as a background 
 
 ```
 src/
-  cli/        — CLI commands (analyze, compare, hotspots, explain, source-map, analyze-source, mcp, gate, history, batch)
+  cli/        — CLI commands (analyze, compare, hotspots, explain, source-map, analyze-source, mcp, gate, history, batch, lifecycle)
   cli/formatters/ — Output formatters (terminal, json, markdown, html) with section registry enforcement
   config.ts   — Shared configuration constants
   core/       — Profile parsing and analysis (pure functions, no I/O)
   debug/      — Debug ID tracking and diagnostic output
   explain/    — LLM-powered analysis explanation (Anthropic API)
   history/    — Performance history storage
+  lifecycle/  — finding lifecycle engine (SQLite store, state machine, baselines, digest)
   mcp/        — MCP server definition and tool wrappers
   output/     — Canonical output types shared across all interfaces
   source/     — tree-sitter-al integration for AL source code analysis

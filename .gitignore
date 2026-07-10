@@ -11,6 +11,7 @@ web/stats.json
 exampledata/
 CLAUDE.md
 .al-profile-cache/
+.al-perf/
 .worktrees/
 docs/roadmap.md
 presentation.md

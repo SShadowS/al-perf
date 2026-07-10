@@ -1,38 +1,105 @@
+import { Database } from "bun:sqlite";
 import { createHash } from "crypto";
 import {
 	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
-	rmSync,
 	writeFileSync,
 } from "fs";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import type { AnalysisResult } from "../output/types.js";
 import type { HistoryEntry, HistoryQuery } from "../types/history.js";
 
+const TOMBSTONE = "MIGRATED.md";
+
 /**
- * Local JSON-based store for analysis history.
- * Each entry is a separate JSON file in the store directory.
+ * SQLite-backed store for analysis history (bun:sqlite, WAL).
+ *
+ * Lives in the SAME database file as the lifecycle engine (default
+ * `.al-perf/lifecycle.sqlite`) — one persistence system (umbrella spec §4).
+ * Opens its own connection and owns only the history_entries table, so it
+ * also works standalone.
+ *
+ * Legacy migration: pass `legacyDir` (the old JSON-file store directory,
+ * default `.al-perf-history` at the call sites). Entries are imported once;
+ * a MIGRATED.md tombstone marks completion and the JSON files are kept as a
+ * backup — never deleted.
  */
 export class HistoryStore {
-	private storeDir: string;
+	private db: Database;
 
-	constructor(storeDir: string) {
-		this.storeDir = resolve(storeDir);
+	constructor(dbPath: string, options?: { legacyDir?: string }) {
+		const resolved = dbPath === ":memory:" ? dbPath : resolve(dbPath);
+		if (resolved !== ":memory:") {
+			mkdirSync(dirname(resolved), { recursive: true });
+		}
+		this.db = new Database(resolved, { create: true });
+		this.db.run("PRAGMA journal_mode = WAL");
+		this.db.run(`CREATE TABLE IF NOT EXISTS history_entries (
+			id TEXT PRIMARY KEY,
+			timestamp TEXT NOT NULL,
+			profile_path TEXT NOT NULL,
+			label TEXT,
+			entry_json TEXT NOT NULL
+		)`);
+		this.db.run(
+			"CREATE INDEX IF NOT EXISTS idx_history_time ON history_entries(timestamp)",
+		);
+		if (options?.legacyDir) this.migrateLegacyDir(options.legacyDir);
 	}
 
-	/**
-	 * Store an analysis result as a history entry.
-	 */
+	private migrateLegacyDir(dir: string): void {
+		const legacy = resolve(dir);
+		if (!existsSync(legacy)) return;
+		if (existsSync(join(legacy, TOMBSTONE))) return;
+		const files = readdirSync(legacy).filter((f) => f.endsWith(".json"));
+		// Nothing to migrate — don't tombstone a directory we never touched
+		// (legacyDir often coincides with dbPath's own parent directory).
+		if (files.length === 0) return;
+		let migrated = 0;
+		for (const file of files) {
+			try {
+				const entry: HistoryEntry = JSON.parse(
+					readFileSync(join(legacy, file), "utf-8"),
+				);
+				const res = this.insertEntry(entry, true);
+				if (res) migrated++;
+			} catch (err) {
+				// Skip corrupted files — same policy as the old JSON store — but
+				// warn so operators know an entry was dropped, not migrated.
+				console.warn(
+					`[history] skipping unreadable legacy entry ${file}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		writeFileSync(
+			join(legacy, TOMBSTONE),
+			`# Migrated\n\nThese JSON history entries were imported into the SQLite history store on ${new Date().toISOString()} (${migrated} entries).\nThe files are kept as a backup; the history CLI/MCP tools now read from the database.\nDelete this directory when you no longer need the backup.\n`,
+			"utf-8",
+		);
+	}
+
+	private insertEntry(entry: HistoryEntry, ignoreDupes: boolean): boolean {
+		const res = this.db.run(
+			`INSERT ${ignoreDupes ? "OR IGNORE " : ""}INTO history_entries (id, timestamp, profile_path, label, entry_json)
+			 VALUES (?, ?, ?, ?, ?)`,
+			[
+				entry.id,
+				entry.timestamp,
+				entry.profilePath,
+				entry.label ?? null,
+				JSON.stringify(entry),
+			],
+		);
+		return res.changes > 0;
+	}
+
+	/** Store an analysis result as a history entry. */
 	save(
 		result: AnalysisResult,
 		options?: { gitCommit?: string; label?: string },
 	): HistoryEntry {
-		if (!existsSync(this.storeDir)) {
-			mkdirSync(this.storeDir, { recursive: true });
-		}
-
 		const timestamp = result.meta.analyzedAt;
 		const profileHash = createHash("sha256")
 			.update(result.meta.profilePath)
@@ -40,10 +107,10 @@ export class HistoryStore {
 			.slice(0, 8);
 		const baseId = `${timestamp.replace(/[:.]/g, "-")}_${profileHash}`;
 
-		// Ensure uniqueness: if a file with this ID already exists, append a counter
+		// Ensure uniqueness: append a counter while the id exists.
 		let id = baseId;
 		let counter = 1;
-		while (existsSync(join(this.storeDir, `${id}.json`))) {
+		while (this.get(id) !== null) {
 			id = `${baseId}_${counter}`;
 			counter++;
 		}
@@ -74,103 +141,78 @@ export class HistoryStore {
 			})),
 		};
 
-		const filePath = join(this.storeDir, `${id}.json`);
-		writeFileSync(filePath, JSON.stringify(entry, null, 2), "utf-8");
-
+		this.insertEntry(entry, false);
 		return entry;
 	}
 
-	/**
-	 * Query history entries with optional filters.
-	 */
+	/** Query history entries with optional filters (newest first). */
 	query(q?: HistoryQuery): HistoryEntry[] {
-		if (!existsSync(this.storeDir)) return [];
-
-		const files = readdirSync(this.storeDir)
-			.filter((f) => f.endsWith(".json"))
-			.sort()
-			.reverse(); // newest first
-
-		let entries: HistoryEntry[] = [];
-		for (const file of files) {
-			try {
-				const raw = readFileSync(join(this.storeDir, file), "utf-8");
-				const entry: HistoryEntry = JSON.parse(raw);
-				entries.push(entry);
-			} catch {
-				// Skip corrupted files
-			}
-		}
-
-		// Apply filters
+		const where: string[] = [];
+		const params: (string | number)[] = [];
 		if (q?.profilePath) {
-			const pathFilter = q.profilePath.toLowerCase();
-			entries = entries.filter((e) =>
-				e.profilePath.toLowerCase().includes(pathFilter),
-			);
+			where.push("instr(lower(profile_path), lower(?)) > 0");
+			params.push(q.profilePath);
 		}
 		if (q?.since) {
-			entries = entries.filter((e) => e.timestamp >= q.since!);
+			where.push("timestamp >= ?");
+			params.push(q.since);
 		}
 		if (q?.until) {
-			entries = entries.filter((e) => e.timestamp <= q.until!);
+			where.push("timestamp <= ?");
+			params.push(q.until);
 		}
 		if (q?.label) {
-			entries = entries.filter((e) => e.label === q.label);
+			where.push("label = ?");
+			params.push(q.label);
 		}
+		let sql = "SELECT entry_json FROM history_entries";
+		if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+		sql += " ORDER BY timestamp DESC, id DESC";
 		if (q?.limit !== undefined && q.limit > 0) {
-			entries = entries.slice(0, q.limit);
+			sql += " LIMIT ?";
+			params.push(q.limit);
 		}
-
-		return entries;
+		return this.db
+			.query<{ entry_json: string }, (string | number)[]>(sql)
+			.all(...params)
+			.map((row) => JSON.parse(row.entry_json) as HistoryEntry);
 	}
 
-	/**
-	 * Resolve an entry file path, guarding against path traversal.
-	 */
-	private resolveEntryPath(id: string): string | null {
-		const filePath = resolve(this.storeDir, `${id}.json`);
-		if (!filePath.startsWith(this.storeDir)) return null;
-		return filePath;
-	}
-
-	/**
-	 * Get a specific entry by ID.
-	 */
+	/** Get a specific entry by ID. */
 	get(id: string): HistoryEntry | null {
-		const filePath = this.resolveEntryPath(id);
-		if (!filePath || !existsSync(filePath)) return null;
+		const row = this.db
+			.query<{ entry_json: string }, [string]>(
+				"SELECT entry_json FROM history_entries WHERE id = ?",
+			)
+			.get(id);
+		if (!row) return null;
 		try {
-			return JSON.parse(readFileSync(filePath, "utf-8"));
+			return JSON.parse(row.entry_json) as HistoryEntry;
 		} catch {
 			return null;
 		}
 	}
 
-	/**
-	 * Delete a specific entry.
-	 */
+	/** Delete a specific entry. */
 	delete(id: string): boolean {
-		const filePath = this.resolveEntryPath(id);
-		if (!filePath || !existsSync(filePath)) return false;
-		rmSync(filePath);
-		return true;
+		const res = this.db.run("DELETE FROM history_entries WHERE id = ?", [id]);
+		return res.changes > 0;
 	}
 
-	/**
-	 * Clear all history.
-	 */
+	/** Clear all history entries (rows only — the database file remains). */
 	clearAll(): void {
-		if (existsSync(this.storeDir)) {
-			rmSync(this.storeDir, { recursive: true });
-		}
+		this.db.run("DELETE FROM history_entries");
 	}
 
-	/**
-	 * Count total entries.
-	 */
+	/** Count total entries. */
 	count(): number {
-		if (!existsSync(this.storeDir)) return 0;
-		return readdirSync(this.storeDir).filter((f) => f.endsWith(".json")).length;
+		const row = this.db
+			.query<{ n: number }, []>("SELECT count(*) AS n FROM history_entries")
+			.get();
+		return row?.n ?? 0;
+	}
+
+	close(): void {
+		this.db.close();
 	}
 }

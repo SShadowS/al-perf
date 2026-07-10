@@ -7,9 +7,10 @@ import { HistoryStore } from "../../history/store.js";
 export function createHistoryCommand(): Command {
 	const cmd = new Command("history")
 		.description("Manage performance analysis history")
+		.option("--db <path>", "History database file", ".al-perf/lifecycle.sqlite")
 		.option(
 			"--history-dir <dir>",
-			"History store directory",
+			"Legacy JSON history directory (auto-migrated into --db)",
 			".al-perf-history",
 		);
 
@@ -20,7 +21,9 @@ export function createHistoryCommand(): Command {
 		.option("--label <label>", "Filter by label")
 		.option("--profile <path>", "Filter by profile path (substring)")
 		.action((opts) => {
-			const store = new HistoryStore(cmd.opts().historyDir);
+			const store = new HistoryStore(cmd.opts().db, {
+				legacyDir: cmd.opts().historyDir,
+			});
 			const entries = store.query({
 				limit: parseInt(opts.limit, 10),
 				label: opts.label,
@@ -67,7 +70,9 @@ export function createHistoryCommand(): Command {
 		.option("--profile <path>", "Filter by profile path")
 		.option("-n, --limit <n>", "Maximum entries", "10")
 		.action((opts) => {
-			const store = new HistoryStore(cmd.opts().historyDir);
+			const store = new HistoryStore(cmd.opts().db, {
+				legacyDir: cmd.opts().historyDir,
+			});
 			const entries = store
 				.query({
 					limit: parseInt(opts.limit, 10),
@@ -108,7 +113,9 @@ export function createHistoryCommand(): Command {
 		.command("clear")
 		.description("Clear all history entries")
 		.action(() => {
-			const store = new HistoryStore(cmd.opts().historyDir);
+			const store = new HistoryStore(cmd.opts().db, {
+				legacyDir: cmd.opts().historyDir,
+			});
 			const count = store.count();
 			store.clearAll();
 			console.log(`Cleared ${count} history entries.`);
