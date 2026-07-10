@@ -1,4 +1,5 @@
 import type {
+	ProfileSourceFormat,
 	RawApplicationDefinition,
 	RawCallFrame,
 	RawDeclaringApplication,
@@ -43,6 +44,14 @@ export interface ProcessedProfile {
 	idleSelfTime: number; // selfTime sum of IdleTime nodes only
 	maxDepth: number;
 	samplingInterval?: number;
+	/** Wire format the profile came from. Absent = "alcpuprofile". */
+	sourceFormat?: ProfileSourceFormat;
+	/** ir-json capture-level counters (ir-json only). */
+	irCapture?: {
+		invocationCount: number;
+		incompleteCount: number;
+		exceptionCount: number;
+	};
 
 	nodeCount: number;
 	startTime: number;

@@ -100,6 +100,8 @@ export function processProfile(parsed: ParsedProfile): ProcessedProfile {
 		idleSelfTime,
 		maxDepth,
 		samplingInterval: parsed.samplingInterval,
+		sourceFormat: parsed.sourceFormat ?? "alcpuprofile",
+		irCapture: parsed.irCapture,
 		nodeCount: allNodes.length,
 		startTime: parsed.startTime,
 		endTime: parsed.endTime,
@@ -151,6 +153,8 @@ function calculateSelfTime(
 	parsed: ParsedProfile,
 	sampleAppearances?: Map<number, number>,
 ): number {
+	const exact = parsed.exactSelfTimes?.get(node.id);
+	if (exact !== undefined) return exact;
 	if (parsed.type === "instrumentation" && node.positionTicks?.length) {
 		return node.positionTicks.reduce((sum, pt) => sum + pt.executionTime, 0);
 	}
