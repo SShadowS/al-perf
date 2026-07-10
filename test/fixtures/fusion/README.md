@@ -23,7 +23,7 @@ live `runEngine(ws-min)` against these when `AL_SEM_BIN` is set.
 ### Regenerate
 
 ```bash
-AL_SEM_BIN=U:/Git/alch-engine/target/release/alsem.exe
+AL_SEM_BIN=U:/Git/al-call-hierarchy/target/release/alsem.exe
 
 # inventory (routine universe)
 "$AL_SEM_BIN" fingerprint test/fixtures/fusion/ws-min \

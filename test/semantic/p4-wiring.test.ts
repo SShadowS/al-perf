@@ -35,9 +35,9 @@ const FIXTURES = "test/fixtures";
 const PROFILE = `${FIXTURES}/sampling-minimal.alcpuprofile`;
 
 // Real-binary paths (for smoke tests).
-const REAL_BIN = "U:/Git/alch-engine/target/release/alsem.exe";
-const CORPUS_D1 = "U:/Git/alch-engine/tests/r0-corpus/ws-d1";
-const CORPUS_D2 = "U:/Git/alch-engine/tests/r0-corpus/ws-d2";
+const REAL_BIN = "U:/Git/al-call-hierarchy/target/release/alsem.exe";
+const CORPUS_D1 = "U:/Git/al-call-hierarchy/tests/r0-corpus/ws-d1";
+const CORPUS_D2 = "U:/Git/al-call-hierarchy/tests/r0-corpus/ws-d2";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -412,9 +412,12 @@ const BINARY_AVAILABLE = existsSync(REAL_BIN);
 const CORPUS_D1_AVAILABLE = existsSync(CORPUS_D1);
 const CORPUS_D2_AVAILABLE = existsSync(CORPUS_D2);
 
-describe("runEngineDiff — real-binary smoke (P4.2)", {
-	skip: !BINARY_AVAILABLE || !CORPUS_D1_AVAILABLE || !CORPUS_D2_AVAILABLE,
-}, () => {
+// describe.skipIf — the options-object form describe(name, {skip}, fn) is
+// silently ignored by Bun, so the gate never applied and the suite ran (and
+// failed) on machines without the engine checkout.
+describe.skipIf(
+	!BINARY_AVAILABLE || !CORPUS_D1_AVAILABLE || !CORPUS_D2_AVAILABLE,
+)("runEngineDiff — real-binary smoke (P4.2)", () => {
 	test("runEngineDiff on two corpus fixtures parses to DiffAnalysis", async () => {
 		const result = await runEngineDiff(CORPUS_D1, CORPUS_D2, {
 			engine: REAL_BIN,

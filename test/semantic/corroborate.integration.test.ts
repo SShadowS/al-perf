@@ -310,10 +310,10 @@ describe("fuseProfile + corroborate integration (P3.1 Task 3)", () => {
 //   - enclosingMember on the field-trigger inventory row, and
 //   - evidencePath on the d1-db-op-in-loop finding (with the REAL sourceAnchor shape).
 //
-// The real binary lives at U:\Git\alch-engine\target\release\alsem.exe; set
+// The real binary lives at U:\Git\al-call-hierarchy\target\release\alsem.exe; set
 // AL_SEM_BIN to that path (or any rebuilt alsem.exe path) to enable this section.
 //
-// Fallback path: if AL_SEM_BIN is not set but the alch-engine release binary
+// Fallback path: if AL_SEM_BIN is not set but the al-call-hierarchy release binary
 // exists at its canonical local path, use it automatically.
 // ---------------------------------------------------------------------------
 
@@ -327,7 +327,7 @@ function isEngineAnalysis(result: unknown): result is EngineAnalysis {
 }
 
 const ALCH_ENGINE_BIN =
-	"U:\\Git\\alch-engine\\target\\release\\alsem.exe".replace(/\\/g, "/");
+	"U:\\Git\\al-call-hierarchy\\target\\release\\alsem.exe".replace(/\\/g, "/");
 const REAL_BIN: string | undefined =
 	process.env.AL_SEM_BIN ??
 	(existsSync(ALCH_ENGINE_BIN) ? ALCH_ENGINE_BIN : undefined);
@@ -335,12 +335,12 @@ const REAL_BIN: string | undefined =
 // ws-implicit-trigger: has a Table 72100 "Quantity" OnValidate trigger and a
 // d1-db-op-in-loop finding that traces through it.
 const WS_IMPLICIT_TRIGGER =
-	"U:\\Git\\alch-engine\\tests\\r0-corpus\\ws-implicit-trigger".replace(
+	"U:\\Git\\al-call-hierarchy\\tests\\r0-corpus\\ws-implicit-trigger".replace(
 		/\\/g,
 		"/",
 	);
 
-describe("P3.2c real-binary smoke (gated: AL_SEM_BIN / canonical alch-engine path)", () => {
+describe("P3.2c real-binary smoke (gated: AL_SEM_BIN / canonical al-call-hierarchy path)", () => {
 	test.skipIf(!REAL_BIN || !existsSync(WS_IMPLICIT_TRIGGER))(
 		"real alsem.exe on ws-implicit-trigger: enclosingMember on inventory + evidencePath on finding",
 		async () => {

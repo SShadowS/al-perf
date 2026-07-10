@@ -184,8 +184,13 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					},
 				});
 
-				// Deep AI analysis (when API key is available)
-				const apiKey = process.env.ANTHROPIC_API_KEY;
+				// Deep AI analysis (when API key is available). AI_DISABLED=1 skips
+				// all AI calls (same contract as the web server) — without this, any
+				// test or CI run with a real key in env makes live API calls.
+				const apiKey =
+					process.env.AI_DISABLED === "1"
+						? undefined
+						: process.env.ANTHROPIC_API_KEY;
 				if (apiKey && processedProfile) {
 					try {
 						const deepResult = await deepAnalysis(result, processedProfile, {
