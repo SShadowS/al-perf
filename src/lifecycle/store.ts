@@ -16,6 +16,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import { LIFECYCLE_SCHEMA_VERSION } from "./config.js";
+import { type FingerprintMigration, formatFingerprint } from "./fingerprint.js";
 import type { FindingState } from "./states.js";
 
 export { LIFECYCLE_SCHEMA_VERSION };
@@ -582,5 +583,98 @@ export class LifecycleStore {
 				at: row.at as string,
 				detail: (row.detail as string | null) ?? null,
 			}));
+	}
+
+	/**
+	 * Apply one FingerprintMigration (spec §4). Idempotent via the
+	 * fingerprint_migrations table. Events are logged with viaMigration:true
+	 * so sink triggers can guard against mass state transitions caused by an
+	 * algorithm change.
+	 */
+	applyFingerprintMigration(
+		tenant: string,
+		migration: FingerprintMigration,
+		appliedAt: string,
+	): "renamed" | "merged" | "no-op" {
+		const from = formatFingerprint(migration.from);
+		const to = formatFingerprint(migration.to);
+		const recorded = this.db.run(
+			`INSERT OR IGNORE INTO fingerprint_migrations (tenant, from_fingerprint, to_fingerprint, reason, applied_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			[tenant, from, to, migration.reason, appliedAt],
+		);
+		if (recorded.changes === 0) return "no-op"; // already applied
+
+		const fromRow = this.getActiveFinding(tenant, from);
+		if (!fromRow) return "no-op";
+		const toRow = this.getActiveFinding(tenant, to);
+		const detail = JSON.stringify({
+			viaMigration: true,
+			from,
+			to,
+			reason: migration.reason,
+		});
+
+		if (!toRow) {
+			const rename = this.db.transaction(() => {
+				this.db.run(
+					"UPDATE findings SET fingerprint = ?, algo_version = ? WHERE id = ?",
+					[to, migration.to.algoVersion, fromRow.id],
+				);
+				this.logEvent({
+					findingId: fromRow.id,
+					event: "migrated",
+					fromState: fromRow.state,
+					toState: fromRow.state,
+					at: appliedAt,
+					detail,
+				});
+			});
+			rename();
+			return "renamed";
+		}
+
+		const merge = this.db.transaction(() => {
+			// Move history; a run present on both sides keeps the to-row's
+			// occurrence (INSERT OR IGNORE semantics via UPDATE OR IGNORE).
+			this.db.run(
+				"UPDATE OR IGNORE occurrences SET finding_id = ? WHERE finding_id = ?",
+				[toRow.id, fromRow.id],
+			);
+			this.db.run("DELETE FROM occurrences WHERE finding_id = ?", [fromRow.id]);
+			this.db.run(
+				"UPDATE finding_events SET finding_id = ? WHERE finding_id = ?",
+				[toRow.id, fromRow.id],
+			);
+			const kinds = [
+				...new Set([...toRow.observedKinds, ...fromRow.observedKinds]),
+			];
+			const streams = [
+				...new Set([...toRow.observedStreams, ...fromRow.observedStreams]),
+			];
+			this.db.run(
+				`UPDATE findings SET first_seen_at = min(first_seen_at, ?), observed_kinds = ?, observed_streams = ? WHERE id = ?`,
+				[
+					fromRow.firstSeenAt,
+					JSON.stringify(kinds),
+					JSON.stringify(streams),
+					toRow.id,
+				],
+			);
+			this.db.run(
+				"UPDATE findings SET state = 'closed', closed_at = ? WHERE id = ?",
+				[appliedAt, fromRow.id],
+			);
+			this.logEvent({
+				findingId: toRow.id,
+				event: "merged",
+				fromState: toRow.state,
+				toState: toRow.state,
+				at: appliedAt,
+				detail,
+			});
+		});
+		merge();
+		return "merged";
 	}
 }
