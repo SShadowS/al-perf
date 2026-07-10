@@ -756,6 +756,16 @@ export class LifecycleStore {
 		return row?.n ?? 0;
 	}
 
+	/** Newest occurrence's details JSON for a finding (sink body evidence). */
+	getLatestOccurrenceDetails(findingId: number): string | null {
+		const row = this.db
+			.query<{ details: string | null }, [number]>(
+				"SELECT details FROM occurrences WHERE finding_id = ? ORDER BY capture_time DESC, run_id DESC LIMIT 1",
+			)
+			.get(findingId);
+		return row?.details ?? null;
+	}
+
 	logEvent(e: {
 		findingId: number;
 		runId?: number;
