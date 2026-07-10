@@ -879,8 +879,18 @@ export class LifecycleStore {
 				// (which looks the mapping up by fingerprint) would otherwise go
 				// blind and, worse, auto-file a DUPLICATE issue for the same
 				// finding under its new identity.
+				//
+				// OR REPLACE: the to-fingerprint can already have a mapping row
+				// even though no ACTIVE finding holds it (mappings are never
+				// deleted on close) — e.g. a prior finding closed under `to` and
+				// left its issue mapping behind. Without OR REPLACE this UPDATE
+				// would hit the (tenant, sink, fingerprint) PK and throw,
+				// rolling back the whole migration transaction and re-throwing on
+				// every retry forever. The from-row's mapping is the live one
+				// here (its finding is still active), so it should win; the
+				// stale to-row mapping is the one that gets replaced away.
 				this.db.run(
-					"UPDATE sink_issue_map SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
+					"UPDATE OR REPLACE sink_issue_map SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
 					[to, tenant, from],
 				);
 				this.logEvent({

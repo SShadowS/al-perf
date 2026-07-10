@@ -302,6 +302,19 @@ describe("GitHub adapter contract (mocked HTTP)", () => {
 		if (!res.ok) expect(res.retryable).toBe(true);
 	});
 
+	it("classifies a plain 403 (no retry-after, no x-ratelimit-remaining:0) as permanent — auth/permissions, not rate limiting", async () => {
+		const map = memoryIssueMap();
+		const { impl } = mockFetch(403, { message: "Resource not accessible" });
+		const sink = createGitHubSink({
+			repo: "o/r",
+			token: "t0k",
+			fetchImpl: impl,
+		});
+		const res = await sink.deliver(delivery("create-issue"), map);
+		expect(res.ok).toBe(false);
+		if (!res.ok) expect(res.retryable).toBe(false);
+	});
+
 	// Controller-added requirement (crash-mid-drain double-create mitigation):
 	// a create delivery for an already-mapped fingerprint must be treated as
 	// already-delivered, performing ZERO fetch calls.

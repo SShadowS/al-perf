@@ -330,6 +330,55 @@ describe("applyFingerprintMigration", () => {
 		store.close();
 	});
 
+	it("rename survives a stale mapping already parked under the to-fingerprint (PK collision) — the live from-row's mapping wins, and a retry no-ops without throwing", () => {
+		const store = new LifecycleStore(":memory:");
+		store.insertFinding(finding("pattern:fallbackhash00001"));
+		// Stale: left behind by a finding that was previously closed under the
+		// to-fingerprint. Mappings are never deleted on close, so this can
+		// coexist with a live finding under a different fingerprint.
+		store.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: "pattern:stablehash000001",
+			externalId: "99",
+			createdAt: "2026-06-01T00:00:00Z",
+		});
+		// Live: the from-row's own mapping.
+		store.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: "pattern:fallbackhash00001",
+			externalId: "42",
+			createdAt: "2026-07-01T00:00:00Z",
+		});
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("renamed");
+		expect(
+			store.getIssueMapping("t1", "github", "pattern:fallbackhash00001"),
+		).toBeNull();
+		const rekeyed = store.getIssueMapping(
+			"t1",
+			"github",
+			"pattern:stablehash000001",
+		);
+		expect(rekeyed?.externalId).toBe("42"); // live from-row wins; stale row lost
+
+		// Retry (e.g. after a crash before the migration was recorded elsewhere,
+		// or simply re-running the same migration batch) must be a clean no-op,
+		// not a re-throw of the same PK collision.
+		expect(() =>
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).not.toThrow();
+		expect(
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).toBe("no-op");
+		store.close();
+	});
+
 	it("merge repoints the from-row's mapping onto the to-fingerprint when the to-fingerprint has none", () => {
 		const store = new LifecycleStore(":memory:");
 		store.insertFinding(finding("pattern:fallbackhash00001"));
