@@ -47,6 +47,7 @@ import {
 	normalizeAppGuid,
 	normalizeTriggerName,
 } from "../semantic/identity.js";
+import type { SemanticAttribution } from "../types/fused.js";
 
 // ---------------------------------------------------------------------------
 // Version constant (the contract pin)
@@ -323,5 +324,57 @@ export function computeTelemetryFingerprint(
 		value: sha256Hex16(tokens),
 		namespace: "telemetry",
 		algoVersion: FINGERPRINT_ALGO_VERSION,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// routineIdentityFromCorrelation
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the fingerprint routine identity from a correlation outcome.
+ *
+ * ONLY a confident match mints a stable identity:
+ * `status === "matched"` with a SINGLE (string) stableRoutineId.
+ * Everything else — `ambiguous` (never trust a union), `blind-spot`,
+ * no attribution at all (profile-only / cold / unkeyable have no per-method
+ * attribution), or a defensive array-typed id on `matched` — falls back to
+ * the normalized key (appId, canonicalObjectType, objectNumber,
+ * normalizedRoutineName), so profile-only findings are ALWAYS
+ * fingerprintable.
+ *
+ * When a source registers later and the same routine gains a confident
+ * match, the fallback-key finding is linked to its stable identity via
+ * `linkFingerprints(old, new, "identity-upgrade")` — this function never
+ * guesses ahead of that migration.
+ *
+ * @param attribution The method's `SemanticAttribution` from the FusedModel
+ *                    side-map, or `undefined` when fusion is off/absent.
+ * @param method      The method identity fields from `MethodBreakdown`
+ *                    (appId is optional there — absent for System frames).
+ */
+export function routineIdentityFromCorrelation(
+	attribution: SemanticAttribution | undefined,
+	method: {
+		appId?: string;
+		objectType: string;
+		objectId: number;
+		functionName: string;
+	},
+): FingerprintRoutineIdentity {
+	if (
+		attribution?.status === "matched" &&
+		typeof attribution.stableRoutineId === "string"
+	) {
+		return { kind: "stable", stableRoutineId: attribution.stableRoutineId };
+	}
+	return {
+		kind: "fallback",
+		appId: normalizeAppGuid(method.appId),
+		canonicalObjectType: canonicalObjectType(method.objectType),
+		objectNumber: method.objectId,
+		normalizedRoutineName: normalizeTriggerName(
+			method.functionName,
+		).toLowerCase(),
 	};
 }

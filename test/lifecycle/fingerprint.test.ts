@@ -23,8 +23,10 @@ import {
 	computeTelemetryFingerprint,
 	formatFingerprint,
 	normalizeSalientLocation,
+	routineIdentityFromCorrelation,
 	wrapAlsemFingerprint,
 } from "../../src/lifecycle/fingerprint.js";
+import type { SemanticAttribution } from "../../src/types/fused.js";
 
 // ---------------------------------------------------------------------------
 // FINGERPRINT_ALGO_VERSION
@@ -410,5 +412,101 @@ describe("namespace non-collision", () => {
 		);
 		const alsem = wrapAlsemFingerprint(pattern.value);
 		expect(formatFingerprint(alsem)).not.toBe(formatFingerprint(pattern));
+	});
+});
+
+// ---------------------------------------------------------------------------
+// routineIdentityFromCorrelation
+// ---------------------------------------------------------------------------
+
+describe("routineIdentityFromCorrelation", () => {
+	const METHOD = {
+		appId: "437DBF0E-84FF-417A-965D-ED2BB9650972",
+		objectType: "CodeUnit",
+		objectId: 50100,
+		functionName: "ProcessRecords",
+	};
+
+	const SID = "437dbf0e-84ff-417a-965d-ed2bb9650972:Codeunit:50100#a1b2c3d4";
+
+	it("matched with a single stableRoutineId → stable identity", () => {
+		const attr: SemanticAttribution = {
+			status: "matched",
+			findings: [],
+			attributionConfidence: "exact",
+			stableRoutineId: SID,
+		};
+		expect(routineIdentityFromCorrelation(attr, METHOD)).toEqual({
+			kind: "stable",
+			stableRoutineId: SID,
+		});
+	});
+
+	it("ambiguous NEVER mints a stable identity, even though candidate ids are present", () => {
+		const attr: SemanticAttribution = {
+			status: "ambiguous",
+			findings: [],
+			attributionConfidence: "ambiguous",
+			stableRoutineId: [SID, `${SID}ff`],
+		};
+		const id = routineIdentityFromCorrelation(attr, METHOD);
+		expect(id.kind).toBe("fallback");
+	});
+
+	it("blind-spot → fallback identity", () => {
+		const attr: SemanticAttribution = {
+			status: "blind-spot",
+			findings: [],
+			attributionConfidence: "exact",
+			reason: "object Codeunit 50100 was not analyzed",
+		};
+		expect(routineIdentityFromCorrelation(attr, METHOD).kind).toBe("fallback");
+	});
+
+	it("no attribution at all (profile-only, no fusion) → fallback identity", () => {
+		expect(routineIdentityFromCorrelation(undefined, METHOD).kind).toBe(
+			"fallback",
+		);
+	});
+
+	it("matched but stableRoutineId is an array → fallback (defensive)", () => {
+		const attr: SemanticAttribution = {
+			status: "matched",
+			findings: [],
+			attributionConfidence: "exact",
+			stableRoutineId: [SID],
+		};
+		expect(routineIdentityFromCorrelation(attr, METHOD).kind).toBe("fallback");
+	});
+
+	it("fallback fields are fully normalized", () => {
+		const id = routineIdentityFromCorrelation(undefined, {
+			appId: "437DBF0E-84FF-417A-965D-ED2BB9650972",
+			objectType: "CodeUnit",
+			objectId: 50100,
+			functionName: "Sell-to Customer No. - OnValidate",
+		});
+		expect(id).toEqual({
+			kind: "fallback",
+			appId: "437dbf0e84ff417a965ded2bb9650972",
+			canonicalObjectType: "Codeunit",
+			objectNumber: 50100,
+			normalizedRoutineName: "onvalidate",
+		});
+	});
+
+	it("absent appId → fallback with empty appId (profile-only findings stay fingerprintable)", () => {
+		const id = routineIdentityFromCorrelation(undefined, {
+			objectType: "Codeunit",
+			objectId: 50100,
+			functionName: "ProcessRecords",
+		});
+		expect(id).toEqual({
+			kind: "fallback",
+			appId: "",
+			canonicalObjectType: "Codeunit",
+			objectNumber: 50100,
+			normalizedRoutineName: "processrecords",
+		});
 	});
 });
