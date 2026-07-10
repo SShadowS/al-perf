@@ -120,10 +120,25 @@ export interface BaselineStats {
 	latestPriorStamp: string;
 }
 
+/** Median of a numeric array (average of the two middle values when even). */
+function median(xs: number[]): number {
+	const sorted = [...xs].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 1
+		? sorted[mid]
+		: (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 /**
  * Rolling baseline: the last `window` rows strictly before `beforeTime` for
- * the key. The median is computed over the rows sharing the MOST RECENT
- * prior version stamp only — baselines segment at version boundaries.
+ * the key, restricted to the MOST RECENT prior version stamp. Filter-then-
+ * window (not window-then-filter): a first query finds the latest prior
+ * row's version stamp, then a second query pulls the last `window` rows
+ * sharing that stamp. This matters under a version-stamp reappearance (e.g.
+ * a BC point-in-time restore lands back on an older platform version) —
+ * windowing across all stamps first would silently truncate the segment to
+ * whatever recent rows happen to share the reappeared stamp, undercounting
+ * `sameStampCount` and skewing the median toward the wrong rows.
  */
 export function computeBaseline(
 	store: LifecycleStore,
@@ -136,13 +151,22 @@ export function computeBaseline(
 	beforeTime: string,
 	window: number,
 ): BaselineStats | null {
+	const latest = store.db
+		.query<{ version_stamp: string }, [string, string, string, string, string]>(
+			`SELECT version_stamp FROM routine_metrics
+			 WHERE tenant = ? AND stream = ? AND capture_kind = ? AND routine_key = ? AND capture_time < ?
+			 ORDER BY capture_time DESC LIMIT 1`,
+		)
+		.get(key.tenant, key.stream, key.captureKind, key.routineKey, beforeTime);
+	if (!latest) return null;
+	const latestPriorStamp = latest.version_stamp;
 	const rows = store.db
 		.query<
-			{ self_time: number; version_stamp: string },
-			[string, string, string, string, string, number]
+			{ self_time: number },
+			[string, string, string, string, string, string, number]
 		>(
-			`SELECT self_time, version_stamp FROM routine_metrics
-			 WHERE tenant = ? AND stream = ? AND capture_kind = ? AND routine_key = ? AND capture_time < ?
+			`SELECT self_time FROM routine_metrics
+			 WHERE tenant = ? AND stream = ? AND capture_kind = ? AND routine_key = ? AND capture_time < ? AND version_stamp = ?
 			 ORDER BY capture_time DESC LIMIT ?`,
 		)
 		.all(
@@ -151,18 +175,15 @@ export function computeBaseline(
 			key.captureKind,
 			key.routineKey,
 			beforeTime,
+			latestPriorStamp,
 			window,
 		);
-	if (rows.length === 0) return null;
-	const latestPriorStamp = rows[0].version_stamp;
-	const same = rows
-		.filter((r) => r.version_stamp === latestPriorStamp)
-		.map((r) => r.self_time)
-		.sort((a, b) => a - b);
-	const mid = Math.floor(same.length / 2);
-	const median =
-		same.length % 2 === 1 ? same[mid] : (same[mid - 1] + same[mid]) / 2;
-	return { median, sameStampCount: same.length, latestPriorStamp };
+	const selfTimes = rows.map((r) => r.self_time);
+	return {
+		median: median(selfTimes),
+		sameStampCount: selfTimes.length,
+		latestPriorStamp,
+	};
 }
 
 export type MetricClass =
@@ -267,11 +288,6 @@ export function rollupRoutineMetrics(
 				key,
 			) as string[];
 			const selfTimes = bucket.map((r) => r.self_time).sort((a, b) => a - b);
-			const mid = Math.floor(selfTimes.length / 2);
-			const median =
-				selfTimes.length % 2 === 1
-					? selfTimes[mid]
-					: (selfTimes[mid - 1] + selfTimes[mid]) / 2;
 			const mean = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
 			upsert.run(
 				tenant,
@@ -283,7 +299,7 @@ export function rollupRoutineMetrics(
 				selfTimes[0],
 				selfTimes[selfTimes.length - 1],
 				mean(bucket.map((r) => r.self_time)),
-				median,
+				median(bucket.map((r) => r.self_time)),
 				mean(bucket.map((r) => r.total_time)),
 				mean(bucket.map((r) => r.hit_count)),
 			);

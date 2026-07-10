@@ -196,6 +196,52 @@ describe("computeBaseline / classifyObservation", () => {
 		expect(b?.sameStampCount).toBe(3);
 		store.close();
 	});
+
+	it("filters by version segment BEFORE windowing, so a reappeared stamp (e.g. a point-in-time restore) still sees its full same-segment history", () => {
+		const store = new LifecycleStore(":memory:");
+		const a = versionStampFrom({ platform: "25.0" });
+		const b2 = versionStampFrom({ platform: "26.0" });
+		seedRun(store, "p1", "2026-01-01T00:00:00Z", 1_000_000, a);
+		seedRun(store, "p2", "2026-01-02T00:00:00Z", 1_200_000, a);
+		seedRun(store, "p3", "2026-01-03T00:00:00Z", 1_100_000, a);
+		seedRun(store, "p4", "2026-01-04T00:00:00Z", 5_000_000, b2);
+		seedRun(store, "p5", "2026-01-05T00:00:00Z", 5_200_000, b2);
+		// A reappears (e.g. a restore rolled the environment back to platform 25.0).
+		seedRun(store, "p6", "2026-01-06T00:00:00Z", 1_050_000, a);
+		// window=3: a raw window-then-filter would fetch [p6(A), p5(B), p4(B)]
+		// and filter down to just p6 — undercounting the segment.
+		const baseline = computeBaseline(store, KEY, "2026-01-07T00:00:00Z", 3);
+		expect(baseline?.latestPriorStamp).toBe(a);
+		expect(baseline?.sameStampCount).toBe(3);
+		// Median of the 3 most recent A rows (p6, p3, p2): 1_050_000, 1_100_000, 1_200_000.
+		expect(baseline?.median).toBe(1_100_000);
+		store.close();
+	});
+
+	it("computes an even-count same-segment median as the average of the two middle values", () => {
+		const store = new LifecycleStore(":memory:");
+		seedRun(store, "p1", "2026-02-01T00:00:00Z", 1_000_000);
+		seedRun(store, "p2", "2026-02-02T00:00:00Z", 2_000_000);
+		seedRun(store, "p3", "2026-02-03T00:00:00Z", 3_000_000);
+		seedRun(store, "p4", "2026-02-04T00:00:00Z", 4_000_000);
+		const baseline = computeBaseline(store, KEY, "2026-02-05T00:00:00Z", 10);
+		expect(baseline?.sameStampCount).toBe(4);
+		expect(baseline?.median).toBe(2_500_000);
+		store.close();
+	});
+
+	it("classifyObservation returns no-baseline when sameStampCount is below baselineMinRuns", () => {
+		const tooFew = {
+			median: 1_000_000,
+			sameStampCount: 2,
+			latestPriorStamp: "",
+		};
+		// baselineMinRuns is 3 by default; a huge delta must still not classify
+		// as regressed/improved with only 2 same-segment samples.
+		expect(
+			classifyObservation(9_000_000, tooFew, "", DEFAULT_LIFECYCLE_CONFIG),
+		).toBe("no-baseline");
+	});
 });
 
 describe("rollupRoutineMetrics", () => {
