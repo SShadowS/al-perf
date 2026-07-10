@@ -17,9 +17,9 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+	computePatternFingerprint,
 	FINGERPRINT_ALGO_VERSION,
 	type FingerprintRoutineIdentity,
-	computePatternFingerprint,
 	formatFingerprint,
 	normalizeSalientLocation,
 } from "../../src/lifecycle/fingerprint.js";
