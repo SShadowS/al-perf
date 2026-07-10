@@ -4,17 +4,30 @@
  * (states.ts), the store (store.ts), and the baselines (baselines.ts).
  *
  * Invariants enforced here:
- *  - Keyed to CAPTURE time (event time), never processing time.
+ *  - Keyed to CAPTURE time (event time), never processing time. `captureTime`
+ *    is canonicalized to UTC ISO 8601 on entry (`canonicalCaptureTime`) so
+ *    every stored/compared value shares one form — the replay guards below
+ *    depend on plain lexicographic `<=` comparison, which a non-UTC-offset
+ *    input would silently misorder. An unparseable value throws.
  *  - Idempotent per (fingerprint, profileId): a duplicate run is a no-op;
- *    a late-arriving OLD run records occurrences but never drives state.
+ *    a late-arriving OLD run records occurrences but never drives state —
+ *    including against a CLOSED finding. A stale backfill no newer than the
+ *    closed row's `lastEventAt` records an occurrence against that row and
+ *    stops; it does NOT file a fresh finding (filing fresh is itself a state
+ *    mutation, so it needs the same replay guard as reopen/absence).
  *  - Incomplete captures (meta.incompleteInvocations > 0) process the
  *    presence side only: no absence counting, no baseline rows, and their
  *    metric qualifier is forced to "normal".
  *  - Absence compatibility: same stream + previously-observed capture kind
  *    + the run exercised the finding's app (plan D4/D7).
- *  - Every findings-row state mutation (insertFinding/markSeen/markAbsent)
- *    that produces a `finding_events` row is wrapped in `store.db.transaction()`
- *    so the two can never be observed torn (T3 review carry-forward).
+ *  - The ENTIRE per-run write path (recordRun through the absence pass) is
+ *    one enclosing `store.db.transaction()`: a mid-run throw rolls back
+ *    everything, including the `runs` row itself, so the run is never left
+ *    half-processed — a retry (post-crash) re-evaluates cleanly instead of
+ *    being permanently skipped by the duplicate-run guard. The per-finding
+ *    mutation+logEvent pairs below open their own nested transactions —
+ *    bun:sqlite implements nested `db.transaction()` calls as SAVEPOINTs, so
+ *    they compose safely inside the outer one.
  *
  * Fingerprints are CONSUMED, never minted here — patterns carry
  * `fingerprint` from the phase-2 wiring; fusion findings carry the native
@@ -52,7 +65,14 @@ export interface RunMetadata {
 	/** Idempotency key: ingest activityId, or a content hash for CLI files. */
 	profileId: string;
 	captureKind: "sampling" | "instrumentation";
-	/** Profile CAPTURE time (ISO 8601) — the event time all state is keyed to. */
+	/**
+	 * Profile CAPTURE time (ISO 8601) — the event time all state is keyed to.
+	 * Canonical form is UTC (`evaluateRun` runs every value through
+	 * `new Date(captureTime).toISOString()` on entry): a non-UTC-offset
+	 * input is accepted and normalized, but the replay guards' `<=` string
+	 * comparisons only stay correct because every stored value is ALWAYS
+	 * this canonical UTC form. An unparseable value throws.
+	 */
 	captureTime: string;
 	versions?: RunVersions;
 }
@@ -92,6 +112,23 @@ interface CollectedFinding {
 
 /** "FunctionName (ObjectType ObjectId)" — the involvedMethods display form. */
 const INVOLVED_METHOD_RE = /^(.+) \((\w+) (\d+)\)$/;
+
+/**
+ * Canonicalize a capture time to UTC ISO 8601. The event-time replay guards
+ * throughout this module compare timestamps with plain string `<=`, which is
+ * only valid when every value shares one canonical form — a `+02:00`-offset
+ * input would otherwise sort incorrectly against previously-stored
+ * (always-UTC) values without ever raising an error.
+ */
+function canonicalCaptureTime(raw: string): string {
+	const parsed = new Date(raw);
+	if (Number.isNaN(parsed.getTime())) {
+		throw new Error(
+			`evaluateRun: RunMetadata.captureTime "${raw}" is not a parseable timestamp`,
+		);
+	}
+	return parsed.toISOString();
+}
 
 function buildMethodIndex(
 	result: AnalysisResult,
@@ -217,163 +254,222 @@ export function evaluateRun(
 	run: RunMetadata,
 	configPatch?: Partial<LifecycleConfig>,
 ): EvaluationOutcome {
+	run = { ...run, captureTime: canonicalCaptureTime(run.captureTime) };
 	const cfg: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, ...configPatch };
 	const incomplete = (result.meta.incompleteInvocations ?? 0) > 0;
 	const index = buildMethodIndex(result);
 	const exercised = exercisedAppsOf(index.values());
 	const stamp = versionStampFrom(run.versions);
 
-	const rec = store.recordRun({
-		tenant: run.tenant,
-		stream: run.stream,
-		profileId: run.profileId,
-		captureKind: run.captureKind,
-		captureTime: run.captureTime,
-		versionStamp: stamp,
-		incomplete,
-		exercisedApps: exercised,
-	});
-	if (rec.duplicate) {
-		return {
-			runId: rec.runId,
-			skipped: "duplicate-run",
+	// The whole write path is one transaction: a throw anywhere below rolls
+	// back recordRun's `runs` insert too, so a crashed run is never left
+	// half-applied and permanently invisible to retry (the duplicate-run
+	// guard keys off the `runs` row existing at all).
+	const runTx = store.db.transaction((): EvaluationOutcome => {
+		const rec = store.recordRun({
+			tenant: run.tenant,
+			stream: run.stream,
+			profileId: run.profileId,
+			captureKind: run.captureKind,
+			captureTime: run.captureTime,
+			versionStamp: stamp,
 			incomplete,
-			findingsSeen: 0,
-			unfingerprinted: 0,
-			transitions: [],
-		};
-	}
-
-	if (!incomplete) {
-		recordRoutineMetrics(
-			store,
-			{
-				tenant: run.tenant,
-				stream: run.stream,
-				captureKind: run.captureKind,
-				profileId: run.profileId,
-				captureTime: run.captureTime,
-				versionStamp: stamp,
-			},
-			[...index.values()],
-			cfg.routineMetricsPerRunCap,
-		);
-	}
-
-	const { collected, unfingerprinted } = collectFindings(result, index);
-	const transitions: FindingTransitionRecord[] = [];
-	const seenIds = new Set<number>();
-
-	for (const f of collected) {
-		const active = store.getActiveFinding(run.tenant, f.fingerprint);
-		if (!active) {
-			const closed = store.getLatestClosedFinding(run.tenant, f.fingerprint);
-			const event = closed ? "filed-fresh" : "first-seen";
-			const id = store.db.transaction(() => {
-				const newId = store.insertFinding({
-					tenant: run.tenant,
-					fingerprint: f.fingerprint,
-					algoVersion: f.algoVersion,
-					state: "new",
-					source: f.source,
-					patternId: f.patternId,
-					title: f.title,
-					severity: f.severity,
-					appId: f.appId,
-					appName: f.appName,
-					routineKey: f.routineKey,
-					firstSeenAt: run.captureTime,
-					lastSeenAt: run.captureTime,
-					lastEventAt: run.captureTime,
-					observedKinds: [run.captureKind],
-					observedStreams: [run.stream],
-					needsTriage: closed !== null,
-					supersedes: closed?.id,
-				});
-				store.recordOccurrence({
-					findingId: newId,
-					runId: rec.runId,
-					captureTime: run.captureTime,
-					severity: f.severity,
-					impact: f.impact,
-					metricValue: f.metricValue,
-					metricClass: "no-baseline",
-					details: f.details,
-				});
-				store.logEvent({
-					findingId: newId,
-					runId: rec.runId,
-					event,
-					fromState: null,
-					toState: "new",
-					at: run.captureTime,
-					detail: closed
-						? JSON.stringify({ supersedes: closed.id })
-						: undefined,
-				});
-				return newId;
-			})();
-			transitions.push({
-				findingId: id,
-				fingerprint: f.fingerprint,
-				from: null,
-				to: "new",
-				event,
-				metricClass: "no-baseline",
-			});
-			seenIds.add(id);
-			continue;
+			exercisedApps: exercised,
+		});
+		if (rec.duplicate) {
+			return {
+				runId: rec.runId,
+				skipped: "duplicate-run",
+				incomplete,
+				findingsSeen: 0,
+				unfingerprinted: 0,
+				transitions: [],
+			};
 		}
 
-		seenIds.add(active.id);
-		let metricClass: MetricClass = "no-baseline";
-		let qualifier: SeenQualifier = "normal";
-		if (!incomplete && f.routineKey) {
-			const baseline = computeBaseline(
+		if (!incomplete) {
+			recordRoutineMetrics(
 				store,
 				{
 					tenant: run.tenant,
 					stream: run.stream,
 					captureKind: run.captureKind,
-					routineKey: f.routineKey,
+					profileId: run.profileId,
+					captureTime: run.captureTime,
+					versionStamp: stamp,
 				},
-				run.captureTime,
-				cfg.baselineWindow,
+				[...index.values()],
+				cfg.routineMetricsPerRunCap,
 			);
-			metricClass = classifyObservation(f.metricValue, baseline, stamp, cfg);
-			if (metricClass === "regressed") qualifier = "regressed";
-			else if (metricClass === "improved") qualifier = "improved";
 		}
 
-		const inserted = store.recordOccurrence({
-			findingId: active.id,
-			runId: rec.runId,
-			captureTime: run.captureTime,
-			severity: f.severity,
-			impact: f.impact,
-			metricValue: f.metricValue,
-			metricClass,
-			details: f.details,
-		});
-		if (!inserted) continue; // already counted for this profile (idempotency)
-		if (run.captureTime <= active.lastEventAt) continue; // replay guard (D5)
+		const { collected, unfingerprinted } = collectFindings(result, index);
+		const transitions: FindingTransitionRecord[] = [];
+		const seenIds = new Set<number>();
 
-		const res = transition(
-			active.state,
-			{ type: "seen", qualifier },
-			{
-				absenceCount: active.absenceCount,
-				resolveAfterRuns: cfg.resolveAfterRuns,
-			},
-		);
-		if (!res.ok) continue; // seen is always valid; defensive
+		for (const f of collected) {
+			const active = store.getActiveFinding(run.tenant, f.fingerprint);
+			if (!active) {
+				const closed = store.getLatestClosedFinding(run.tenant, f.fingerprint);
 
-		const willLog = res.next !== active.state || res.effects.includes("reopen");
-		if (willLog) {
-			const event = res.effects.includes("reopen")
-				? "reopened"
-				: `seen-${qualifier}`;
-			store.db.transaction(() => {
+				if (closed && run.captureTime <= closed.lastEventAt) {
+					// Stale backfill, no newer than what we already know about this
+					// (now-closed) finding: record history only. Filing a fresh row
+					// here would be a late old run driving state — the same failure
+					// mode the seen/absence replay guards below exist to prevent.
+					store.recordOccurrence({
+						findingId: closed.id,
+						runId: rec.runId,
+						captureTime: run.captureTime,
+						severity: f.severity,
+						impact: f.impact,
+						metricValue: f.metricValue,
+						metricClass: "no-baseline",
+						details: f.details,
+					});
+					continue;
+				}
+
+				const event = closed ? "filed-fresh" : "first-seen";
+				const id = store.db.transaction(() => {
+					const newId = store.insertFinding({
+						tenant: run.tenant,
+						fingerprint: f.fingerprint,
+						algoVersion: f.algoVersion,
+						state: "new",
+						source: f.source,
+						patternId: f.patternId,
+						title: f.title,
+						severity: f.severity,
+						appId: f.appId,
+						appName: f.appName,
+						routineKey: f.routineKey,
+						firstSeenAt: run.captureTime,
+						lastSeenAt: run.captureTime,
+						lastEventAt: run.captureTime,
+						observedKinds: [run.captureKind],
+						observedStreams: [run.stream],
+						needsTriage: closed !== null,
+						supersedes: closed?.id,
+					});
+					store.recordOccurrence({
+						findingId: newId,
+						runId: rec.runId,
+						captureTime: run.captureTime,
+						severity: f.severity,
+						impact: f.impact,
+						metricValue: f.metricValue,
+						metricClass: "no-baseline",
+						details: f.details,
+					});
+					store.logEvent({
+						findingId: newId,
+						runId: rec.runId,
+						event,
+						fromState: null,
+						toState: "new",
+						at: run.captureTime,
+						detail: closed
+							? JSON.stringify({ supersedes: closed.id })
+							: undefined,
+					});
+					return newId;
+				})();
+				transitions.push({
+					findingId: id,
+					fingerprint: f.fingerprint,
+					from: null,
+					to: "new",
+					event,
+					metricClass: "no-baseline",
+				});
+				seenIds.add(id);
+				continue;
+			}
+
+			seenIds.add(active.id);
+			let metricClass: MetricClass = "no-baseline";
+			let qualifier: SeenQualifier = "normal";
+			if (!incomplete && f.routineKey) {
+				const baseline = computeBaseline(
+					store,
+					{
+						tenant: run.tenant,
+						stream: run.stream,
+						captureKind: run.captureKind,
+						routineKey: f.routineKey,
+					},
+					run.captureTime,
+					cfg.baselineWindow,
+				);
+				metricClass = classifyObservation(f.metricValue, baseline, stamp, cfg);
+				if (metricClass === "regressed") qualifier = "regressed";
+				else if (metricClass === "improved") qualifier = "improved";
+			}
+
+			// recordOccurrence is idempotent (INSERT OR IGNORE) but within a
+			// single evaluateRun call runId is always fresh (duplicate runs
+			// return early above) and `collected` is deduped by fingerprint, so
+			// (findingId, runId) can never already exist here — there's nothing
+			// to guard against; the real idempotency check is the duplicate-run
+			// short-circuit above.
+			store.recordOccurrence({
+				findingId: active.id,
+				runId: rec.runId,
+				captureTime: run.captureTime,
+				severity: f.severity,
+				impact: f.impact,
+				metricValue: f.metricValue,
+				metricClass,
+				details: f.details,
+			});
+			if (run.captureTime <= active.lastEventAt) continue; // replay guard (D5)
+
+			const res = transition(
+				active.state,
+				{ type: "seen", qualifier },
+				{
+					absenceCount: active.absenceCount,
+					resolveAfterRuns: cfg.resolveAfterRuns,
+				},
+			);
+			if (!res.ok) continue; // seen is always valid; defensive
+
+			const willLog =
+				res.next !== active.state || res.effects.includes("reopen");
+			if (willLog) {
+				const event = res.effects.includes("reopen")
+					? "reopened"
+					: `seen-${qualifier}`;
+				store.db.transaction(() => {
+					store.markSeen(active.id, {
+						state: res.next,
+						severity: f.severity,
+						captureTime: run.captureTime,
+						captureKind: run.captureKind,
+						stream: run.stream,
+					});
+					store.logEvent({
+						findingId: active.id,
+						runId: rec.runId,
+						event,
+						fromState: active.state,
+						toState: res.next,
+						at: run.captureTime,
+						detail: JSON.stringify({ metricClass }),
+					});
+				})();
+				transitions.push({
+					findingId: active.id,
+					fingerprint: f.fingerprint,
+					from: active.state,
+					to: res.next,
+					event,
+					metricClass,
+				});
+			} else {
+				// No state transition to log — still record the observation's
+				// bookkeeping (resets absence, refreshes last_seen/observed_*).
 				store.markSeen(active.id, {
 					state: res.next,
 					severity: f.severity,
@@ -381,92 +477,67 @@ export function evaluateRun(
 					captureKind: run.captureKind,
 					stream: run.stream,
 				});
-				store.logEvent({
-					findingId: active.id,
-					runId: rec.runId,
-					event,
-					fromState: active.state,
-					toState: res.next,
-					at: run.captureTime,
-					detail: JSON.stringify({ metricClass }),
-				});
-			})();
-			transitions.push({
-				findingId: active.id,
-				fingerprint: f.fingerprint,
-				from: active.state,
-				to: res.next,
-				event,
-				metricClass,
-			});
-		} else {
-			// No state transition to log — still record the observation's
-			// bookkeeping (resets absence, refreshes last_seen/observed_*).
-			store.markSeen(active.id, {
-				state: res.next,
-				severity: f.severity,
-				captureTime: run.captureTime,
-				captureKind: run.captureKind,
-				stream: run.stream,
-			});
+			}
 		}
-	}
 
-	// Absence pass — incomplete captures are excluded from run-counting (D6).
-	if (!incomplete) {
-		for (const row of store.listAbsenceCandidates(run.tenant)) {
-			if (seenIds.has(row.id)) continue;
-			if (run.captureTime <= row.lastEventAt) continue; // replay guard
-			if (!row.observedStreams.includes(run.stream)) continue;
-			if (!row.observedKinds.includes(run.captureKind)) continue;
-			if (!appWasExercised(row, exercised)) continue;
-			const newCount = row.absenceCount + 1;
-			const res = transition(
-				row.state,
-				{ type: "absent" },
-				{ absenceCount: newCount, resolveAfterRuns: cfg.resolveAfterRuns },
-			);
-			if (!res.ok) continue;
+		// Absence pass — incomplete captures are excluded from run-counting (D6).
+		if (!incomplete) {
+			for (const row of store.listAbsenceCandidates(run.tenant)) {
+				if (seenIds.has(row.id)) continue;
+				if (run.captureTime <= row.lastEventAt) continue; // replay guard
+				if (!row.observedStreams.includes(run.stream)) continue;
+				if (!row.observedKinds.includes(run.captureKind)) continue;
+				if (!appWasExercised(row, exercised)) continue;
+				const newCount = row.absenceCount + 1;
+				const res = transition(
+					row.state,
+					{ type: "absent" },
+					{ absenceCount: newCount, resolveAfterRuns: cfg.resolveAfterRuns },
+				);
+				if (!res.ok) continue;
 
-			if (res.next !== row.state) {
-				store.db.transaction(() => {
+				if (res.next !== row.state) {
+					store.db.transaction(() => {
+						store.markAbsent(row.id, {
+							state: res.next,
+							absenceCount: newCount,
+							captureTime: run.captureTime,
+						});
+						store.logEvent({
+							findingId: row.id,
+							runId: rec.runId,
+							event: "resolved",
+							fromState: row.state,
+							toState: res.next,
+							at: run.captureTime,
+							detail: JSON.stringify({ absentRuns: newCount }),
+						});
+					})();
+					transitions.push({
+						findingId: row.id,
+						fingerprint: row.fingerprint,
+						from: row.state,
+						to: res.next,
+						event: "resolved",
+					});
+				} else {
 					store.markAbsent(row.id, {
 						state: res.next,
 						absenceCount: newCount,
 						captureTime: run.captureTime,
 					});
-					store.logEvent({
-						findingId: row.id,
-						runId: rec.runId,
-						event: "resolved",
-						fromState: row.state,
-						toState: res.next,
-						at: run.captureTime,
-						detail: JSON.stringify({ absentRuns: newCount }),
-					});
-				})();
-				transitions.push({
-					findingId: row.id,
-					fingerprint: row.fingerprint,
-					from: row.state,
-					to: res.next,
-					event: "resolved",
-				});
-			} else {
-				store.markAbsent(row.id, {
-					state: res.next,
-					absenceCount: newCount,
-					captureTime: run.captureTime,
-				});
+				}
 			}
 		}
-	}
 
-	return {
-		runId: rec.runId,
-		incomplete,
-		findingsSeen: collected.length,
-		unfingerprinted,
-		transitions,
-	};
+		return {
+			runId: rec.runId,
+			incomplete,
+			findingsSeen: collected.length,
+			unfingerprinted,
+			transitions,
+		};
+	});
+
+	return runTx();
 }

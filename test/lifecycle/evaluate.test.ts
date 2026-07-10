@@ -224,7 +224,8 @@ describe("evaluateRun — absence and resolution", () => {
 		);
 		const row = store.getActiveFinding("t1", FP);
 		expect(row?.state).toBe("resolved");
-		expect(row?.resolvedAt).toBe("2026-07-04T10:00:00Z");
+		// captureTime is canonicalized via Date#toISOString (always .000 millis).
+		expect(row?.resolvedAt).toBe("2026-07-04T10:00:00.000Z");
 		expect(o.transitions[0]?.event).toBe("resolved");
 		store.close();
 	});
@@ -303,6 +304,88 @@ describe("evaluateRun — absence and resolution", () => {
 			CFG,
 		);
 		expect(store.getActiveFinding("t1", FP)?.absenceCount).toBe(0);
+		store.close();
+	});
+
+	it("a finding with no app identity always counts absence (D7 unknown-app fallback)", () => {
+		const store = new LifecycleStore(":memory:");
+		const noAppResult = makeResult({
+			methods: [makeMethod({ appId: undefined, appName: "" })],
+		});
+		evaluateRun(
+			store,
+			noAppResult,
+			makeRun({ profileId: "p1", captureTime: "2026-07-01T10:00:00Z" }),
+			CFG,
+		);
+		evaluateRun(
+			store,
+			noAppResult,
+			makeRun({ profileId: "p2", captureTime: "2026-07-02T10:00:00Z" }),
+			CFG,
+		);
+		// A run reporting a completely unrelated app should still count absence
+		// for a finding whose own app identity is unknown (row.appId === "" and
+		// row.appName === "" both fall through appWasExercised to `true`).
+		const otherApp = makeResult({
+			patterns: [],
+			methods: [
+				makeMethod({
+					appId: "ffff99",
+					appName: "Other App",
+					functionName: "Run",
+					objectId: 60000,
+				}),
+			],
+		});
+		evaluateRun(
+			store,
+			otherApp,
+			makeRun({ profileId: "p3", captureTime: "2026-07-03T10:00:00Z" }),
+			CFG,
+		);
+		expect(store.getActiveFinding("t1", FP)?.absenceCount).toBe(1);
+		store.close();
+	});
+
+	it("appWasExercised falls back to appName when appId is unknown", () => {
+		const store = new LifecycleStore(":memory:");
+		const noIdResult = makeResult({
+			methods: [makeMethod({ appId: undefined, appName: "My App" })],
+		});
+		evaluateRun(
+			store,
+			noIdResult,
+			makeRun({ profileId: "p1", captureTime: "2026-07-01T10:00:00Z" }),
+			CFG,
+		);
+		evaluateRun(
+			store,
+			noIdResult,
+			makeRun({ profileId: "p2", captureTime: "2026-07-02T10:00:00Z" }),
+			CFG,
+		);
+		// Different appId, SAME appName as the finding's row — the name-fallback
+		// arm of appWasExercised (row.appId is "" so the id branch is skipped)
+		// must recognize this as exercising the finding's app.
+		const sameNameDifferentId = makeResult({
+			patterns: [],
+			methods: [
+				makeMethod({
+					appId: "zzzzzz",
+					appName: "My App",
+					functionName: "Other",
+					objectId: 70000,
+				}),
+			],
+		});
+		evaluateRun(
+			store,
+			sameNameDifferentId,
+			makeRun({ profileId: "p3", captureTime: "2026-07-03T10:00:00Z" }),
+			CFG,
+		);
+		expect(store.getActiveFinding("t1", FP)?.absenceCount).toBe(1);
 		store.close();
 	});
 
@@ -417,6 +500,36 @@ describe("evaluateRun — reopen and fresh-filing", () => {
 		store.close();
 	});
 
+	it("a stale backfilled profile arriving no newer than the closed row does NOT file fresh", () => {
+		const store = new LifecycleStore(":memory:");
+		resolveFinding(store);
+		const resolved = store.getActiveFinding("t1", FP);
+		store.updateFindingState(resolved?.id ?? -1, {
+			state: "closed",
+			closedAt: "2026-07-05T00:00:00Z",
+		});
+		const occurrencesBefore = store.countOccurrences(resolved?.id ?? -1);
+		// closed.lastEventAt is still p4's captureTime (2026-07-04T10:00:00Z) —
+		// closing doesn't touch it. A backfilled profile captured BEFORE that
+		// must record history only, never file a fresh active finding.
+		const o = evaluateRun(
+			store,
+			makeResult(),
+			makeRun({ profileId: "p-backfill", captureTime: "2026-07-03T12:00:00Z" }),
+			CFG,
+		);
+		expect(o.transitions).toEqual([]);
+		expect(store.getActiveFinding("t1", FP)).toBeNull();
+		const stillClosed = store.getFinding(resolved?.id ?? -1);
+		expect(stillClosed?.state).toBe("closed");
+		expect(stillClosed?.needsTriage).toBe(false);
+		// History was recorded against the closed row, not silently dropped.
+		expect(store.countOccurrences(resolved?.id ?? -1)).toBe(
+			occurrencesBefore + 1,
+		);
+		store.close();
+	});
+
 	it("a late-arriving OLD run cannot resurrect a resolved finding", () => {
 		const store = new LifecycleStore(":memory:");
 		resolveFinding(store);
@@ -465,6 +578,131 @@ describe("evaluateRun — baseline-driven regression", () => {
 				metricClass: "regressed",
 			}),
 		);
+		store.close();
+	});
+
+	it("incomplete captures force the qualifier to normal even past the regression threshold", () => {
+		const store = new LifecycleStore(":memory:");
+		const at = (d: number) => `2026-07-0${d}T10:00:00Z`;
+		for (let d = 1; d <= 3; d++) {
+			evaluateRun(
+				store,
+				makeResult(),
+				makeRun({ profileId: `p${d}`, captureTime: at(d) }),
+				CFG,
+			);
+		}
+		const slow = makeResult({ methods: [makeMethod({ selfTime: 9_000_000 })] });
+		evaluateRun(
+			store,
+			slow,
+			makeRun({ profileId: "p4", captureTime: at(4) }),
+			CFG,
+		);
+		expect(store.getActiveFinding("t1", FP)?.state).toBe("regressed");
+
+		// Same magnitude blowout, but this capture is incomplete — the metric
+		// qualifier must be forced to "normal" (no baseline consulted at all),
+		// so the finding recovers to "open" via seen-normal, NOT seen-regressed.
+		const incompleteBlowout = makeResult({
+			methods: [makeMethod({ selfTime: 20_000_000 })],
+			incompleteInvocations: 5,
+		});
+		const o = evaluateRun(
+			store,
+			incompleteBlowout,
+			makeRun({ profileId: "p5", captureTime: at(5) }),
+			CFG,
+		);
+		expect(o.incomplete).toBe(true);
+		expect(o.transitions[0]).toEqual(
+			expect.objectContaining({
+				to: "open",
+				event: "seen-normal",
+				metricClass: "no-baseline",
+			}),
+		);
+		store.close();
+	});
+});
+
+describe("evaluateRun — transactional atomicity", () => {
+	it("a mid-run throw rolls back the WHOLE run — no run row, no finding rows", () => {
+		const store = new LifecycleStore(":memory:");
+		const p1 = makePattern({ fingerprint: "pattern:aaaa000000000001" });
+		const p2 = makePattern({
+			id: "modify-in-loop",
+			fingerprint: "pattern:bbbb000000000002",
+			involvedMethods: ["OtherMethod (codeunit 50200)"],
+		});
+		const methods = [
+			makeMethod(),
+			makeMethod({ functionName: "OtherMethod", objectId: 50200 }),
+		];
+		const result = makeResult({ patterns: [p1, p2], methods });
+
+		// Force the SECOND finding's logEvent call to throw, simulating a
+		// mid-run crash after the first finding's insert has already run
+		// (but not yet durably committed — it's all one outer transaction).
+		let calls = 0;
+		const originalLogEvent = store.logEvent.bind(store);
+		store.logEvent = (e) => {
+			calls++;
+			if (calls === 2) throw new Error("simulated crash");
+			return originalLogEvent(e);
+		};
+
+		expect(() =>
+			evaluateRun(store, result, makeRun({ profileId: "px" }), CFG),
+		).toThrow("simulated crash");
+
+		// Nothing from this run persisted: not the run row, not either finding.
+		expect(store.getRun("t1", "px")).toBeNull();
+		expect(store.getActiveFinding("t1", "pattern:aaaa000000000001")).toBeNull();
+		expect(store.getActiveFinding("t1", "pattern:bbbb000000000002")).toBeNull();
+		store.close();
+	});
+});
+
+describe("evaluateRun — captureTime canonicalization", () => {
+	it("a non-UTC offset input is canonicalized and compares identically to its UTC equivalent", () => {
+		const store = new LifecycleStore(":memory:");
+		// 08:00+02:00 == 06:00Z
+		evaluateRun(
+			store,
+			makeResult(),
+			makeRun({ profileId: "p1", captureTime: "2026-07-01T08:00:00+02:00" }),
+			CFG,
+		);
+		const row = store.getActiveFinding("t1", FP);
+		expect(row?.firstSeenAt).toBe("2026-07-01T06:00:00.000Z");
+
+		const o = evaluateRun(
+			store,
+			makeResult(),
+			makeRun({ profileId: "p2", captureTime: "2026-07-02T06:00:00Z" }),
+			CFG,
+		);
+		expect(o.transitions[0]).toEqual(
+			expect.objectContaining({
+				from: "new",
+				to: "open",
+				event: "seen-normal",
+			}),
+		);
+		store.close();
+	});
+
+	it("rejects an unparseable captureTime with a clear error", () => {
+		const store = new LifecycleStore(":memory:");
+		expect(() =>
+			evaluateRun(
+				store,
+				makeResult(),
+				makeRun({ captureTime: "not-a-date" }),
+				CFG,
+			),
+		).toThrow(/captureTime/);
 		store.close();
 	});
 });
