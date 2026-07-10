@@ -101,6 +101,35 @@ describe("detectHighHitCount on ir-json (exact fan-out)", () => {
 		const profile = processProfile(parseIrJson(makeDoc(invs)));
 		expect(detectHighHitCount(profile)).toHaveLength(0);
 	});
+
+	test("mixed population: ratio uses only calling parent invocations, evidence discloses total parent invocations", () => {
+		// 5 RunBatch invocations total, but only 2 of them call GetLine (11 times each).
+		// Ratio must be 22 / 2 = 11x (calling invocations only), not 22 / 5 = 4.4x
+		// (which would dilute the ratio below threshold and hide the hotspot).
+		const invs: IrJsonInvocation[] = [
+			makeInvocation(0, "RunBatch", 50200, null),
+			makeInvocation(1, "RunBatch", 50200, null),
+			makeInvocation(2, "RunBatch", 50200, null),
+			makeInvocation(3, "RunBatch", 50200, null),
+			makeInvocation(4, "RunBatch", 50200, null),
+		];
+		let index = 5;
+		for (let i = 0; i < 11; i++) {
+			invs.push(makeInvocation(index++, "GetLine", 50201, 0));
+		}
+		for (let i = 0; i < 11; i++) {
+			invs.push(makeInvocation(index++, "GetLine", 50201, 1));
+		}
+		const profile = processProfile(parseIrJson(makeDoc(invs)));
+		const patterns = detectHighHitCount(profile);
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].description).toContain("exactly 22 times");
+		expect(patterns[0].description).toContain("2 calling invocation");
+		expect(patterns[0].description).toContain("ran 5 time(s) total");
+		expect(patterns[0].evidence).toContain("2 calling invocation");
+		expect(patterns[0].evidence).toContain("5 total invocation");
+		expect(patterns[0].evidence).toContain("11.0x");
+	});
 });
 
 describe("detectRepeatedSiblings on ir-json (exact counts)", () => {

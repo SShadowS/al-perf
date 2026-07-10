@@ -86,6 +86,22 @@ export const detectHighHitCount: PatternDetector = (
 	return patterns;
 };
 
+/**
+ * Compute exact call-count amplification on ir-json profiles, per (parent
+ * method -> child method) edge.
+ *
+ * Denominator semantic: the fan-out ratio is `childCount / callingParentCount`,
+ * where `callingParentCount` counts only the DISTINCT parent invocations
+ * that made at least one call to the child on this edge — NOT the total
+ * number of invocations of the parent method. This is deliberate: a parent
+ * method that runs 500 times but only calls the child from 2 of those
+ * invocations (11x each) is still an N+1 hotspot at those 2 call sites.
+ * Averaging over the other 498 invocations that never touch the child would
+ * dilute the ratio below the 10x threshold and hide the pattern. The total
+ * invocation count of the parent method is tracked separately and disclosed
+ * in the description/evidence text so the wording never implies the ratio
+ * is a global average — it is a per-calling-invocation fan-out.
+ */
 function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
 	interface FanOutEdge {
 		childCount: number;
@@ -95,6 +111,13 @@ function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
 		impact: number;
 	}
 	const edges = new Map<string, FanOutEdge>();
+	const methodTotalCounts = new Map<string, number>();
+
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node)) continue;
+		const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		methodTotalCounts.set(key, (methodTotalCounts.get(key) ?? 0) + 1);
+	}
 
 	for (const node of profile.allNodes) {
 		if (isIdleNode(node) || !node.parent) continue;
@@ -119,19 +142,23 @@ function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
 
 	const patterns: DetectedPattern[] = [];
 	for (const edge of edges.values()) {
-		const ratio = edge.childCount / edge.parentIds.size;
+		const callingParentCount = edge.parentIds.size;
+		const ratio = edge.childCount / callingParentCount;
 		if (ratio > 10) {
+			const parentKey = `${edge.parent.callFrame.functionName}:${edge.parent.applicationDefinition.objectId}`;
+			const totalParentCount =
+				methodTotalCounts.get(parentKey) ?? callingParentCount;
 			patterns.push({
 				id: "high-hit-count",
 				severity: "warning",
 				title: `${edge.child.callFrame.functionName} has disproportionate invocation count`,
-				description: `${formatMethodRef(edge.child)} was invoked exactly ${edge.childCount} times across ${edge.parentIds.size} invocation(s) of ${formatMethodRef(edge.parent)} (${ratio.toFixed(1)}x per call).`,
+				description: `${formatMethodRef(edge.child)} was invoked exactly ${edge.childCount} times across ${callingParentCount} calling invocation(s) of ${formatMethodRef(edge.parent)} (${edge.parent.callFrame.functionName} ran ${totalParentCount} time(s) total) — ${ratio.toFixed(1)}x fan-out per calling invocation.`,
 				impact: edge.impact,
 				involvedMethods: [
 					formatMethodRef(edge.child),
 					formatMethodRef(edge.parent),
 				],
-				evidence: `exact invocation counts: ${edge.childCount} calls / ${edge.parentIds.size} parent invocations = ${ratio.toFixed(1)}x (threshold: 10x)`,
+				evidence: `exact invocation counts: ${edge.childCount} calls / ${callingParentCount} calling invocation(s) of ${totalParentCount} total invocation(s) of ${formatMethodRef(edge.parent)} = ${ratio.toFixed(1)}x fan-out per calling invocation (threshold: 10x)`,
 				suggestion:
 					"High invocation count suggests this method is called very frequently. Check if callers can batch operations or if an event subscriber is firing too often.",
 			});
