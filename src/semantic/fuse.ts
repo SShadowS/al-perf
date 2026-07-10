@@ -10,6 +10,7 @@
  * without invoking the engine at all.
  */
 
+import { fingerprintPatterns } from "../lifecycle/wire.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { FusedModel } from "../types/fused.js";
 import type { DetectedPattern } from "../types/patterns.js";
@@ -39,11 +40,16 @@ export interface FuseOptions {
 	 */
 	fusion?: boolean;
 	/**
-	 * Runtime-detected patterns from al-perf's own detectors (P3.1 corroboration).
-	 * When provided, `fuseProfile` calls `corroborate` after `correlate` to enrich
-	 * matched attributions with `corroboratingPatterns` for any runtime pattern that
-	 * is anchored to that routine and corroborates one of its al-sem findings.
-	 * When absent (or empty), corroboration is skipped (graceful no-op).
+	 * Runtime-detected patterns from al-perf's own detectors.
+	 * When provided, `fuseProfile`:
+	 *  1. calls `corroborate` after `correlate` to enrich matched attributions
+	 *     with `corroboratingPatterns` (P3.1), and
+	 *  2. re-mints each pattern's `fingerprint` IN PLACE with the correlation
+	 *     attributions (lifecycle phase-2 identity upgrade): anchors with a
+	 *     confident alsem match move from the fallback key to their stable
+	 *     routine identity. Every fusion path passes the SAME array its result
+	 *     carries, so upgraded identities flow to the output.
+	 * When absent (or empty), both steps are skipped (graceful no-op).
 	 */
 	patterns?: DetectedPattern[];
 }
@@ -102,6 +108,14 @@ export async function fuseProfile(
 	// Done here (not in correlate.ts) so correlate stays pure and callers that
 	// build FusedModel directly in tests remain valid.
 	fused.allRoutines = engine.routines;
+
+	// Lifecycle phase-2 wiring: re-mint pattern fingerprints with the
+	// correlation attributions, upgrading confidently-matched anchors from
+	// fallback keys to stable routine identities (identity-upgrade semantics —
+	// see routineIdentityFromCorrelation).
+	if (opts?.patterns && opts.patterns.length > 0) {
+		fingerprintPatterns(opts.patterns, methods, fused.attributions);
+	}
 
 	return fused;
 }
