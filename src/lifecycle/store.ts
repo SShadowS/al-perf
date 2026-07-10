@@ -9,7 +9,7 @@
  * WAL mode. ":memory:" supported for tests.
  *
  * The outbox table is created in v1 but only consumed by the GitHub-sink
- * plan (2026-07-10-github-sink.md), which appends MIGRATIONS[1] (v2).
+ * plan (2026-07-10-github-sink.md), which appends LIFECYCLE_MIGRATIONS[1] (v2).
  */
 
 import { Database } from "bun:sqlite";
@@ -22,10 +22,11 @@ import type { FindingState } from "./states.js";
 export { LIFECYCLE_SCHEMA_VERSION };
 
 /**
- * MIGRATIONS[n] upgrades user_version n → n+1. Applied in order on open.
- * v1 (index 0) is the full initial schema.
+ * LIFECYCLE_MIGRATIONS[n] upgrades user_version n → n+1. Applied in order on
+ * open. v1 (index 0) is the full initial schema. Exported for the upgrade-
+ * path tests ONLY — never mutate at runtime.
  */
-const MIGRATIONS: string[][] = [
+export const LIFECYCLE_MIGRATIONS: string[][] = [
 	[
 		`CREATE TABLE IF NOT EXISTS findings (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +147,19 @@ const MIGRATIONS: string[][] = [
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(sink, status, next_attempt_at)`,
 	],
+	[
+		`CREATE TABLE IF NOT EXISTS sink_issue_map (
+			tenant TEXT NOT NULL,
+			sink TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			external_id TEXT NOT NULL,
+			external_url TEXT,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (tenant, sink, fingerprint)
+		)`,
+		`ALTER TABLE finding_events ADD COLUMN sink_processed INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_events_unprocessed ON finding_events(sink_processed, id)`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -233,6 +247,41 @@ export interface NewFinding {
 	supersedes?: number;
 }
 
+export interface SinkIssueMapping {
+	tenant: string;
+	sink: string;
+	fingerprint: string;
+	externalId: string;
+	externalUrl: string | null;
+}
+
+export interface OutboxRow {
+	id: number;
+	tenant: string;
+	sink: string;
+	kind: string;
+	findingId: number;
+	payload: string;
+	dedupeKey: string;
+	status: "pending" | "delivered" | "dead";
+	attempts: number;
+	nextAttemptAt: string;
+	lastError: string | null;
+	createdAt: string;
+	deliveredAt: string | null;
+}
+
+export interface UnprocessedEvent {
+	id: number;
+	findingId: number;
+	runId: number | null;
+	event: string;
+	fromState: string | null;
+	toState: string;
+	at: string;
+	detail: string | null;
+}
+
 export class LifecycleStore {
 	readonly db: Database;
 
@@ -251,9 +300,9 @@ export class LifecycleStore {
 			.query<{ user_version: number }, []>("PRAGMA user_version")
 			.get();
 		let version = row?.user_version ?? 0;
-		while (version < MIGRATIONS.length) {
+		while (version < LIFECYCLE_MIGRATIONS.length) {
 			const apply = this.db.transaction(() => {
-				for (const stmt of MIGRATIONS[version]) {
+				for (const stmt of LIFECYCLE_MIGRATIONS[version]) {
 					this.db.run(stmt);
 				}
 				this.db.run(`PRAGMA user_version = ${version + 1}`);
@@ -265,6 +314,164 @@ export class LifecycleStore {
 
 	close(): void {
 		this.db.close();
+	}
+
+	getIssueMapping(
+		tenant: string,
+		sink: string,
+		fingerprint: string,
+	): SinkIssueMapping | null {
+		const row = this.db
+			.query<Record<string, unknown>, [string, string, string]>(
+				"SELECT * FROM sink_issue_map WHERE tenant = ? AND sink = ? AND fingerprint = ?",
+			)
+			.get(tenant, sink, fingerprint);
+		if (!row) return null;
+		return {
+			tenant: row.tenant as string,
+			sink: row.sink as string,
+			fingerprint: row.fingerprint as string,
+			externalId: row.external_id as string,
+			externalUrl: (row.external_url as string | null) ?? null,
+		};
+	}
+
+	putIssueMapping(m: {
+		tenant: string;
+		sink: string;
+		fingerprint: string;
+		externalId: string;
+		externalUrl?: string;
+		createdAt: string;
+	}): void {
+		this.db.run(
+			`INSERT OR REPLACE INTO sink_issue_map (tenant, sink, fingerprint, external_id, external_url, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			[
+				m.tenant,
+				m.sink,
+				m.fingerprint,
+				m.externalId,
+				m.externalUrl ?? null,
+				m.createdAt,
+			],
+		);
+	}
+
+	enqueueOutbox(row: {
+		tenant: string;
+		sink: string;
+		kind: string;
+		findingId: number;
+		payload: string;
+		dedupeKey: string;
+		nextAttemptAt: string;
+		createdAt: string;
+	}): boolean {
+		const res = this.db.run(
+			`INSERT OR IGNORE INTO outbox (tenant, sink, kind, finding_id, payload, dedupe_key, next_attempt_at, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				row.tenant,
+				row.sink,
+				row.kind,
+				row.findingId,
+				row.payload,
+				row.dedupeKey,
+				row.nextAttemptAt,
+				row.createdAt,
+			],
+		);
+		return res.changes > 0;
+	}
+
+	private rowToOutbox(row: Record<string, unknown>): OutboxRow {
+		return {
+			id: row.id as number,
+			tenant: row.tenant as string,
+			sink: row.sink as string,
+			kind: row.kind as string,
+			findingId: row.finding_id as number,
+			payload: row.payload as string,
+			dedupeKey: row.dedupe_key as string,
+			status: row.status as OutboxRow["status"],
+			attempts: row.attempts as number,
+			nextAttemptAt: row.next_attempt_at as string,
+			lastError: (row.last_error as string | null) ?? null,
+			createdAt: row.created_at as string,
+			deliveredAt: (row.delivered_at as string | null) ?? null,
+		};
+	}
+
+	listDueOutbox(sink: string, now: string, limit: number): OutboxRow[] {
+		return this.db
+			.query<Record<string, unknown>, [string, string, number]>(
+				`SELECT * FROM outbox WHERE sink = ? AND status = 'pending' AND next_attempt_at <= ?
+				 ORDER BY id LIMIT ?`,
+			)
+			.all(sink, now, limit)
+			.map((r) => this.rowToOutbox(r));
+	}
+
+	listPendingOutbox(sink: string, kind?: string): OutboxRow[] {
+		const sql = kind
+			? "SELECT * FROM outbox WHERE sink = ? AND status = 'pending' AND kind = ? ORDER BY id"
+			: "SELECT * FROM outbox WHERE sink = ? AND status = 'pending' ORDER BY id";
+		const params = kind ? [sink, kind] : [sink];
+		return this.db
+			.query<Record<string, unknown>, string[]>(sql)
+			.all(...params)
+			.map((r) => this.rowToOutbox(r));
+	}
+
+	markOutboxDelivered(id: number, at: string, note?: string): void {
+		this.db.run(
+			"UPDATE outbox SET status = 'delivered', delivered_at = ?, last_error = coalesce(?, last_error) WHERE id = ?",
+			[at, note ?? null, id],
+		);
+	}
+
+	markOutboxRetry(id: number, error: string, nextAttemptAt: string): void {
+		this.db.run(
+			"UPDATE outbox SET attempts = attempts + 1, last_error = ?, next_attempt_at = ? WHERE id = ?",
+			[error, nextAttemptAt, id],
+		);
+	}
+
+	markOutboxDead(id: number, error: string): void {
+		this.db.run(
+			"UPDATE outbox SET status = 'dead', attempts = attempts + 1, last_error = ? WHERE id = ?",
+			[error, id],
+		);
+	}
+
+	listUnprocessedEvents(limit = 500): UnprocessedEvent[] {
+		return this.db
+			.query<Record<string, unknown>, [number]>(
+				"SELECT * FROM finding_events WHERE sink_processed = 0 ORDER BY id LIMIT ?",
+			)
+			.all(limit)
+			.map((row) => ({
+				id: row.id as number,
+				findingId: row.finding_id as number,
+				runId: (row.run_id as number | null) ?? null,
+				event: row.event as string,
+				fromState: (row.from_state as string | null) ?? null,
+				toState: row.to_state as string,
+				at: row.at as string,
+				detail: (row.detail as string | null) ?? null,
+			}));
+	}
+
+	markEventsProcessed(ids: number[]): void {
+		if (ids.length === 0) return;
+		const mark = this.db.prepare(
+			"UPDATE finding_events SET sink_processed = 1 WHERE id = ?",
+		);
+		const tx = this.db.transaction(() => {
+			for (const id of ids) mark.run(id);
+		});
+		tx();
 	}
 
 	recordRun(run: RunInput): { runId: number; duplicate: boolean } {
