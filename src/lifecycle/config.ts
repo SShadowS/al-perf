@@ -34,5 +34,5 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 	rawMetricsRetentionDays: 90,
 };
 
-/** Current lifecycle SQLite schema version (PRAGMA user_version target). See store.ts MIGRATIONS. */
-export const LIFECYCLE_SCHEMA_VERSION = 1;
+/** Current lifecycle SQLite schema version (PRAGMA user_version target). See store.ts LIFECYCLE_MIGRATIONS. */
+export const LIFECYCLE_SCHEMA_VERSION = 2;

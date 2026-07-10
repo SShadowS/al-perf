@@ -106,6 +106,16 @@ export {
 	routineIdentityFromCorrelation,
 	wrapAlsemFingerprint,
 } from "./lifecycle/fingerprint.js";
+export { createGitHubSink } from "./lifecycle/sinks/github.js";
+export { drainOutbox } from "./lifecycle/sinks/outbox.js";
+export { processEventsForSinks } from "./lifecycle/sinks/triggers.js";
+export {
+	type LifecycleSinksConfig,
+	loadSinksConfig,
+	type SinkAdapter,
+	type SinkDelivery,
+	type SinkResult,
+} from "./lifecycle/sinks/types.js";
 export { LifecycleStore } from "./lifecycle/store.js";
 export type { PatternAnchor } from "./lifecycle/wire.js";
 export {

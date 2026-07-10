@@ -91,6 +91,7 @@ describe("createLifecycleCommand", () => {
 			"close",
 			"triage",
 			"maintain",
+			"sync",
 		]) {
 			expect(subs).toContain(s);
 		}
