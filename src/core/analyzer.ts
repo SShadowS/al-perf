@@ -1,5 +1,7 @@
 import { resolve } from "path";
 import { config } from "../config.js";
+import { FINGERPRINT_ALGO_VERSION } from "../lifecycle/fingerprint.js";
+import { fingerprintPatterns } from "../lifecycle/wire.js";
 import type {
 	AnalysisResult,
 	ComparisonResult,
@@ -302,6 +304,11 @@ export async function analyzeProfile(
 
 	const nonIdleMethods = methods.filter((m) => !isIdle(m));
 	options?.onAllMethods?.(nonIdleMethods);
+
+	// Lifecycle phase-2 wiring: mint a fingerprint for every detected pattern.
+	// No fusion has run at this point, so identities use the fallback key —
+	// fuseProfile re-mints with stable identities when a workspace fuses later.
+	fingerprintPatterns(patterns, nonIdleMethods);
 	const topMethod =
 		nonIdleMethods.length > 0 && nonIdleMethods[0].selfTimePercent > 0
 			? {
@@ -357,6 +364,7 @@ export async function analyzeProfile(
 			builtinSelfTime: builtinSelfTime > 0 ? builtinSelfTime : undefined,
 			confidenceScore: confidence.score,
 			confidenceFactors: confidence.factors,
+			fingerprintAlgoVersion: FINGERPRINT_ALGO_VERSION,
 			analyzedAt: new Date().toISOString(),
 		},
 		summary: {

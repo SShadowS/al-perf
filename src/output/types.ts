@@ -42,6 +42,12 @@ export interface AnalysisResult {
 			duration: { value: number; score: number };
 			incompleteMeasurements: { value: number; score: number };
 		};
+		/**
+		 * The fingerprint algorithm version used to mint `patterns[].fingerprint`
+		 * (and fusion finding fingerprints). Mirrors FINGERPRINT_ALGO_VERSION at
+		 * analysis time (umbrella spec §4 — stored with every finding).
+		 */
+		fingerprintAlgoVersion?: number;
 		analyzedAt: string;
 	};
 	summary: {

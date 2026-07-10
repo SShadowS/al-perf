@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { analyzeProfile, compareProfiles } from "../../src/core/analyzer.js";
+import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -212,5 +213,36 @@ describe("compareProfiles", () => {
 				result.regressions[i].deltaSelfTime,
 			);
 		}
+	});
+});
+
+describe("analyzeProfile fingerprint wiring", () => {
+	test("every detected pattern carries a canonical pattern: fingerprint", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/recursive-profile.alcpuprofile`,
+		);
+		expect(result.patterns.length).toBeGreaterThan(0);
+		for (const p of result.patterns) {
+			expect(p.fingerprint).toMatch(/^pattern:[0-9a-f]{16}$/);
+		}
+	});
+
+	test("fingerprints are stable across two runs on the same profile", async () => {
+		const a = await analyzeProfile(
+			`${FIXTURES}/recursive-profile.alcpuprofile`,
+		);
+		const b = await analyzeProfile(
+			`${FIXTURES}/recursive-profile.alcpuprofile`,
+		);
+		expect(a.patterns.map((p) => p.fingerprint)).toEqual(
+			b.patterns.map((p) => p.fingerprint),
+		);
+	});
+
+	test("meta carries the fingerprint algorithm version", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.meta.fingerprintAlgoVersion).toBe(FINGERPRINT_ALGO_VERSION);
 	});
 });

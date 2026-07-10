@@ -46,6 +46,17 @@ describe("formatAnalysisJson", () => {
 		const parsed = JSON.parse(output);
 		expect(parsed.explanation).toBeUndefined();
 	});
+
+	test("passes pattern fingerprints and fingerprintAlgoVersion through verbatim", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/recursive-profile.alcpuprofile`,
+		);
+		expect(result.patterns.length).toBeGreaterThan(0);
+		const parsed = JSON.parse(formatAnalysisJson(result));
+		expect(parsed.meta.fingerprintAlgoVersion).toBe(1);
+		expect(parsed.patterns[0].fingerprint).toBe(result.patterns[0].fingerprint);
+		expect(parsed.patterns[0].fingerprint).toMatch(/^pattern:[0-9a-f]{16}$/);
+	});
 });
 
 describe("formatComparisonJson", () => {
