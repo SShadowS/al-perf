@@ -66,6 +66,13 @@ describe("schema v2", () => {
 				`INSERT INTO findings (tenant, fingerprint, algo_version, state, source, pattern_id, title, severity, first_seen_at, last_seen_at, last_event_at)
 				 VALUES ('t1', 'pattern:v1row', 1, 'open', 'pattern', 'x', 'x', 'info', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
 			);
+			// A finding_events row that predates the v2 ALTER TABLE — proves the
+			// sink_processed backfill applies to rows that already existed, not
+			// just ones inserted after migration.
+			v1.run(
+				`INSERT INTO finding_events (finding_id, event, from_state, to_state, at)
+				 VALUES (1, 'pre-migration-event', NULL, 'open', '2026-01-01T00:00:00Z')`,
+			);
 			v1.close();
 
 			const store = new LifecycleStore(dbPath);
@@ -75,7 +82,21 @@ describe("schema v2", () => {
 					.get()?.user_version,
 			).toBe(2);
 			expect(store.getActiveFinding("t1", "pattern:v1row")).not.toBeNull();
-			// New column exists and defaults to unprocessed.
+
+			// The pre-existing event's backfilled sink_processed reads back as 0
+			// (an integer), not NULL — a NULL would fail the "= 0" comparison in
+			// listUnprocessedEvents' WHERE clause and silently vanish from the
+			// list instead of erroring, so both checks matter.
+			const afterUpgrade = store.listUnprocessedEvents();
+			expect(afterUpgrade.map((e) => e.event)).toContain("pre-migration-event");
+			const rawBackfill = store.db
+				.query<{ sink_processed: number }, [string]>(
+					"SELECT sink_processed FROM finding_events WHERE event = ?",
+				)
+				.get("pre-migration-event");
+			expect(rawBackfill?.sink_processed).toBe(0);
+
+			// New column also defaults to unprocessed for rows inserted after migration.
 			store.logEvent({
 				findingId: store.getActiveFinding("t1", "pattern:v1row")?.id ?? -1,
 				event: "seen-normal",
@@ -83,7 +104,7 @@ describe("schema v2", () => {
 				toState: "open",
 				at: "2026-07-01T00:00:00Z",
 			});
-			expect(store.listUnprocessedEvents()).toHaveLength(1);
+			expect(store.listUnprocessedEvents()).toHaveLength(2);
 			store.close();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
