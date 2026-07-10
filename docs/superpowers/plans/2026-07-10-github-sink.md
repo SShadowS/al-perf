@@ -41,6 +41,7 @@
 6. **Rate limiting:** sequential delivery with `minMillisBetweenCalls` (default 1000) between calls and `maxPerDrain` (default 20) per sync — deliberately far under GitHub's secondary rate limits. The sleep function is injectable so tests run instantly.
 
 7. **Escaping is owned by the adapter** (the last hand to touch the text): payloads carry RAW structured finding fields; `renderIssueBody` escapes everything interpolated outside fenced blocks (`& < > @ \` #` → HTML entities, so @mentions and issue-reference syntax are neutral) and puts free-form evidence inside a dynamic fence longer than any backtick run in the content (no fence breakout). Titles are escaped and truncated to 120 chars. Label allow-listing happens in the triggers (before payload construction).
+   - **Review addendum:** the escape set is 9 characters — `& < > # @ \` [ ] !` — not the original 6; review found the original list left `[ ] !` unescaped, letting an attacker-controlled title/appName render a live markdown link (`[text](url)`) or image embed (`![alt](url)`) as a phishing/tracking vector.
 
 8. **Config file** `.al-perf/lifecycle.config.json` (CLI `--config` overrides). Missing file → `lifecycle sync` exits 1 pointing at the gh-recipe doc (the zero-custody alternative is the documented default posture).
 

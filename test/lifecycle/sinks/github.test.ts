@@ -112,6 +112,30 @@ describe("escaping (injection tests)", () => {
 		const wrappingFence = body.match(/`{4,}/);
 		expect(wrappingFence).not.toBeNull();
 	});
+
+	it("escapeInline neutralizes markdown link injection", () => {
+		const out = escapeInline("[Click to verify](https://evil.phish/x)");
+		expect(out).not.toContain("[Click to verify](https://evil.phish/x)");
+		expect(out).toContain("&#91;Click to verify&#93;");
+	});
+
+	it("escapeInline neutralizes markdown image injection", () => {
+		const out = escapeInline("![pixel](https://evil.example/track.png)");
+		expect(out).not.toContain("![pixel](https://evil.example/track.png)");
+		expect(out).toContain("&#33;&#91;pixel&#93;");
+	});
+
+	it("renderTitle and renderIssueBody carry no live markdown link/image syntax from finding text", () => {
+		const hostile = ctx({
+			title: "[Click to verify](https://evil.phish/x)",
+			appName: "![pixel](https://evil.example/track.png)",
+		});
+		const title = renderTitle(hostile);
+		expect(title).not.toContain("[Click to verify](https://evil.phish/x)");
+		const body = renderIssueBody(hostile);
+		expect(body).not.toContain("[Click to verify](");
+		expect(body).not.toContain("![pixel](");
+	});
 });
 
 describe("GitHub adapter contract (mocked HTTP)", () => {
@@ -258,6 +282,23 @@ describe("GitHub adapter contract (mocked HTTP)", () => {
 			fetchImpl: throwing,
 		});
 		res = await sink.deliver(delivery("create-issue"), map);
+		if (!res.ok) expect(res.retryable).toBe(true);
+	});
+
+	it("classifies 403 with retry-after but x-ratelimit-remaining unset as retryable (secondary rate limit)", async () => {
+		const map = memoryIssueMap();
+		const { impl } = mockFetch(
+			403,
+			{ message: "secondary rate limit" },
+			{ "retry-after": "30" },
+		);
+		const sink = createGitHubSink({
+			repo: "o/r",
+			token: "t0k",
+			fetchImpl: impl,
+		});
+		const res = await sink.deliver(delivery("create-issue"), map);
+		expect(res.ok).toBe(false);
 		if (!res.ok) expect(res.retryable).toBe(true);
 	});
 

@@ -93,6 +93,14 @@ function collapseCreates(
 			const payloads = rows.map(
 				(r) => JSON.parse(r.payload) as SinkDeliveryPayload,
 			);
+			// INVARIANT (cross-referenced in github.ts's create-issue/create-epic
+			// pre-check): `finding` is deliberately payloads[0].finding, the SAME
+			// finding that also appears as children[0] below (children maps every
+			// payload, including the first). The adapter's crash-mid-drain guard
+			// relies on this aliasing — it only checks the mapping for
+			// `finding.fingerprint` and treats that as covering the whole epic. If
+			// this ever changes to a synthetic/non-aliased primary finding, that
+			// guard must change too.
 			const epic: SinkDeliveryPayload = {
 				finding: payloads[0].finding,
 				labels: payloads[0].labels,

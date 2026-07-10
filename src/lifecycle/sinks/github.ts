@@ -46,9 +46,14 @@ export interface GitHubAdapterOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * HTML-entity-escape everything GitHub would interpret: & < > # @ `.
+ * HTML-entity-escape everything GitHub would interpret: & < > # @ ` [ ] !.
  * ORDER MATTERS: & first (don't double-escape produced entities), and #
- * before @/backtick — their entities (&#64;, &#96;) contain # themselves.
+ * before @/backtick/[/]/! — all of their entities (&#64;, &#96;, &#91;,
+ * &#93;, &#33;) contain # themselves. [ and ] break `[text](url)` markdown
+ * links (a bare `(url)` without a bracketed label doesn't render as a
+ * link); ! additionally breaks `![alt](url)` image embeds — both are
+ * phishing/tracking-pixel vectors once a finding's title/appName lands
+ * verbatim in an issue body.
  */
 export function escapeInline(text: string): string {
 	return text
@@ -57,7 +62,10 @@ export function escapeInline(text: string): string {
 		.replace(/>/g, "&gt;")
 		.replace(/#/g, "&#35;")
 		.replace(/@/g, "&#64;")
-		.replace(/`/g, "&#96;");
+		.replace(/`/g, "&#96;")
+		.replace(/\[/g, "&#91;")
+		.replace(/\]/g, "&#93;")
+		.replace(/!/g, "&#33;");
 }
 
 /** Fence free-form text with a fence longer than any backtick run inside. */
@@ -133,8 +141,15 @@ type ApiResult =
 
 function classifyRetryable(status: number, headers: Headers): boolean {
 	if (status === 429) return true;
-	if (status === 403 && headers.get("x-ratelimit-remaining") === "0") {
-		return true;
+	if (status === 403) {
+		// Primary rate limit (x-ratelimit-remaining: 0) and secondary/abuse
+		// rate limit (retry-after present, remaining not necessarily zero)
+		// are both transient — retry after backoff. Any other 403 (auth,
+		// permissions) is permanent.
+		return (
+			headers.get("x-ratelimit-remaining") === "0" ||
+			headers.get("retry-after") !== null
+		);
 	}
 	return status >= 500;
 }
@@ -193,6 +208,15 @@ export function createGitHubSink(options: GitHubAdapterOptions): SinkAdapter {
 				// present for this fingerprint means a prior attempt created the
 				// issue but the outbox row never got marked delivered. Treat as
 				// already-delivered rather than filing a duplicate.
+				//
+				// INVARIANT (cross-referenced in outbox.ts's collapseCreates):
+				// for create-epic, delivery.payload.finding is ALWAYS the same
+				// object as payload.children[0] — the epic's "primary" finding is
+				// just the first collapsed child, not a distinct entity. Checking
+				// f.fingerprint here is therefore equivalent to checking the
+				// epic's first child, so one lookup guards the whole epic. If epic
+				// construction ever stops aliasing finding to children[0], this
+				// check must be updated to also (or instead) probe children[0].
 				const existing = issueMap.getIssueMapping(
 					delivery.tenant,
 					"github",
