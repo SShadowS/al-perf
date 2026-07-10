@@ -8,7 +8,7 @@
 		"endTicks": 50000,
 		"approxWallClockStart": "2026-07-05T10:00:00",
 		"ticksPerMs": 10000,
-		"invocationCount": 6,
+		"invocationCount": 7,
 		"incompleteCount": 1,
 		"exceptionCount": 1
 	},
@@ -209,6 +209,27 @@
 			"callerLine": null,
 			"lines": [],
 			"exception": { "message": "Test error", "line": 42 }
+		},
+		{
+			"index": 6,
+			"objectType": null,
+			"objectId": null,
+			"objectName": null,
+			"method": null,
+			"appIx": null,
+			"startTicks": 42000,
+			"endTicks": 45000,
+			"clampedEndTicks": null,
+			"inSweep": false,
+			"selfTicks": 0,
+			"temporalParentIx": null,
+			"v8AggregationParentIx": null,
+			"isBuiltin": false,
+			"isIncomplete": false,
+			"calledLine": null,
+			"callerLine": null,
+			"lines": [],
+			"exception": null
 		}
 	]
 }

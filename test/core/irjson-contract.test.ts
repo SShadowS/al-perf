@@ -24,7 +24,7 @@ describe("ir-json schemaVersion contract pin", () => {
 			readFileSync(`${FIXTURES}/irjson-minimal.ir.json`, "utf8"),
 		);
 		expect(doc.schemaVersion).toBe(IRJSON_SCHEMA_VERSION);
-		expect(doc.capture.invocationCount).toBe(6);
+		expect(doc.capture.invocationCount).toBe(7);
 		expect(doc.capture.incompleteCount).toBe(1);
 		expect(doc.capture.exceptionCount).toBe(1);
 	});
