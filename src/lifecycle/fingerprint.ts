@@ -41,6 +41,9 @@
  * `findings_update`.
  */
 
+import { createHash } from "node:crypto";
+import { normalizeAppGuid } from "../semantic/identity.js";
+
 // ---------------------------------------------------------------------------
 // Version constant (the contract pin)
 // ---------------------------------------------------------------------------
@@ -151,4 +154,108 @@ export function normalizeSalientLocation(
 	}
 
 	return { file, line };
+}
+
+// ---------------------------------------------------------------------------
+// String form
+// ---------------------------------------------------------------------------
+
+/**
+ * The canonical string form: `"<namespace>:<hash-or-native>"`.
+ * This is the key the lifecycle store (phase 3) and sinks use.
+ */
+export function formatFingerprint(fp: FindingFingerprint): string {
+	return `${fp.namespace}:${fp.value}`;
+}
+
+// ---------------------------------------------------------------------------
+// Hashing (internal)
+//
+// Token contract (v1): tokens are joined with "\u001f" (ASCII unit separator
+// — cannot occur in AL identifiers, GUIDs, or paths) and sha256-hashed,
+// truncated to the first 16 hex chars. The first token is the algo version
+// ("v1"), the second the domain ("pattern"/"telemetry"), so raw hashes can
+// never collide across versions or domains even before namespacing.
+// ---------------------------------------------------------------------------
+
+const TOKEN_SEP = "\u001f";
+
+function sha256Hex16(tokens: readonly string[]): string {
+	return createHash("sha256")
+		.update(tokens.join(TOKEN_SEP))
+		.digest("hex")
+		.slice(0, 16);
+}
+
+/** Deterministic token expansion of a routine identity (kind-prefixed). */
+function identityTokens(identity: FingerprintRoutineIdentity): string[] {
+	if (identity.kind === "stable") {
+		return ["sid", identity.stableRoutineId];
+	}
+	return [
+		"fk",
+		identity.appId,
+		identity.canonicalObjectType,
+		String(identity.objectNumber),
+		identity.normalizedRoutineName,
+	];
+}
+
+/** Deterministic token expansion of a salient location (absent → empty). */
+function locationTokens(location: SalientLocation | undefined): string[] {
+	if (!location) return ["loc", "", ""];
+	return [
+		"loc",
+		location.file ?? "",
+		location.line !== undefined ? String(location.line) : "",
+	];
+}
+
+// ---------------------------------------------------------------------------
+// computePatternFingerprint
+// ---------------------------------------------------------------------------
+
+/** The pattern-side inputs to a fingerprint. */
+export interface PatternFingerprintInput {
+	/** The detector id (DetectedPattern.id), e.g. "calcfields-in-loop". */
+	patternId: string;
+	/**
+	 * Already-normalized location (via `normalizeSalientLocation`).
+	 * OMIT for routine-anchored patterns (all 18 current detectors) — their
+	 * identity is the routine, and it must survive line shifts. Only a future
+	 * site-anchored detector passes a location, accepting that line drift then
+	 * changes identity.
+	 */
+	salientLocation?: SalientLocation;
+}
+
+/**
+ * Mint a `pattern:` fingerprint:
+ * sha256(v1, "pattern", patternId, appId, routine identity, salient location),
+ * hex-truncated to 16 chars.
+ *
+ * `appId` is normalized (dash-less lowercase) and hashed even when the
+ * fallback identity carries it too — the spec formula includes it
+ * unconditionally, and double inclusion is deterministic. Pass the SAME
+ * method's declaring appId here and in the identity (use
+ * `routineIdentityFromCorrelation` to build the identity).
+ */
+export function computePatternFingerprint(
+	pattern: PatternFingerprintInput,
+	identity: FingerprintRoutineIdentity,
+	appId: string,
+): FindingFingerprint {
+	const tokens = [
+		`v${FINGERPRINT_ALGO_VERSION}`,
+		"pattern",
+		pattern.patternId,
+		normalizeAppGuid(appId),
+		...identityTokens(identity),
+		...locationTokens(pattern.salientLocation),
+	];
+	return {
+		value: sha256Hex16(tokens),
+		namespace: "pattern",
+		algoVersion: FINGERPRINT_ALGO_VERSION,
+	};
 }

@@ -18,6 +18,9 @@
 import { describe, expect, it } from "bun:test";
 import {
 	FINGERPRINT_ALGO_VERSION,
+	type FingerprintRoutineIdentity,
+	computePatternFingerprint,
+	formatFingerprint,
 	normalizeSalientLocation,
 } from "../../src/lifecycle/fingerprint.js";
 
@@ -96,5 +99,193 @@ describe("normalizeSalientLocation", () => {
 		expect(
 			normalizeSalientLocation({ file: "", line: 1 }, "alcpuprofile").file,
 		).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// computePatternFingerprint / formatFingerprint
+// ---------------------------------------------------------------------------
+
+/** A pre-normalized fallback identity used across the fingerprint tests. */
+const FALLBACK_ID: FingerprintRoutineIdentity = {
+	kind: "fallback",
+	appId: "437dbf0e84ff417a965ded2bb9650972",
+	canonicalObjectType: "Codeunit",
+	objectNumber: 50100,
+	normalizedRoutineName: "processrecords",
+};
+
+/** A stable identity for the SAME routine (confident alsem match). */
+const STABLE_ID: FingerprintRoutineIdentity = {
+	kind: "stable",
+	stableRoutineId:
+		"437dbf0e-84ff-417a-965d-ed2bb9650972:Codeunit:50100#a1b2c3d4",
+};
+
+const APP_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+
+describe("computePatternFingerprint", () => {
+	it("is deterministic: identical inputs → identical fingerprints", () => {
+		const a = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const b = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(a).toEqual(b);
+	});
+
+	it("emits a 16-char lowercase hex value", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(fp.value).toMatch(/^[0-9a-f]{16}$/);
+	});
+
+	it("stamps namespace 'pattern' and the current algo version", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(fp.namespace).toBe("pattern");
+		expect(fp.algoVersion).toBe(FINGERPRINT_ALGO_VERSION);
+	});
+
+	it("stable identity vs fallback identity for the SAME routine diverge", () => {
+		// Until a migration links them, these are distinct identities by design.
+		const viaFallback = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const viaStable = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			STABLE_ID,
+			APP_ID,
+		);
+		expect(viaFallback.value).not.toBe(viaStable.value);
+	});
+
+	it("different patternId on the same routine → different fingerprints", () => {
+		const a = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const b = computePatternFingerprint(
+			{ patternId: "modify-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(a.value).not.toBe(b.value);
+	});
+
+	it("different appId → different fingerprints", () => {
+		const a = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const b = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			"11111111-2222-3333-4444-555555555555",
+		);
+		expect(a.value).not.toBe(b.value);
+	});
+
+	it("dashed and dash-less appId forms normalize to the same fingerprint", () => {
+		const dashed = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			"437dbf0e-84ff-417a-965d-ed2bb9650972",
+		);
+		const dashless = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			"437DBF0E84FF417A965DED2BB9650972",
+		);
+		expect(dashed.value).toBe(dashless.value);
+	});
+
+	it("line-shift stability: routine-anchored patterns carry no location, so shifted source lines cannot change identity", () => {
+		// The contract for loop-type / routine-anchored patterns (all 18 current
+		// detectors): salientLocation is OMITTED. The same finding before and
+		// after an unrelated edit shifts every line — identity must not change.
+		const before = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const after = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(before.value).toBe(after.value);
+	});
+
+	it("a provided salient location DOES participate in the hash", () => {
+		const without = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const withLoc = computePatternFingerprint(
+			{
+				patternId: "calcfields-in-loop",
+				salientLocation: normalizeSalientLocation(
+					{ file: "src/SalesPost.Codeunit.al", line: 42 },
+					"alcpuprofile",
+				),
+			},
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(without.value).not.toBe(withLoc.value);
+	});
+
+	it("capture-kind equivalence at the hash level: wire line N ≡ display line N+1", () => {
+		const fromWire = computePatternFingerprint(
+			{
+				patternId: "calcfields-in-loop",
+				salientLocation: normalizeSalientLocation(
+					{ file: "src/SalesPost.Codeunit.al", line: 41 },
+					"ir-json",
+				),
+			},
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const fromDisplay = computePatternFingerprint(
+			{
+				patternId: "calcfields-in-loop",
+				salientLocation: normalizeSalientLocation(
+					{ file: "src/SalesPost.Codeunit.al", line: 42 },
+					"alcpuprofile",
+				),
+			},
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(fromWire.value).toBe(fromDisplay.value);
+	});
+});
+
+describe("formatFingerprint", () => {
+	it("renders the canonical '<namespace>:<value>' string form", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(formatFingerprint(fp)).toBe(`pattern:${fp.value}`);
 	});
 });
