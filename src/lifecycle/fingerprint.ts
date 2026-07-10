@@ -1,0 +1,154 @@
+/**
+ * fingerprint.ts — Versioned finding-identity contract (lifecycle pre-phase).
+ *
+ * The single source of truth for how a finding is identified across the
+ * platform (umbrella spec §4 "Finding identity"). Consumed by the fusion
+ * output types (phase 2) and the lifecycle engine (phase 3).
+ *
+ * PURE — no I/O, no storage, no subprocess calls. Types + functions only.
+ *
+ * Namespaces (identities NEVER collide across origins):
+ *   alsem:<native>    — alsem-originated findings keep their native
+ *                       fingerprint verbatim (passthrough, never re-hashed).
+ *   pattern:<hash>    — al-perf pattern detections (sha256, 16 hex chars).
+ *   telemetry:<hash>  — coarse routine-level telemetry signals (RT0018 …).
+ *
+ * Pattern fingerprint = sha256 over (algoVersion, "pattern", patternId,
+ * appId, routine identity, salient location). Routine identity is the alsem
+ * `stableRoutineId` when a CONFIDENT correlation exists (status="matched"
+ * with a single id), else the fallback key
+ * (appId, canonicalObjectType, objectNumber, normalizedRoutineName) — so
+ * profile-only findings (the common case before source registration) are
+ * ALWAYS fingerprintable. Ambiguous correlations NEVER mint
+ * stableRoutineId-based fingerprints.
+ *
+ * Salient-location convention: 1-based DISPLAY lines. ir-json wire lines are
+ * 0-based and get +1; `.alcpuprofile` lines are already display lines.
+ * Routine-anchored patterns (all 18 current detectors) carry NO salient
+ * location — their identity survives line shifts by construction. Only a
+ * future site-anchored detector opts in by passing a normalized location.
+ *
+ * Every fingerprint carries `algoVersion` (= FINGERPRINT_ALGO_VERSION at mint
+ * time). Algorithm upgrades produce `FingerprintMigration` records via
+ * `linkFingerprints` — the lifecycle store (phase 3) applies them; this
+ * module only defines the record.
+ *
+ * KNOWN LIMITATION: renaming a routine or changing its signature severs
+ * `stableRoutineId` — the old finding silently resolves and a duplicate is
+ * filed under the new identity. Mitigations (phase 3): alsem's differential
+ * machinery as rename-detection prior art, plus a manual fingerprint-merge
+ * operation (`linkFingerprints` with reason "manual-merge") exposed via
+ * `findings_update`.
+ */
+
+// ---------------------------------------------------------------------------
+// Version constant (the contract pin)
+// ---------------------------------------------------------------------------
+
+/**
+ * The fingerprint algorithm version stamped on every minted fingerprint.
+ * Bump when the hash inputs, token order, normalization rules, or truncation
+ * length change — and ship a re-fingerprint migration (linkFingerprints).
+ */
+export const FINGERPRINT_ALGO_VERSION = 1;
+
+// ---------------------------------------------------------------------------
+// Core types
+// ---------------------------------------------------------------------------
+
+/** The three identity origins. Prefixed onto the string form — never collide. */
+export type FingerprintNamespace = "alsem" | "pattern" | "telemetry";
+
+/**
+ * A namespaced finding identity.
+ *
+ * `value` is the BARE hash (pattern/telemetry) or the native alsem
+ * fingerprint — it never contains the namespace prefix. The canonical string
+ * form `"<namespace>:<value>"` is produced by `formatFingerprint`.
+ */
+export interface FindingFingerprint {
+	value: string;
+	namespace: FingerprintNamespace;
+	algoVersion: number;
+}
+
+/**
+ * The wire format a location came from. The line-base convention is a
+ * property of the serialization format:
+ *  - "alcpuprofile" — 1-based display lines (Microsoft's profile format).
+ *  - "ir-json"      — 0-based wire lines (bc-mdc-converter interchange IR).
+ */
+export type CaptureKind = "alcpuprofile" | "ir-json";
+
+/**
+ * A normalized, capture-kind-independent source location.
+ * Produced ONLY by `normalizeSalientLocation` — never construct by hand.
+ */
+export interface SalientLocation {
+	/** Normalized path: forward slashes, lowercased. Absent when unknown. */
+	file?: string;
+	/** 1-based display line. Absent when unknown/invalid. */
+	line?: number;
+}
+
+/**
+ * The routine identity that anchors a pattern fingerprint.
+ *
+ *  - "stable"   — a confident alsem correlation exists; the alsem
+ *                 `stableRoutineId` (colon form
+ *                 `<appGuid>:<objectType>:<objectNumber>#<hash>`) is the
+ *                 identity. Survives line shifts and file moves; severed by
+ *                 rename/signature change (see module header).
+ *  - "fallback" — no confident correlation (profile-only, ambiguous,
+ *                 blind-spot, cold, unkeyable). All fields pre-normalized:
+ *                 appId dash-less lowercase ("" when unknown), objectType in
+ *                 canonical AL-keyword case, routine name trigger-normalized
+ *                 and lowercased (AL identifiers are case-insensitive).
+ *
+ * NOTE: named FingerprintRoutineIdentity (not RoutineIdentity) to avoid
+ * colliding with the alsem inventory type in src/semantic/contracts.ts.
+ */
+export type FingerprintRoutineIdentity =
+	| { kind: "stable"; stableRoutineId: string }
+	| {
+			kind: "fallback";
+			appId: string;
+			canonicalObjectType: string;
+			objectNumber: number;
+			normalizedRoutineName: string;
+	  };
+
+// ---------------------------------------------------------------------------
+// normalizeSalientLocation
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a raw location to the capture-kind-independent convention.
+ *
+ * Line rule (THE contract): output is a 1-based display line.
+ *  - "ir-json"      → wire line + 1 (wire lines are 0-based; wire 0 = display 1).
+ *  - "alcpuprofile" → unchanged (already display lines).
+ * A line that is missing, non-integer, or would normalize to < 1 (e.g. the
+ * `.alcpuprofile` "line 0 = unknown" convention) is dropped (undefined).
+ *
+ * File rule: backslashes → forward slashes, lowercased (AL projects live on
+ * case-insensitive filesystems; casing must not split identities). Empty or
+ * missing → undefined.
+ */
+export function normalizeSalientLocation(
+	location: { file?: string; line?: number },
+	captureKind: CaptureKind,
+): SalientLocation {
+	const file = location.file
+		? location.file.replace(/\\/g, "/").toLowerCase()
+		: undefined;
+
+	let line: number | undefined;
+	if (location.line !== undefined && Number.isInteger(location.line)) {
+		const display =
+			captureKind === "ir-json" ? location.line + 1 : location.line;
+		line = display >= 1 ? display : undefined;
+	}
+
+	return { file, line };
+}
