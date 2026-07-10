@@ -101,6 +101,12 @@ describe("applyFingerprintMigration", () => {
 		expect(merged?.firstSeenAt).toBe("2026-06-01T00:00:00Z"); // earlier wins
 		expect(store.countOccurrences(newId)).toBe(1); // moved
 		expect(store.getFinding(oldId)?.state).toBe("closed");
+		// The from-row's own id still carries a record of how it ended, even
+		// though its prior history was reassigned to the to-row.
+		const fromEvents = store.listEvents(oldId);
+		expect(fromEvents).toHaveLength(1);
+		expect(fromEvents[0]?.event).toBe("merged-away");
+		expect(fromEvents[0]?.detail).toContain("viaMigration");
 		store.close();
 	});
 
@@ -127,6 +133,172 @@ describe("applyFingerprintMigration", () => {
 			)
 			.get();
 		expect(row?.n).toBe(1);
+		store.close();
+	});
+
+	it("PK collision: a run present under both identities keeps the to-row's occurrence", () => {
+		const store = new LifecycleStore(":memory:");
+		const oldId = store.insertFinding(finding("pattern:fallbackhash00001"));
+		const newId = store.insertFinding(finding("pattern:stablehash000001"));
+		const { runId } = store.recordRun({
+			tenant: "t1",
+			stream: "nightly",
+			profileId: "p-shared",
+			captureKind: "sampling",
+			captureTime: "2026-06-01T00:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		store.recordOccurrence({
+			findingId: oldId,
+			runId,
+			captureTime: "2026-06-01T00:00:00Z",
+			severity: "warning",
+		});
+		store.recordOccurrence({
+			findingId: newId,
+			runId,
+			captureTime: "2026-06-01T00:00:00Z",
+			severity: "critical",
+		});
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("merged");
+		expect(store.countOccurrences(newId)).toBe(1); // no error, no duplicate
+		const occ = store.db
+			.query<{ severity: string }, [number, number]>(
+				"SELECT severity FROM occurrences WHERE finding_id = ? AND run_id = ?",
+			)
+			.get(newId, runId);
+		expect(occ?.severity).toBe("critical"); // to-row's own occurrence survives
+		store.close();
+	});
+
+	it("merge revives a resolved to-row absorbing a still-live from-row, and logs a reopened event", () => {
+		const store = new LifecycleStore(":memory:");
+		store.insertFinding(
+			finding("pattern:fallbackhash00001", { state: "open" }),
+		);
+		const newId = store.insertFinding(
+			finding("pattern:stablehash000001", {
+				state: "resolved",
+				severity: "info",
+			}),
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("merged");
+		const merged = store.getActiveFinding("t1", "pattern:stablehash000001");
+		expect(merged?.id).toBe(newId);
+		expect(merged?.state).toBe("open"); // revived into the from-row's live state
+		expect(merged?.resolvedAt).toBeNull();
+		expect(merged?.severity).toBe("warning"); // more severe of info/warning wins
+		const reopened = store
+			.listEvents(newId)
+			.find((e) => e.event === "reopened");
+		expect(reopened).toBeDefined();
+		expect(reopened?.detail).toContain("reopenedByMerge");
+		store.close();
+	});
+
+	it("merge adopts the fresher row's absence_count (the identity most recently actually seen)", () => {
+		const store = new LifecycleStore(":memory:");
+		const oldId = store.insertFinding(
+			finding("pattern:fallbackhash00001", {
+				lastSeenAt: "2026-07-05T00:00:00Z",
+			}),
+		);
+		store.insertFinding(
+			finding("pattern:stablehash000001", {
+				lastSeenAt: "2026-07-01T00:00:00Z",
+			}),
+		);
+		// oldId has since racked up absences, but last_seen_at (its last true
+		// observation) stays the fresher of the two — markAbsent never moves it.
+		store.markAbsent(oldId, {
+			state: "open",
+			absenceCount: 2,
+			captureTime: "2026-07-06T00:00:00Z",
+		});
+		expect(store.getFinding(oldId)?.lastSeenAt).toBe("2026-07-05T00:00:00Z");
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("merged");
+		const merged = store.getActiveFinding("t1", "pattern:stablehash000001");
+		expect(merged?.lastSeenAt).toBe("2026-07-05T00:00:00Z");
+		expect(merged?.absenceCount).toBe(2);
+		store.close();
+	});
+
+	it("a crash mid-merge rolls back the WHOLE migration — record, rows, and occurrences all revert; a retry re-applies cleanly", () => {
+		const store = new LifecycleStore(":memory:");
+		const oldId = store.insertFinding(finding("pattern:fallbackhash00001"));
+		const newId = store.insertFinding(finding("pattern:stablehash000001"));
+		const { runId } = store.recordRun({
+			tenant: "t1",
+			stream: "nightly",
+			profileId: "p-crash",
+			captureKind: "sampling",
+			captureTime: "2026-06-01T00:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		store.recordOccurrence({
+			findingId: oldId,
+			runId,
+			captureTime: "2026-06-01T00:00:00Z",
+			severity: "warning",
+		});
+
+		// Force the SECOND logEvent call (the "merged" event, after the
+		// from-row's own "merged-away" audit event already ran) to throw,
+		// simulating a mid-merge crash.
+		let calls = 0;
+		const originalLogEvent = store.logEvent.bind(store);
+		store.logEvent = (e) => {
+			calls++;
+			if (calls === 2) throw new Error("simulated crash");
+			return originalLogEvent(e);
+		};
+
+		expect(() =>
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).toThrow("simulated crash");
+
+		// Nothing from the failed attempt persisted: not the migration record,
+		// not either finding's state, not the occurrence.
+		const row = store.db
+			.query<{ n: number }, []>(
+				"SELECT count(*) AS n FROM fingerprint_migrations",
+			)
+			.get();
+		expect(row?.n).toBe(0);
+		expect(store.getFinding(oldId)?.state).toBe("open");
+		expect(store.getFinding(newId)?.state).toBe("open");
+		expect(store.countOccurrences(oldId)).toBe(1);
+		expect(store.countOccurrences(newId)).toBe(0);
+
+		// Retry with the real logEvent — applies cleanly, no residue.
+		store.logEvent = originalLogEvent;
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("merged");
+		expect(store.getFinding(oldId)?.state).toBe("closed");
+		expect(store.countOccurrences(newId)).toBe(1);
 		store.close();
 	});
 });

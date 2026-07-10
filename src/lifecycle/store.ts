@@ -172,6 +172,21 @@ export interface StoredRun extends RunInput {
 export type FindingSeverity = "critical" | "warning" | "info";
 export type FindingSource = "pattern" | "alsem" | "telemetry";
 
+/** Severity ranking for merge reconciliation (applyFingerprintMigration) — higher wins. */
+const SEVERITY_RANK: Record<FindingSeverity, number> = {
+	info: 0,
+	warning: 1,
+	critical: 2,
+};
+
+/** Non-closed, non-resolved states — a resolved to-row absorbing a from-row in one of these is revived into it. */
+const LIVE_STATES = new Set<FindingState>([
+	"new",
+	"open",
+	"regressed",
+	"improving",
+]);
+
 export interface FindingRow {
 	id: number;
 	tenant: string;
@@ -586,9 +601,12 @@ export class LifecycleStore {
 	}
 
 	/**
-	 * Apply one FingerprintMigration (spec §4). Idempotent via the
-	 * fingerprint_migrations table. Events are logged with viaMigration:true
-	 * so sink triggers can guard against mass state transitions caused by an
+	 * Apply one FingerprintMigration (spec §4). The migration-table insert,
+	 * the rename/merge writes, and every audit event are ALL one transaction
+	 * — a crash mid-apply never strands a "recorded but not applied"
+	 * migration (which would permanently no-op on retry); a retry after a
+	 * crash re-applies cleanly. Events are logged with viaMigration:true so
+	 * sink triggers can guard against mass state transitions caused by an
 	 * algorithm change.
 	 */
 	applyFingerprintMigration(
@@ -598,16 +616,6 @@ export class LifecycleStore {
 	): "renamed" | "merged" | "no-op" {
 		const from = formatFingerprint(migration.from);
 		const to = formatFingerprint(migration.to);
-		const recorded = this.db.run(
-			`INSERT OR IGNORE INTO fingerprint_migrations (tenant, from_fingerprint, to_fingerprint, reason, applied_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			[tenant, from, to, migration.reason, appliedAt],
-		);
-		if (recorded.changes === 0) return "no-op"; // already applied
-
-		const fromRow = this.getActiveFinding(tenant, from);
-		if (!fromRow) return "no-op";
-		const toRow = this.getActiveFinding(tenant, to);
 		const detail = JSON.stringify({
 			viaMigration: true,
 			from,
@@ -615,8 +623,19 @@ export class LifecycleStore {
 			reason: migration.reason,
 		});
 
-		if (!toRow) {
-			const rename = this.db.transaction(() => {
+		const apply = this.db.transaction((): "renamed" | "merged" | "no-op" => {
+			const recorded = this.db.run(
+				`INSERT OR IGNORE INTO fingerprint_migrations (tenant, from_fingerprint, to_fingerprint, reason, applied_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+				[tenant, from, to, migration.reason, appliedAt],
+			);
+			if (recorded.changes === 0) return "no-op"; // already applied
+
+			const fromRow = this.getActiveFinding(tenant, from);
+			if (!fromRow) return "no-op";
+			const toRow = this.getActiveFinding(tenant, to);
+
+			if (!toRow) {
 				this.db.run(
 					"UPDATE findings SET fingerprint = ?, algo_version = ? WHERE id = ?",
 					[to, migration.to.algoVersion, fromRow.id],
@@ -629,14 +648,12 @@ export class LifecycleStore {
 					at: appliedAt,
 					detail,
 				});
-			});
-			rename();
-			return "renamed";
-		}
+				return "renamed";
+			}
 
-		const merge = this.db.transaction(() => {
 			// Move history; a run present on both sides keeps the to-row's
-			// occurrence (INSERT OR IGNORE semantics via UPDATE OR IGNORE).
+			// occurrence (INSERT OR IGNORE semantics via UPDATE OR IGNORE,
+			// then the still-there from-row leftover is deleted).
 			this.db.run(
 				"UPDATE OR IGNORE occurrences SET finding_id = ? WHERE finding_id = ?",
 				[toRow.id, fromRow.id],
@@ -646,21 +663,86 @@ export class LifecycleStore {
 				"UPDATE finding_events SET finding_id = ? WHERE finding_id = ?",
 				[toRow.id, fromRow.id],
 			);
+			// The from-row's own history now lives under toRow.id — log ITS
+			// ending against fromRow.id AFTER that reassignment, so the
+			// from-row's own id still carries a record of how it closed
+			// (otherwise listEvents(fromRow.id) would be permanently empty).
+			this.logEvent({
+				findingId: fromRow.id,
+				event: "merged-away",
+				fromState: fromRow.state,
+				toState: "closed",
+				at: appliedAt,
+				detail,
+			});
+
 			const kinds = [
 				...new Set([...toRow.observedKinds, ...fromRow.observedKinds]),
 			];
 			const streams = [
 				...new Set([...toRow.observedStreams, ...fromRow.observedStreams]),
 			];
+			// Fresher observation wins: the row most recently actually SEEN
+			// (last_seen_at, untouched by mere absences) carries its own
+			// absence_count forward — an absence never moves last_seen_at, so
+			// this stays coherent even if that row has since racked up misses.
+			const fromIsFresher = fromRow.lastSeenAt > toRow.lastSeenAt;
+			const lastSeenAt = fromIsFresher ? fromRow.lastSeenAt : toRow.lastSeenAt;
+			const lastEventAt =
+				fromRow.lastEventAt > toRow.lastEventAt
+					? fromRow.lastEventAt
+					: toRow.lastEventAt;
+			const absenceCount = fromIsFresher
+				? fromRow.absenceCount
+				: toRow.absenceCount;
+			const severity =
+				SEVERITY_RANK[fromRow.severity] > SEVERITY_RANK[toRow.severity]
+					? fromRow.severity
+					: toRow.severity;
+			const needsTriage = fromRow.needsTriage || toRow.needsTriage;
+			// A resolved to-row absorbing a still-live from-row must not stay
+			// invisible to listAbsenceCandidates — revive it into the
+			// from-row's live state.
+			const revive =
+				toRow.state === "resolved" && LIVE_STATES.has(fromRow.state);
+			const finalState = revive ? fromRow.state : toRow.state;
+
 			this.db.run(
-				`UPDATE findings SET first_seen_at = min(first_seen_at, ?), observed_kinds = ?, observed_streams = ? WHERE id = ?`,
+				`UPDATE findings SET first_seen_at = min(first_seen_at, ?), observed_kinds = ?, observed_streams = ?,
+					last_seen_at = ?, last_event_at = ?, absence_count = ?, severity = ?, needs_triage = ?,
+					state = ?, resolved_at = ? WHERE id = ?`,
 				[
 					fromRow.firstSeenAt,
 					JSON.stringify(kinds),
 					JSON.stringify(streams),
+					lastSeenAt,
+					lastEventAt,
+					absenceCount,
+					severity,
+					needsTriage ? 1 : 0,
+					finalState,
+					revive ? null : toRow.resolvedAt,
 					toRow.id,
 				],
 			);
+
+			if (revive) {
+				this.logEvent({
+					findingId: toRow.id,
+					event: "reopened",
+					fromState: "resolved",
+					toState: finalState,
+					at: appliedAt,
+					detail: JSON.stringify({
+						viaMigration: true,
+						from,
+						to,
+						reason: migration.reason,
+						reopenedByMerge: true,
+					}),
+				});
+			}
+
 			this.db.run(
 				"UPDATE findings SET state = 'closed', closed_at = ? WHERE id = ?",
 				[appliedAt, fromRow.id],
@@ -669,12 +751,13 @@ export class LifecycleStore {
 				findingId: toRow.id,
 				event: "merged",
 				fromState: toRow.state,
-				toState: toRow.state,
+				toState: finalState,
 				at: appliedAt,
 				detail,
 			});
+			return "merged";
 		});
-		merge();
-		return "merged";
+
+		return apply();
 	}
 }
