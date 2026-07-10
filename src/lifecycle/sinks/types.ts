@@ -133,10 +133,68 @@ export function resolveGitHubConfig(
 	return { ...SINK_DEFAULTS, ...cfg };
 }
 
+const AUTO_FILE_MIN_SEVERITIES = ["critical", "warning", "info"] as const;
+
+function requireBoolean(path: string, field: string, value: unknown): void {
+	if (value !== undefined && typeof value !== "boolean") {
+		throw new Error(
+			`${path}: sinks.github.${field} must be a boolean (got ${JSON.stringify(value)})`,
+		);
+	}
+}
+
+function requireNumber(path: string, field: string, value: unknown): void {
+	if (value !== undefined && typeof value !== "number") {
+		throw new Error(
+			`${path}: sinks.github.${field} must be a number (got ${JSON.stringify(value)})`,
+		);
+	}
+}
+
+/**
+ * Fail closed on a hand-edited config with the wrong JSON type for a
+ * trust-posture field (e.g. `"autoFile": "false"` — a quoted boolean is
+ * truthy in JS and would silently flip digest-first into auto-file-everything
+ * once a consumer does `cfg.autoFile && ...`). Every field below is optional
+ * in `GitHubSinkConfig`, so `undefined` is always allowed; only a present,
+ * wrongly-typed value throws.
+ */
+function validateGitHubSinkShape(
+	path: string,
+	gh: Record<string, unknown>,
+): void {
+	if (!/^[\w.-]+\/[\w.-]+$/.test(String(gh.repo ?? ""))) {
+		throw new Error(
+			`${path}: sinks.github.repo must be "owner/name" (got ${JSON.stringify(gh.repo)})`,
+		);
+	}
+	requireBoolean(path, "enabled", gh.enabled);
+	requireBoolean(path, "autoFile", gh.autoFile);
+	requireBoolean(path, "autoClose", gh.autoClose);
+	if (
+		gh.autoFileMinSeverity !== undefined &&
+		!(AUTO_FILE_MIN_SEVERITIES as readonly unknown[]).includes(
+			gh.autoFileMinSeverity,
+		)
+	) {
+		throw new Error(
+			`${path}: sinks.github.autoFileMinSeverity must be one of ${AUTO_FILE_MIN_SEVERITIES.map((v) => `"${v}"`).join(", ")} (got ${JSON.stringify(gh.autoFileMinSeverity)})`,
+		);
+	}
+	requireNumber(path, "autoFileAfterRuns", gh.autoFileAfterRuns);
+	requireNumber(path, "minMillisBetweenCalls", gh.minMillisBetweenCalls);
+	requireNumber(path, "maxPerDrain", gh.maxPerDrain);
+	requireNumber(path, "collapseThreshold", gh.collapseThreshold);
+}
+
 /**
  * Load `.al-perf/lifecycle.config.json` (or an explicit path). Missing file
  * → null (the caller points the user at the gh recipe). Invalid content
  * throws — a misconfigured sink must fail loudly, not silently no-op.
+ *
+ * Shape is validated field-by-field (not just JSON-ness + repo format): a
+ * malformed config must fail closed here, not surface as a downstream
+ * TypeError or — worse — a silently misinterpreted trust-posture flag.
  */
 export function loadSinksConfig(path: string): LifecycleSinksConfig | null {
 	if (!existsSync(path)) return null;
@@ -146,14 +204,31 @@ export function loadSinksConfig(path: string): LifecycleSinksConfig | null {
 	} catch (err) {
 		throw new Error(`${path} is not valid JSON: ${err}`);
 	}
-	const cfg = parsed as LifecycleSinksConfig;
-	const gh = cfg?.sinks?.github;
-	if (gh && !/^[\w.-]+\/[\w.-]+$/.test(gh.repo ?? "")) {
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
 		throw new Error(
-			`${path}: sinks.github.repo must be "owner/name" (got ${JSON.stringify(gh?.repo)})`,
+			`${path}: root must be an object (got ${JSON.stringify(parsed)})`,
 		);
 	}
-	return cfg;
+	const cfg = parsed as Record<string, unknown>;
+	const sinks = cfg.sinks;
+	if (sinks === undefined) {
+		throw new Error(`${path}: missing required "sinks" key`);
+	}
+	if (typeof sinks !== "object" || sinks === null || Array.isArray(sinks)) {
+		throw new Error(
+			`${path}: sinks must be an object (got ${JSON.stringify(sinks)})`,
+		);
+	}
+	const gh = (sinks as Record<string, unknown>).github;
+	if (gh !== undefined) {
+		if (typeof gh !== "object" || gh === null || Array.isArray(gh)) {
+			throw new Error(
+				`${path}: sinks.github must be an object (got ${JSON.stringify(gh)})`,
+			);
+		}
+		validateGitHubSinkShape(path, gh as Record<string, unknown>);
+	}
+	return cfg as unknown as LifecycleSinksConfig;
 }
 
 export function severityRank(s: string): number {

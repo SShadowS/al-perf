@@ -76,6 +76,111 @@ describe("loadSinksConfig", () => {
 	});
 });
 
+describe("loadSinksConfig — shape validation (fail closed)", () => {
+	it("rejects a quoted boolean (common JSON typo) naming the field", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "quoted-bool.json");
+			writeFileSync(
+				file,
+				JSON.stringify({
+					sinks: {
+						github: { enabled: true, repo: "owner/repo", autoFile: "false" },
+					},
+				}),
+			);
+			expect(() => loadSinksConfig(file)).toThrow(/autoFile/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a missing sinks key with a clear error, not a downstream TypeError", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "no-sinks.json");
+			writeFileSync(file, JSON.stringify({}));
+			expect(() => loadSinksConfig(file)).toThrow(/sinks/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects an invalid autoFileMinSeverity literal", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "bad-severity.json");
+			writeFileSync(
+				file,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							autoFileMinSeverity: "urgent",
+						},
+					},
+				}),
+			);
+			expect(() => loadSinksConfig(file)).toThrow(/autoFileMinSeverity/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a stringified rate/retry number", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "bad-number.json");
+			writeFileSync(
+				file,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							maxPerDrain: "20",
+						},
+					},
+				}),
+			);
+			expect(() => loadSinksConfig(file)).toThrow(/maxPerDrain/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("still loads a fully-populated, correctly-typed config", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "valid.json");
+			writeFileSync(
+				file,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							autoFile: true,
+							autoClose: false,
+							autoFileMinSeverity: "warning",
+							autoFileAfterRuns: 3,
+							minMillisBetweenCalls: 2000,
+							maxPerDrain: 10,
+							collapseThreshold: 4,
+						},
+					},
+				}),
+			);
+			const cfg = loadSinksConfig(file);
+			expect(cfg?.sinks.github?.autoFile).toBe(true);
+			expect(cfg?.sinks.github?.autoFileMinSeverity).toBe("warning");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("severityRank", () => {
 	it("orders critical > warning > info > unknown", () => {
 		expect(severityRank("critical")).toBeGreaterThan(severityRank("warning"));
