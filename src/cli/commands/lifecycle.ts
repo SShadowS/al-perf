@@ -11,6 +11,13 @@ import {
 } from "../../lifecycle/config.js";
 import { buildDigest, renderDigestMarkdown } from "../../lifecycle/digest.js";
 import { evaluateRun } from "../../lifecycle/evaluate.js";
+import { createGitHubSink } from "../../lifecycle/sinks/github.js";
+import { drainOutbox } from "../../lifecycle/sinks/outbox.js";
+import { processEventsForSinks } from "../../lifecycle/sinks/triggers.js";
+import {
+	loadSinksConfig,
+	resolveGitHubConfig,
+} from "../../lifecycle/sinks/types.js";
 import { transition } from "../../lifecycle/states.js";
 import { LifecycleStore } from "../../lifecycle/store.js";
 
@@ -272,6 +279,66 @@ export function createLifecycleCommand(): Command {
 				);
 				console.log(
 					`Rolled up ${res.rolledUp} day-buckets, deleted ${res.deleted} raw rows.`,
+				);
+			} finally {
+				store.close();
+			}
+		});
+
+	cmd
+		.command("sync")
+		.description("Apply sink trigger rules and drain the delivery outbox")
+		.option(
+			"--config <path>",
+			"Sinks config file",
+			".al-perf/lifecycle.config.json",
+		)
+		.option("--dry-run", "Enqueue outbox rows but do not deliver")
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action(async (opts: any) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const config = loadSinksConfig(opts.config);
+				if (!config) {
+					console.error(
+						`No sink config at ${opts.config}. Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
+					);
+					process.exitCode = 1;
+					return;
+				}
+				const triggers = processEventsForSinks(store, config);
+				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
+				const gh = config.sinks.github;
+				if (!opts.dryRun && gh?.enabled) {
+					const resolved = resolveGitHubConfig(gh);
+					const token = process.env[resolved.tokenEnv];
+					if (!token) {
+						console.error(
+							`sinks.github is enabled but the ${resolved.tokenEnv} environment variable is not set.`,
+						);
+						process.exitCode = 1;
+						return;
+					}
+					drain = await drainOutbox(
+						store,
+						createGitHubSink({ repo: resolved.repo, token }),
+						{
+							minMillisBetweenCalls: resolved.minMillisBetweenCalls,
+							maxPerDrain: resolved.maxPerDrain,
+							collapseThreshold: resolved.collapseThreshold,
+						},
+					);
+				}
+				const summary = { triggers, drain, dryRun: Boolean(opts.dryRun) };
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
+					return;
+				}
+				console.log(
+					`Triggers: ${triggers.processed} events processed, ${triggers.enqueued} enqueued, ` +
+						`${triggers.skippedMigration} migration-skipped. ` +
+						`Drain: ${drain.delivered} delivered, ${drain.retried} retried, ${drain.dead} dead, ` +
+						`${drain.collapsed} collapsed.${opts.dryRun ? " (dry run)" : ""}`,
 				);
 			} finally {
 				store.close();
