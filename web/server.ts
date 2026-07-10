@@ -63,7 +63,7 @@ const APP_VERSION = (
 // Ensure the data root exists so stats writes succeed on a fresh local checkout.
 await mkdir(DATA_DIR, { recursive: true });
 await initIdCounter(DEBUG_DIR);
-const sweepInterval = setInterval(
+setInterval(
 	() => {
 		debugStore.sweep();
 		pruneRateBuckets();
