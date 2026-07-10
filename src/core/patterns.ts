@@ -41,12 +41,25 @@ export const detectSingleMethodDominance: PatternDetector = (
 };
 
 /**
- * Detect child nodes where hitCount > parent.hitCount * 10.
+ * Detect disproportionate call counts.
+ *
+ * .alcpuprofile: child nodes where hitCount > parent.hitCount * 10 (hitCount
+ * is a sample count on sampling profiles — statistical inference).
+ *
+ * ir-json: every node is ONE invocation (hitCount == 1), so the hitCount
+ * heuristic is inert. Instead measure EXACT call amplification: total child
+ * invocations per distinct parent invocation, per (parent method -> child
+ * method) edge.
+ *
  * Severity: warning.
  */
 export const detectHighHitCount: PatternDetector = (
 	profile: ProcessedProfile,
 ): DetectedPattern[] => {
+	if (profile.sourceFormat === "ir-json") {
+		return detectHighFanOutExact(profile);
+	}
+
 	const patterns: DetectedPattern[] = [];
 
 	for (const node of profile.allNodes) {
@@ -72,6 +85,60 @@ export const detectHighHitCount: PatternDetector = (
 
 	return patterns;
 };
+
+function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
+	interface FanOutEdge {
+		childCount: number;
+		parentIds: Set<number>;
+		child: ProcessedNode;
+		parent: ProcessedNode;
+		impact: number;
+	}
+	const edges = new Map<string, FanOutEdge>();
+
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node) || !node.parent) continue;
+		const childKey = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		const parentKey = `${node.parent.callFrame.functionName}:${node.parent.applicationDefinition.objectId}`;
+		const key = `${parentKey}=>${childKey}`;
+		let edge = edges.get(key);
+		if (!edge) {
+			edge = {
+				childCount: 0,
+				parentIds: new Set(),
+				child: node,
+				parent: node.parent,
+				impact: 0,
+			};
+			edges.set(key, edge);
+		}
+		edge.childCount++;
+		edge.parentIds.add(node.parent.id);
+		edge.impact += node.selfTime;
+	}
+
+	const patterns: DetectedPattern[] = [];
+	for (const edge of edges.values()) {
+		const ratio = edge.childCount / edge.parentIds.size;
+		if (ratio > 10) {
+			patterns.push({
+				id: "high-hit-count",
+				severity: "warning",
+				title: `${edge.child.callFrame.functionName} has disproportionate invocation count`,
+				description: `${formatMethodRef(edge.child)} was invoked exactly ${edge.childCount} times across ${edge.parentIds.size} invocation(s) of ${formatMethodRef(edge.parent)} (${ratio.toFixed(1)}x per call).`,
+				impact: edge.impact,
+				involvedMethods: [
+					formatMethodRef(edge.child),
+					formatMethodRef(edge.parent),
+				],
+				evidence: `exact invocation counts: ${edge.childCount} calls / ${edge.parentIds.size} parent invocations = ${ratio.toFixed(1)}x (threshold: 10x)`,
+				suggestion:
+					"High invocation count suggests this method is called very frequently. Check if callers can batch operations or if an event subscriber is firing too often.",
+			});
+		}
+	}
+	return patterns;
+}
 
 /**
  * Detect profiles with maxDepth > 30.
@@ -132,17 +199,22 @@ export const detectRepeatedSiblings: PatternDetector = (
 			if (group.length >= 50) {
 				const representative = group[0];
 				const totalImpact = group.reduce((sum, n) => sum + n.totalTime, 0);
+				const exact = profile.sourceFormat === "ir-json";
 				patterns.push({
 					id: "repeated-siblings",
 					severity: "critical",
 					title: `${representative.callFrame.functionName} called ${group.length} times under ${node.callFrame.functionName}`,
-					description: `${formatMethodRef(node)} has ${group.length} child calls to ${formatMethodRef(representative)}, suggesting a loop or repeated invocation pattern.`,
+					description: exact
+						? `${formatMethodRef(node)} invoked ${formatMethodRef(representative)} exactly ${group.length} times (exact invocation count from instrumentation capture) — a loop or repeated invocation pattern.`
+						: `${formatMethodRef(node)} has ${group.length} child calls to ${formatMethodRef(representative)}, suggesting a loop or repeated invocation pattern.`,
 					impact: totalImpact,
 					involvedMethods: [
 						formatMethodRef(node),
 						formatMethodRef(representative),
 					],
-					evidence: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
+					evidence: exact
+						? `${group.length} sibling invocations with same functionName+objectId (exact invocation count, threshold: 50)`
+						: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
 					suggestion:
 						"The same method is called repeatedly at the same call site. Consider batching these calls or caching the result.",
 				});
