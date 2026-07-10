@@ -41,12 +41,25 @@ export const detectSingleMethodDominance: PatternDetector = (
 };
 
 /**
- * Detect child nodes where hitCount > parent.hitCount * 10.
+ * Detect disproportionate call counts.
+ *
+ * .alcpuprofile: child nodes where hitCount > parent.hitCount * 10 (hitCount
+ * is a sample count on sampling profiles — statistical inference).
+ *
+ * ir-json: every node is ONE invocation (hitCount == 1), so the hitCount
+ * heuristic is inert. Instead measure EXACT call amplification: total child
+ * invocations per distinct parent invocation, per (parent method -> child
+ * method) edge.
+ *
  * Severity: warning.
  */
 export const detectHighHitCount: PatternDetector = (
 	profile: ProcessedProfile,
 ): DetectedPattern[] => {
+	if (profile.sourceFormat === "ir-json") {
+		return detectHighFanOutExact(profile);
+	}
+
 	const patterns: DetectedPattern[] = [];
 
 	for (const node of profile.allNodes) {
@@ -72,6 +85,87 @@ export const detectHighHitCount: PatternDetector = (
 
 	return patterns;
 };
+
+/**
+ * Compute exact call-count amplification on ir-json profiles, per (parent
+ * method -> child method) edge.
+ *
+ * Denominator semantic: the fan-out ratio is `childCount / callingParentCount`,
+ * where `callingParentCount` counts only the DISTINCT parent invocations
+ * that made at least one call to the child on this edge — NOT the total
+ * number of invocations of the parent method. This is deliberate: a parent
+ * method that runs 500 times but only calls the child from 2 of those
+ * invocations (11x each) is still an N+1 hotspot at those 2 call sites.
+ * Averaging over the other 498 invocations that never touch the child would
+ * dilute the ratio below the 10x threshold and hide the pattern. The total
+ * invocation count of the parent method is tracked separately and disclosed
+ * in the description/evidence text so the wording never implies the ratio
+ * is a global average — it is a per-calling-invocation fan-out.
+ */
+function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
+	interface FanOutEdge {
+		childCount: number;
+		parentIds: Set<number>;
+		child: ProcessedNode;
+		parent: ProcessedNode;
+		impact: number;
+	}
+	const edges = new Map<string, FanOutEdge>();
+	const methodTotalCounts = new Map<string, number>();
+
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node)) continue;
+		const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		methodTotalCounts.set(key, (methodTotalCounts.get(key) ?? 0) + 1);
+	}
+
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node) || !node.parent) continue;
+		const childKey = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		const parentKey = `${node.parent.callFrame.functionName}:${node.parent.applicationDefinition.objectId}`;
+		const key = `${parentKey}=>${childKey}`;
+		let edge = edges.get(key);
+		if (!edge) {
+			edge = {
+				childCount: 0,
+				parentIds: new Set(),
+				child: node,
+				parent: node.parent,
+				impact: 0,
+			};
+			edges.set(key, edge);
+		}
+		edge.childCount++;
+		edge.parentIds.add(node.parent.id);
+		edge.impact += node.selfTime;
+	}
+
+	const patterns: DetectedPattern[] = [];
+	for (const edge of edges.values()) {
+		const callingParentCount = edge.parentIds.size;
+		const ratio = edge.childCount / callingParentCount;
+		if (ratio > 10) {
+			const parentKey = `${edge.parent.callFrame.functionName}:${edge.parent.applicationDefinition.objectId}`;
+			const totalParentCount =
+				methodTotalCounts.get(parentKey) ?? callingParentCount;
+			patterns.push({
+				id: "high-hit-count",
+				severity: "warning",
+				title: `${edge.child.callFrame.functionName} has disproportionate invocation count`,
+				description: `${formatMethodRef(edge.child)} was invoked exactly ${edge.childCount} times across ${callingParentCount} calling invocation(s) of ${formatMethodRef(edge.parent)} (${edge.parent.callFrame.functionName} ran ${totalParentCount} time(s) total) — ${ratio.toFixed(1)}x fan-out per calling invocation.`,
+				impact: edge.impact,
+				involvedMethods: [
+					formatMethodRef(edge.child),
+					formatMethodRef(edge.parent),
+				],
+				evidence: `exact invocation counts: ${edge.childCount} calls / ${callingParentCount} calling invocation(s) of ${totalParentCount} total invocation(s) of ${formatMethodRef(edge.parent)} = ${ratio.toFixed(1)}x fan-out per calling invocation (threshold: 10x)`,
+				suggestion:
+					"High invocation count suggests this method is called very frequently. Check if callers can batch operations or if an event subscriber is firing too often.",
+			});
+		}
+	}
+	return patterns;
+}
 
 /**
  * Detect profiles with maxDepth > 30.
@@ -132,17 +226,22 @@ export const detectRepeatedSiblings: PatternDetector = (
 			if (group.length >= 50) {
 				const representative = group[0];
 				const totalImpact = group.reduce((sum, n) => sum + n.totalTime, 0);
+				const exact = profile.sourceFormat === "ir-json";
 				patterns.push({
 					id: "repeated-siblings",
 					severity: "critical",
 					title: `${representative.callFrame.functionName} called ${group.length} times under ${node.callFrame.functionName}`,
-					description: `${formatMethodRef(node)} has ${group.length} child calls to ${formatMethodRef(representative)}, suggesting a loop or repeated invocation pattern.`,
+					description: exact
+						? `${formatMethodRef(node)} invoked ${formatMethodRef(representative)} exactly ${group.length} times (exact invocation count from instrumentation capture) — a loop or repeated invocation pattern.`
+						: `${formatMethodRef(node)} has ${group.length} child calls to ${formatMethodRef(representative)}, suggesting a loop or repeated invocation pattern.`,
 					impact: totalImpact,
 					involvedMethods: [
 						formatMethodRef(node),
 						formatMethodRef(representative),
 					],
-					evidence: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
+					evidence: exact
+						? `${group.length} sibling invocations with same functionName+objectId (exact invocation count, threshold: 50)`
+						: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
 					suggestion:
 						"The same method is called repeatedly at the same call site. Consider batching these calls or caching the result.",
 				});

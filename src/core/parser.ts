@@ -4,6 +4,7 @@ import type {
 	RawProfile,
 	RawProfileNode,
 } from "../types/profile.js";
+import { isIrJsonDocument, parseIrJson } from "./irjson-parser.js";
 
 export function detectProfileType(raw: RawProfile): ProfileType {
 	if (raw.kind === 1) return "sampling";
@@ -16,8 +17,13 @@ export function detectProfileType(raw: RawProfile): ProfileType {
 export async function parseProfile(filePath: string): Promise<ParsedProfile> {
 	const file = Bun.file(filePath);
 	const text = await file.text();
-	const raw: RawProfile = JSON.parse(text);
-	return parseProfileFromRaw(raw);
+	const raw = JSON.parse(text);
+	// Content sniffing, not extension: ir-json carries a numeric top-level
+	// schemaVersion + invocations[]; .alcpuprofile carries nodes[].
+	if (isIrJsonDocument(raw)) {
+		return parseIrJson(raw);
+	}
+	return parseProfileFromRaw(raw as RawProfile);
 }
 
 export function parseProfileFromRaw(raw: RawProfile): ParsedProfile {
@@ -57,6 +63,7 @@ export function parseProfileFromRaw(raw: RawProfile): ParsedProfile {
 
 	return {
 		type,
+		sourceFormat: "alcpuprofile",
 		nodes: raw.nodes,
 		nodeMap,
 		rootNodes,

@@ -11,6 +11,11 @@ export const config = {
 	/** Max source snippets to attach to hotspots */
 	snippetLimit: 15,
 
+	irJson: {
+		/** Reject ir-json documents with more invocations than this (payload budget). */
+		maxInvocations: 500_000,
+	},
+
 	explain: {
 		/** Max output tokens for --explain */
 		maxTokens: 2048,

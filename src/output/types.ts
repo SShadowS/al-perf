@@ -18,6 +18,21 @@ export interface AnalysisResult {
 		totalNodes: number;
 		maxDepth: number;
 		samplingInterval?: number;
+		/**
+		 * Capture kind for baseline/lifecycle keying (umbrella spec §4): sampling
+		 * statistical times and instrumentation exact times are never comparable.
+		 * Mirrors profileType today; kept separate because future capture sources
+		 * (telemetry) will diverge.
+		 */
+		captureKind?: "sampling" | "instrumentation";
+		/** Wire format the profile was parsed from. */
+		sourceFormat?: "alcpuprofile" | "ir-json";
+		/**
+		 * Count of isIncomplete invocations in an ir-json capture (absent for
+		 * .alcpuprofile). Nonzero flags an incomplete capture — analyzed anyway,
+		 * to be excluded from lifecycle run-counting in a later phase.
+		 */
+		incompleteInvocations?: number;
 		sourceAvailable: boolean;
 		builtinSelfTime?: number;
 		/** Profile confidence score 0-100 */
