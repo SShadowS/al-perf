@@ -78,7 +78,9 @@ describe("normalizeSalientLocation", () => {
 	});
 
 	it("drops a negative ir-json wire line", () => {
-		expect(normalizeSalientLocation({ line: -1 }, "ir-json").line).toBeUndefined();
+		expect(
+			normalizeSalientLocation({ line: -1 }, "ir-json").line,
+		).toBeUndefined();
 	});
 
 	it("drops a non-integer line", () => {
@@ -88,7 +90,9 @@ describe("normalizeSalientLocation", () => {
 	});
 
 	it("omits file when absent or empty", () => {
-		expect(normalizeSalientLocation({ line: 1 }, "alcpuprofile").file).toBeUndefined();
+		expect(
+			normalizeSalientLocation({ line: 1 }, "alcpuprofile").file,
+		).toBeUndefined();
 		expect(
 			normalizeSalientLocation({ file: "", line: 1 }, "alcpuprofile").file,
 		).toBeUndefined();
