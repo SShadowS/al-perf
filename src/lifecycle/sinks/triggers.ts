@@ -4,8 +4,11 @@
  *
  * Digest-first: with autoFile off (the default) NOTHING is ever filed —
  * only comments on already-mapped issues flow. Auto-filing requires
- * severity ≥ threshold AND hysteresis (observed in ≥ M runs, currently
- * present). viaMigration events never reach sinks (mass-transition guard).
+ * severity ≥ threshold AND hysteresis (observed in ≥ M QUALIFYING runs —
+ * incomplete captures never count toward hysteresis, matching the umbrella
+ * spec's exclusion of incomplete captures from lifecycle run-counting —
+ * currently present). viaMigration events never reach sinks (mass-transition
+ * guard).
  *
  * Decoupling invariant: evaluation (Plan A) logs events with no sink
  * knowledge; this scan runs at `lifecycle sync` time. A disabled sink
@@ -173,7 +176,7 @@ export function processEventsForSinks(
 				cfg.autoFile &&
 				!mapping &&
 				severityRank(row.severity) >= severityRank(cfg.autoFileMinSeverity) &&
-				store.countOccurrences(row.id) >= cfg.autoFileAfterRuns &&
+				store.countQualifyingOccurrences(row.id) >= cfg.autoFileAfterRuns &&
 				row.absenceCount === 0 &&
 				row.state !== "resolved" &&
 				row.state !== "closed"

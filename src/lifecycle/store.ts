@@ -756,6 +756,23 @@ export class LifecycleStore {
 		return row?.n ?? 0;
 	}
 
+	/**
+	 * Occurrences whose run was NOT incomplete — the umbrella spec excludes
+	 * incomplete captures from lifecycle run-counting, and auto-file
+	 * hysteresis (design decision 2) IS run-counting: an incomplete capture
+	 * must never push a finding over `autoFileAfterRuns`.
+	 */
+	countQualifyingOccurrences(findingId: number): number {
+		const row = this.db
+			.query<{ n: number }, [number]>(
+				`SELECT count(*) AS n FROM occurrences o
+				 JOIN runs r ON r.id = o.run_id
+				 WHERE o.finding_id = ? AND r.incomplete = 0`,
+			)
+			.get(findingId);
+		return row?.n ?? 0;
+	}
+
 	/** Newest occurrence's details JSON for a finding (sink body evidence). */
 	getLatestOccurrenceDetails(findingId: number): string | null {
 		const row = this.db
@@ -857,6 +874,15 @@ export class LifecycleStore {
 					"UPDATE findings SET fingerprint = ?, algo_version = ? WHERE id = ?",
 					[to, migration.to.algoVersion, fromRow.id],
 				);
+				// A rename must not orphan an existing sink issue mapping — the
+				// old fingerprint is no longer active, so comment/close routing
+				// (which looks the mapping up by fingerprint) would otherwise go
+				// blind and, worse, auto-file a DUPLICATE issue for the same
+				// finding under its new identity.
+				this.db.run(
+					"UPDATE sink_issue_map SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
+					[to, tenant, from],
+				);
 				this.logEvent({
 					findingId: fromRow.id,
 					event: "migrated",
@@ -880,6 +906,36 @@ export class LifecycleStore {
 				"UPDATE finding_events SET finding_id = ? WHERE finding_id = ?",
 				[toRow.id, fromRow.id],
 			);
+			// Rekey sink issue mappings per-sink: if the to-fingerprint has no
+			// mapping yet for a given sink, the from-row's mapping moves over
+			// (comment/close routing keeps finding the same issue under the new
+			// identity); if the to-fingerprint is ALREADY mapped for that sink,
+			// its issue is canonical and the from-row's mapping is discarded —
+			// otherwise a later create-issue scan would have two mappings
+			// racing for one fingerprint and violate the PK.
+			const fromMappings = this.db
+				.query<{ sink: string }, [string, string]>(
+					"SELECT sink FROM sink_issue_map WHERE tenant = ? AND fingerprint = ?",
+				)
+				.all(tenant, from);
+			for (const { sink } of fromMappings) {
+				const toHasMapping = this.db
+					.query<{ n: number }, [string, string, string]>(
+						"SELECT count(*) AS n FROM sink_issue_map WHERE tenant = ? AND sink = ? AND fingerprint = ?",
+					)
+					.get(tenant, sink, to);
+				if ((toHasMapping?.n ?? 0) === 0) {
+					this.db.run(
+						"UPDATE sink_issue_map SET fingerprint = ? WHERE tenant = ? AND sink = ? AND fingerprint = ?",
+						[to, tenant, sink, from],
+					);
+				} else {
+					this.db.run(
+						"DELETE FROM sink_issue_map WHERE tenant = ? AND sink = ? AND fingerprint = ?",
+						[tenant, sink, from],
+					);
+				}
+			}
 			// The from-row's own history now lives under toRow.id — log ITS
 			// ending against fromRow.id AFTER that reassignment, so the
 			// from-row's own id still carries a record of how it closed

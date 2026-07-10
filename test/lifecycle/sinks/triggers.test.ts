@@ -74,6 +74,32 @@ function seedOccurrences(
 	}
 }
 
+/** A single occurrence tied to a run whose `incomplete` flag is controllable. */
+function seedOccurrenceRun(
+	store: LifecycleStore,
+	findingId: number,
+	i: number,
+	incomplete: boolean,
+): void {
+	const { runId } = store.recordRun({
+		tenant: "t1",
+		stream: "nightly",
+		profileId: `p-${findingId}-${i}`,
+		captureKind: "sampling",
+		captureTime: `2026-07-0${i + 1}T00:00:00Z`,
+		versionStamp: "",
+		incomplete,
+		exercisedApps: { ids: [], names: [] },
+	});
+	store.recordOccurrence({
+		findingId,
+		runId,
+		captureTime: `2026-07-0${i + 1}T00:00:00Z`,
+		severity: "critical",
+		details: JSON.stringify({ evidence: "SELECT * repeated 500x" }),
+	});
+}
+
 function seedEvent(
 	store: LifecycleStore,
 	findingId: number,
@@ -138,6 +164,32 @@ describe("processEventsForSinks — auto-file", () => {
 				NOW,
 			).enqueued,
 		).toBe(0);
+		store.close();
+	});
+
+	it("hysteresis counts only qualifying (non-incomplete) occurrences", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedOccurrenceRun(store, id, 0, false); // complete — qualifies
+		seedOccurrenceRun(store, id, 1, true); // incomplete — must NOT count
+		seedEvent(store, id, "seen-normal");
+		expect(
+			processEventsForSinks(
+				store,
+				config({ autoFile: true, autoFileAfterRuns: 2 }),
+				NOW,
+			).enqueued,
+		).toBe(0); // only 1 qualifying occurrence — the incomplete one never counts
+
+		seedOccurrenceRun(store, id, 2, false); // a second complete run
+		seedEvent(store, id, "seen-normal");
+		expect(
+			processEventsForSinks(
+				store,
+				config({ autoFile: true, autoFileAfterRuns: 2 }),
+				NOW,
+			).enqueued,
+		).toBe(1);
 		store.close();
 	});
 
