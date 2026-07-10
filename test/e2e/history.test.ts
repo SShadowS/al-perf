@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "fs";
-import { resolve } from "path";
+import { join, resolve } from "path";
 
 const cliPath = resolve(import.meta.dir, "../../src/cli/index.ts");
 const fixturesDir = resolve(import.meta.dir, "../fixtures");
 const historyDir = resolve(import.meta.dir, "../fixtures/.history-e2e-test");
+const dbPath = join(historyDir, "lifecycle.sqlite");
 
 describe("E2E: history", () => {
 	beforeEach(() => {
@@ -28,6 +29,8 @@ describe("E2E: history", () => {
 			"--save-history",
 			"--history-dir",
 			historyDir,
+			"--history-db",
+			dbPath,
 			"--label",
 			"test-run",
 		]);
@@ -36,7 +39,7 @@ describe("E2E: history", () => {
 		expect(proc.exitCode).toBe(0);
 
 		// Verify history entry was created
-		expect(existsSync(historyDir)).toBe(true);
+		expect(existsSync(dbPath)).toBe(true);
 
 		// List entries
 		const listProc = Bun.spawn([
@@ -45,8 +48,8 @@ describe("E2E: history", () => {
 			cliPath,
 			"history",
 			"list",
-			"--history-dir",
-			historyDir,
+			"--db",
+			dbPath,
 		]);
 		const listOutput = await new Response(listProc.stdout).text();
 		await listProc.exited;
@@ -61,8 +64,8 @@ describe("E2E: history", () => {
 			cliPath,
 			"history",
 			"list",
-			"--history-dir",
-			historyDir,
+			"--db",
+			dbPath,
 		]);
 		const listOutput = await new Response(listProc.stdout).text();
 		await listProc.exited;
@@ -85,6 +88,8 @@ describe("E2E: history", () => {
 			"--save-history",
 			"--history-dir",
 			historyDir,
+			"--history-db",
+			dbPath,
 		]);
 		await new Response(proc.stdout).text();
 		await proc.exited;
@@ -96,8 +101,8 @@ describe("E2E: history", () => {
 			cliPath,
 			"history",
 			"trend",
-			"--history-dir",
-			historyDir,
+			"--db",
+			dbPath,
 		]);
 		const trendOutput = await new Response(trendProc.stdout).text();
 		await trendProc.exited;
@@ -120,6 +125,8 @@ describe("E2E: history", () => {
 				"--save-history",
 				"--history-dir",
 				historyDir,
+				"--history-db",
+				dbPath,
 			]);
 			await new Response(proc.stdout).text();
 			await proc.exited;
@@ -132,8 +139,8 @@ describe("E2E: history", () => {
 			cliPath,
 			"history",
 			"clear",
-			"--history-dir",
-			historyDir,
+			"--db",
+			dbPath,
 		]);
 		const clearOutput = await new Response(clearProc.stdout).text();
 		await clearProc.exited;

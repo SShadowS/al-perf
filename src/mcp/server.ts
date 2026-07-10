@@ -113,6 +113,8 @@ function capFindingChains(
 export interface McpServerOptions {
 	defaultSourcePath?: string;
 	historyDir?: string;
+	/** History database file (default .al-perf/lifecycle.sqlite). */
+	historyDb?: string;
 }
 
 export function createMcpServer(options?: McpServerOptions): McpServer {
@@ -999,7 +1001,8 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 		async ({ profilePath, label, limit }) => {
 			try {
 				const store = new HistoryStore(
-					options?.historyDir ?? ".al-perf-history",
+					options?.historyDb ?? ".al-perf/lifecycle.sqlite",
+					{ legacyDir: options?.historyDir ?? ".al-perf-history" },
 				);
 				const entries = store.query({ profilePath, label, limit });
 				return {
@@ -1045,7 +1048,8 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 		async ({ profilePath, limit }) => {
 			try {
 				const store = new HistoryStore(
-					options?.historyDir ?? ".al-perf-history",
+					options?.historyDb ?? ".al-perf/lifecycle.sqlite",
+					{ legacyDir: options?.historyDir ?? ".al-perf-history" },
 				);
 				const entries = store.query({ profilePath, limit });
 

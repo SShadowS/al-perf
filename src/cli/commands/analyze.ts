@@ -71,6 +71,11 @@ export function registerAnalyzeCommand(program: Command) {
 			".al-perf-history",
 		)
 		.option(
+			"--history-db <path>",
+			"History database file",
+			".al-perf/lifecycle.sqlite",
+		)
+		.option(
 			"--git-commit <hash>",
 			"Git commit hash to associate with this analysis",
 		)
@@ -213,7 +218,9 @@ export function registerAnalyzeCommand(program: Command) {
 
 			if (opts.saveHistory) {
 				const { HistoryStore } = await import("../../history/store.js");
-				const store = new HistoryStore(opts.historyDir);
+				const store = new HistoryStore(opts.historyDb, {
+					legacyDir: opts.historyDir,
+				});
 				store.save(result, { gitCommit: opts.gitCommit, label: opts.label });
 			}
 

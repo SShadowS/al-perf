@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "fs";
-import { resolve } from "path";
+import { afterEach, beforeEach, describe, expect, it, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join, resolve } from "path";
 import { analyzeProfile } from "../../src/core/analyzer.js";
 import { HistoryStore } from "../../src/history/store.js";
 
@@ -17,7 +18,8 @@ describe("HistoryStore", () => {
 	});
 
 	test("save and retrieve an analysis result", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -33,10 +35,12 @@ describe("HistoryStore", () => {
 		const retrieved = store.get(entry.id);
 		expect(retrieved).not.toBeNull();
 		expect(retrieved!.id).toBe(entry.id);
+		store.close();
 	});
 
 	test("save with gitCommit option", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -46,10 +50,12 @@ describe("HistoryStore", () => {
 
 		const retrieved = store.get(entry.id);
 		expect(retrieved!.gitCommit).toBe("abc1234");
+		store.close();
 	});
 
 	test("query with filters", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -65,10 +71,12 @@ describe("HistoryStore", () => {
 
 		const limited = store.query({ limit: 1 });
 		expect(limited).toHaveLength(1);
+		store.close();
 	});
 
 	test("delete and clearAll", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -85,10 +93,12 @@ describe("HistoryStore", () => {
 
 		store.clearAll();
 		expect(store.count()).toBe(0);
+		store.close();
 	});
 
 	test("query by profilePath substring", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -99,10 +109,12 @@ describe("HistoryStore", () => {
 
 		const notFound = store.query({ profilePath: "nonexistent" });
 		expect(notFound).toHaveLength(0);
+		store.close();
 	});
 
 	test("query by date range", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -129,30 +141,40 @@ describe("HistoryStore", () => {
 		// until before the entry
 		const untilBefore = store.query({ until: "2000-01-01T00:00:00.000Z" });
 		expect(untilBefore).toHaveLength(0);
+		store.close();
 	});
 
 	test("get returns null for nonexistent ID", () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		expect(store.get("nonexistent-id")).toBeNull();
+		store.close();
 	});
 
 	test("delete returns false for nonexistent ID", () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		expect(store.delete("nonexistent-id")).toBe(false);
+		store.close();
 	});
 
 	test("query returns empty array when store directory does not exist", () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		expect(store.query()).toEqual([]);
+		store.close();
 	});
 
 	test("count returns 0 when store directory does not exist", () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		expect(store.count()).toBe(0);
+		store.close();
 	});
 
 	test("handles duplicate timestamps by appending counter", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -167,10 +189,12 @@ describe("HistoryStore", () => {
 		// Both should be retrievable
 		expect(store.get(entry1.id)).not.toBeNull();
 		expect(store.get(entry2.id)).not.toBeNull();
+		store.close();
 	});
 
 	test("metrics snapshot captures expected fields", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -184,10 +208,12 @@ describe("HistoryStore", () => {
 		expect(entry.metrics.confidenceScore).toBe(result.meta.confidenceScore);
 		expect(entry.metrics.healthScore).toBe(result.summary.healthScore);
 		expect(entry.metrics.patternCount).toEqual(result.summary.patternCount);
+		store.close();
 	});
 
 	test("topHotspots limited to 5", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 		const result = await analyzeProfile(
 			`${FIXTURES}/sampling-minimal.alcpuprofile`,
 		);
@@ -202,10 +228,12 @@ describe("HistoryStore", () => {
 			expect(typeof h.selfTime).toBe("number");
 			expect(typeof h.selfTimePercent).toBe("number");
 		}
+		store.close();
 	});
 
 	test("entries are returned newest first", async () => {
-		const store = new HistoryStore(historyDir);
+		const dbPath = join(historyDir, "lifecycle.sqlite");
+		const store = new HistoryStore(dbPath);
 
 		// Use two different profiles so the timestamps differ
 		const result1 = await analyzeProfile(
@@ -220,8 +248,54 @@ describe("HistoryStore", () => {
 
 		const entries = store.query();
 		expect(entries).toHaveLength(2);
-		// Files are sorted reverse-alphabetically, which corresponds to newest first
-		// since filenames start with timestamps
 		expect(entries[0].timestamp >= entries[1].timestamp).toBe(true);
+		store.close();
+	});
+});
+
+describe("HistoryStore legacy JSON migration", () => {
+	const legacyEntry = {
+		id: "2026-01-01T00-00-00-000Z_abcd1234",
+		timestamp: "2026-01-01T00:00:00.000Z",
+		profilePath: "/profiles/old.alcpuprofile",
+		profileType: "sampling" as const,
+		metrics: {
+			totalDuration: 1000,
+			totalSelfTime: 900,
+			idleSelfTime: 0,
+			nodeCount: 10,
+			maxDepth: 3,
+			confidenceScore: 90,
+			healthScore: 80,
+			patternCount: { critical: 0, warning: 1, info: 0 },
+		},
+		topHotspots: [],
+	};
+
+	it("imports legacy entries once, writes a tombstone, keeps the files", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-history-legacy-"));
+		try {
+			const legacy = join(dir, ".al-perf-history");
+			mkdirSync(legacy, { recursive: true });
+			const jsonFile = join(legacy, `${legacyEntry.id}.json`);
+			writeFileSync(jsonFile, JSON.stringify(legacyEntry));
+			const dbPath = join(dir, "lifecycle.sqlite");
+
+			const store = new HistoryStore(dbPath, { legacyDir: legacy });
+			expect(store.count()).toBe(1);
+			expect(store.get(legacyEntry.id)?.profilePath).toBe(
+				legacyEntry.profilePath,
+			);
+			expect(existsSync(join(legacy, "MIGRATED.md"))).toBe(true);
+			expect(existsSync(jsonFile)).toBe(true); // originals kept
+			store.close();
+
+			// Tombstone prevents re-import (no duplicates on reopen).
+			const again = new HistoryStore(dbPath, { legacyDir: legacy });
+			expect(again.count()).toBe(1);
+			again.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
