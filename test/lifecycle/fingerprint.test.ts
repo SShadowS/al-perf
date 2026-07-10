@@ -591,7 +591,17 @@ describe("linkFingerprints", () => {
 		expect(migration.reason).toBe("manual-merge");
 	});
 
-	it("refuses to link an identity to itself", () => {
+	it("refuses to link an identity to itself (default reason 'algo-upgrade')", () => {
 		expect(() => linkFingerprints(v1Fp, { ...v1Fp })).toThrow();
+	});
+
+	it("refuses to link an identity to itself (reason 'identity-upgrade')", () => {
+		expect(() =>
+			linkFingerprints(v1Fp, { ...v1Fp }, "identity-upgrade"),
+		).toThrow();
+	});
+
+	it("refuses to link an identity to itself (reason 'manual-merge')", () => {
+		expect(() => linkFingerprints(v1Fp, { ...v1Fp }, "manual-merge")).toThrow();
 	});
 });
