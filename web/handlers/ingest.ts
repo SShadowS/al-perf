@@ -290,6 +290,42 @@ export async function handleIngest(
 		unlinkSync(tempProfilePath);
 	} catch {}
 
+	// Lifecycle evaluation (phase 3) — opt-in via AL_PERF_LIFECYCLE=1 (read
+	// per request) so the POC ingest behavior is byte-unchanged by default.
+	// Errors are logged and never fail the ingest: the profile is already
+	// stored and reanalyzable.
+	if (process.env.AL_PERF_LIFECYCLE === "1") {
+		try {
+			const { getLifecycleStore } = await import("../lifecycle-db.ts");
+			const { evaluateRun } = await import("../../src/lifecycle/evaluate.ts");
+			const result =
+				analysisResult as import("../../src/output/types.ts").AnalysisResult;
+			const captureKind =
+				manifest.captureKind === "instrumentation" ||
+				manifest.captureKind === "sampling"
+					? manifest.captureKind
+					: (result.meta.captureKind ?? result.meta.profileType);
+			evaluateRun(getLifecycleStore(dataDir), result, {
+				tenant: tenantCode,
+				stream:
+					typeof manifest.scheduleId === "string" && manifest.scheduleId !== ""
+						? manifest.scheduleId
+						: "adhoc",
+				profileId: activityId,
+				captureKind,
+				captureTime:
+					typeof manifest.startTime === "string"
+						? manifest.startTime
+						: new Date().toISOString(),
+				versions: parseManifestVersions(manifest),
+			});
+		} catch (err) {
+			console.error(
+				`[lifecycle] evaluation failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
+			);
+		}
+	}
+
 	return jsonResponse(202, {
 		id: activityId,
 		status: "stored",
@@ -324,6 +360,33 @@ function extractMetrics(
 		profileSize,
 		analyzedAt: new Date().toISOString(),
 	};
+}
+
+/**
+ * Versions from the ingest manifest (spec §2 ingest body mentions
+ * appVersions[]; today's al-perf-bc manifests don't send it yet — this is
+ * forward-compatible and returns undefined until producers do).
+ */
+function parseManifestVersions(
+	manifest: Record<string, unknown>,
+):
+	| { platform?: string; apps?: Array<{ id: string; version: string }> }
+	| undefined {
+	const platform =
+		typeof manifest.platformVersion === "string"
+			? manifest.platformVersion
+			: undefined;
+	const apps = Array.isArray(manifest.appVersions)
+		? manifest.appVersions.filter(
+				(a): a is { id: string; version: string } =>
+					typeof a === "object" &&
+					a !== null &&
+					typeof (a as { id?: unknown }).id === "string" &&
+					typeof (a as { version?: unknown }).version === "string",
+			)
+		: undefined;
+	if (!platform && !apps?.length) return undefined;
+	return { platform, apps };
 }
 
 function jsonResponse(status: number, body: unknown): Response {
