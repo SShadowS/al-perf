@@ -1,0 +1,214 @@
+{
+	"schemaVersion": 1,
+	"generator": { "name": "bc-mdc-converter", "version": "0.1.0" },
+	"capture": {
+		"platformVersion": "26.0.0.0",
+		"t0Ticks": "63918782549184796",
+		"startTicks": 0,
+		"endTicks": 50000,
+		"approxWallClockStart": "2026-07-05T10:00:00",
+		"ticksPerMs": 10000,
+		"invocationCount": 6,
+		"incompleteCount": 1,
+		"exceptionCount": 1
+	},
+	"apps": [
+		{
+			"id": "437dbf0e84ff417a965ded2bb9650972",
+			"name": "Base Application",
+			"publisher": "Microsoft",
+			"version": "26.0.0.0"
+		},
+		{
+			"id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"name": "My ISV App",
+			"publisher": "Contoso",
+			"version": "1.2.0.0"
+		}
+	],
+	"invocations": [
+		{
+			"index": 0,
+			"objectType": "CodeUnit",
+			"objectId": 50100,
+			"objectName": "Order Processor",
+			"method": "OnRun",
+			"appIx": 1,
+			"startTicks": 0,
+			"endTicks": 50000,
+			"clampedEndTicks": null,
+			"inSweep": true,
+			"selfTicks": 5000,
+			"temporalParentIx": null,
+			"v8AggregationParentIx": null,
+			"isBuiltin": false,
+			"isIncomplete": false,
+			"calledLine": {
+				"objectType": "CodeUnit",
+				"objectId": 50100,
+				"line": 5,
+				"column": 4,
+				"toLine": 5,
+				"toColumn": 20
+			},
+			"callerLine": null,
+			"lines": [
+				{ "line": 5, "column": 4, "toLine": 5, "toColumn": 20, "hits": 1 }
+			],
+			"exception": null
+		},
+		{
+			"index": 1,
+			"objectType": "CodeUnit",
+			"objectId": 50100,
+			"objectName": "Order Processor",
+			"method": "ProcessLine",
+			"appIx": 1,
+			"startTicks": 1000,
+			"endTicks": 20000,
+			"clampedEndTicks": null,
+			"inSweep": true,
+			"selfTicks": 12000,
+			"temporalParentIx": 0,
+			"v8AggregationParentIx": 0,
+			"isBuiltin": false,
+			"isIncomplete": false,
+			"calledLine": {
+				"objectType": "CodeUnit",
+				"objectId": 50100,
+				"line": 12,
+				"column": 4,
+				"toLine": 12,
+				"toColumn": 30
+			},
+			"callerLine": {
+				"objectType": "CodeUnit",
+				"objectId": 50100,
+				"line": 7,
+				"column": 8,
+				"toLine": 7,
+				"toColumn": 25
+			},
+			"lines": [
+				{ "line": 12, "column": 4, "toLine": 12, "toColumn": 30, "hits": 1 }
+			],
+			"exception": null
+		},
+		{
+			"index": 2,
+			"objectType": "Table",
+			"objectId": 27,
+			"objectName": "Item",
+			"method": "FindPrice",
+			"appIx": 0,
+			"startTicks": 2000,
+			"endTicks": 8000,
+			"clampedEndTicks": null,
+			"inSweep": true,
+			"selfTicks": 6000,
+			"temporalParentIx": 1,
+			"v8AggregationParentIx": 1,
+			"isBuiltin": false,
+			"isIncomplete": false,
+			"calledLine": {
+				"objectType": "Table",
+				"objectId": 27,
+				"line": 30,
+				"column": 4,
+				"toLine": 30,
+				"toColumn": 18
+			},
+			"callerLine": {
+				"objectType": "CodeUnit",
+				"objectId": 50100,
+				"line": 14,
+				"column": 8,
+				"toLine": 14,
+				"toColumn": 22
+			},
+			"lines": [
+				{ "line": 30, "column": 4, "toLine": 30, "toColumn": 18, "hits": 1 }
+			],
+			"exception": null
+		},
+		{
+			"index": 3,
+			"objectType": "CodeUnit",
+			"objectId": 50100,
+			"objectName": "Order Processor",
+			"method": "ProcessLine",
+			"appIx": 1,
+			"startTicks": 21000,
+			"endTicks": 40000,
+			"clampedEndTicks": null,
+			"inSweep": true,
+			"selfTicks": 15000,
+			"temporalParentIx": 0,
+			"v8AggregationParentIx": 0,
+			"isBuiltin": false,
+			"isIncomplete": false,
+			"calledLine": {
+				"objectType": "CodeUnit",
+				"objectId": 50100,
+				"line": 12,
+				"column": 4,
+				"toLine": 12,
+				"toColumn": 30
+			},
+			"callerLine": {
+				"objectType": "CodeUnit",
+				"objectId": 50100,
+				"line": 8,
+				"column": 8,
+				"toLine": 8,
+				"toColumn": 25
+			},
+			"lines": [
+				{ "line": 12, "column": 4, "toLine": 12, "toColumn": 30, "hits": 1 }
+			],
+			"exception": null
+		},
+		{
+			"index": 4,
+			"objectType": "CodeUnit",
+			"objectId": 80,
+			"objectName": "Sales-Post",
+			"method": "PostDocument",
+			"appIx": 0,
+			"startTicks": 41000,
+			"endTicks": 99999999999,
+			"clampedEndTicks": 50000,
+			"inSweep": true,
+			"selfTicks": 2000,
+			"temporalParentIx": 0,
+			"v8AggregationParentIx": 0,
+			"isBuiltin": false,
+			"isIncomplete": true,
+			"calledLine": null,
+			"callerLine": null,
+			"lines": [],
+			"exception": null
+		},
+		{
+			"index": 5,
+			"objectType": "CodeUnit",
+			"objectId": 50100,
+			"objectName": "Order Processor",
+			"method": "OrphanMethod",
+			"appIx": 1,
+			"startTicks": null,
+			"endTicks": null,
+			"clampedEndTicks": null,
+			"inSweep": false,
+			"selfTicks": 0,
+			"temporalParentIx": null,
+			"v8AggregationParentIx": null,
+			"isBuiltin": false,
+			"isIncomplete": false,
+			"calledLine": null,
+			"callerLine": null,
+			"lines": [],
+			"exception": { "message": "Test error", "line": 42 }
+		}
+	]
+}
