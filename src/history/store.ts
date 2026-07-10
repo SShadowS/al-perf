@@ -61,8 +61,12 @@ export class HistoryStore {
 				);
 				const res = this.insertEntry(entry, true);
 				if (res) migrated++;
-			} catch {
-				// Skip corrupted files — same policy as the old JSON store.
+			} catch (err) {
+				// Skip corrupted files — same policy as the old JSON store — but
+				// warn so operators know an entry was dropped, not migrated.
+				console.warn(
+					`[history] skipping unreadable legacy entry ${file}: ${err instanceof Error ? err.message : String(err)}`,
+				);
 			}
 		}
 		writeFileSync(
