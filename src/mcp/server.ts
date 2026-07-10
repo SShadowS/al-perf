@@ -999,8 +999,9 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 			},
 		},
 		async ({ profilePath, label, limit }) => {
+			let store: HistoryStore | undefined;
 			try {
-				const store = new HistoryStore(
+				store = new HistoryStore(
 					options?.historyDb ?? ".al-perf/lifecycle.sqlite",
 					{ legacyDir: options?.historyDir ?? ".al-perf-history" },
 				);
@@ -1020,6 +1021,8 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					],
 					isError: true,
 				};
+			} finally {
+				store?.close();
 			}
 		},
 	);
@@ -1046,8 +1049,9 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 			},
 		},
 		async ({ profilePath, limit }) => {
+			let store: HistoryStore | undefined;
 			try {
-				const store = new HistoryStore(
+				store = new HistoryStore(
 					options?.historyDb ?? ".al-perf/lifecycle.sqlite",
 					{ legacyDir: options?.historyDir ?? ".al-perf-history" },
 				);
@@ -1117,6 +1121,8 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					],
 					isError: true,
 				};
+			} finally {
+				store?.close();
 			}
 		},
 	);

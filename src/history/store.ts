@@ -53,8 +53,12 @@ export class HistoryStore {
 		const legacy = resolve(dir);
 		if (!existsSync(legacy)) return;
 		if (existsSync(join(legacy, TOMBSTONE))) return;
+		const files = readdirSync(legacy).filter((f) => f.endsWith(".json"));
+		// Nothing to migrate — don't tombstone a directory we never touched
+		// (legacyDir often coincides with dbPath's own parent directory).
+		if (files.length === 0) return;
 		let migrated = 0;
-		for (const file of readdirSync(legacy).filter((f) => f.endsWith(".json"))) {
+		for (const file of files) {
 			try {
 				const entry: HistoryEntry = JSON.parse(
 					readFileSync(join(legacy, file), "utf-8"),

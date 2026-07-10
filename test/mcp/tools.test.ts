@@ -661,7 +661,7 @@ describe("MCP Tool: history_list", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
 		const historyDb = join(historyDir, "lifecycle.sqlite");
-		const { client } = await createTestClient({ historyDb });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_list",
 			arguments: {},
@@ -687,7 +687,7 @@ describe("MCP Tool: history_list", () => {
 		);
 		store.save(analysis, { label: "test-run" });
 
-		const { client } = await createTestClient({ historyDb });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_list",
 			arguments: {},
@@ -714,7 +714,7 @@ describe("MCP Tool: history_list", () => {
 		store.save(analysis, { label: "baseline" });
 		store.save(analysis, { label: "optimized" });
 
-		const { client } = await createTestClient({ historyDb });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_list",
 			arguments: { label: "baseline" },
@@ -741,7 +741,7 @@ describe("MCP Tool: history_trend", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "al-perf-mcp-test-"));
 		const historyDir = join(tempDir, "history");
 		const historyDb = join(historyDir, "lifecycle.sqlite");
-		const { client } = await createTestClient({ historyDb });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_trend",
 			arguments: {},
@@ -767,7 +767,7 @@ describe("MCP Tool: history_trend", () => {
 		store.save(analysis, { label: "run-1" });
 		store.save(analysis, { label: "run-2" });
 
-		const { client } = await createTestClient({ historyDb });
+		const { client } = await createTestClient({ historyDb, historyDir });
 		const result = await client.callTool({
 			name: "history_trend",
 			arguments: {},

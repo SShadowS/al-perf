@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	spyOn,
+	test,
+} from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
@@ -295,6 +303,52 @@ describe("HistoryStore legacy JSON migration", () => {
 			expect(again.count()).toBe(1);
 			again.close();
 		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not write a tombstone when the legacy dir has no JSON files", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-history-legacy-empty-"));
+		try {
+			const legacy = join(dir, ".al-perf-history");
+			mkdirSync(legacy, { recursive: true });
+			const dbPath = join(dir, "lifecycle.sqlite");
+
+			const store = new HistoryStore(dbPath, { legacyDir: legacy });
+			expect(store.count()).toBe(0);
+			expect(existsSync(join(legacy, "MIGRATED.md"))).toBe(false);
+			store.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("imports valid entries and skips corrupt ones with a warning, never throws", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-history-legacy-corrupt-"));
+		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const legacy = join(dir, ".al-perf-history");
+			mkdirSync(legacy, { recursive: true });
+			writeFileSync(
+				join(legacy, `${legacyEntry.id}.json`),
+				JSON.stringify(legacyEntry),
+			);
+			writeFileSync(join(legacy, "corrupt.json"), "{ not valid json");
+			const dbPath = join(dir, "lifecycle.sqlite");
+
+			let store: HistoryStore | undefined;
+			expect(() => {
+				store = new HistoryStore(dbPath, { legacyDir: legacy });
+			}).not.toThrow();
+
+			expect(store!.count()).toBe(1);
+			expect(store!.get(legacyEntry.id)?.profilePath).toBe(
+				legacyEntry.profilePath,
+			);
+			expect(warnSpy).toHaveBeenCalled();
+			store!.close();
+		} finally {
+			warnSpy.mockRestore();
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
