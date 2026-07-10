@@ -60,47 +60,62 @@ function toDelivery(row: OutboxRow): SinkDelivery {
 	};
 }
 
-/** Fold ≥ threshold pending creates per tenant into one create-epic row. */
+/**
+ * Fold ≥ threshold pending creates per tenant into one create-epic row.
+ *
+ * The whole scan — every tenant's epic-enqueue plus its originals'
+ * delivered-with-note writes — runs inside ONE `store.db.transaction()`
+ * (mirroring triggers.ts's scan and store.ts's applyFingerprintMigration).
+ * A crash partway through must never leave a bucket half-collapsed: with
+ * separate autocommit statements, a crash between the epic insert and the
+ * last original's `markOutboxDelivered` would leave those trailing
+ * originals still pending, and a later drain — now under threshold — would
+ * deliver them individually as duplicate issues alongside the epic that
+ * already claims them as children.
+ */
 function collapseCreates(
 	store: LifecycleStore,
 	sink: string,
 	threshold: number,
 	now: string,
 ): number {
-	const pending = store.listPendingOutbox(sink, "create-issue");
-	const byTenant = new Map<string, OutboxRow[]>();
-	for (const row of pending) {
-		const bucket = byTenant.get(row.tenant);
-		if (bucket) bucket.push(row);
-		else byTenant.set(row.tenant, [row]);
-	}
-	let collapsed = 0;
-	for (const [tenant, rows] of byTenant) {
-		if (rows.length < threshold) continue;
-		const payloads = rows.map(
-			(r) => JSON.parse(r.payload) as SinkDeliveryPayload,
-		);
-		const epic: SinkDeliveryPayload = {
-			finding: payloads[0].finding,
-			labels: payloads[0].labels,
-			children: payloads.map((p) => p.finding),
-		};
-		store.enqueueOutbox({
-			tenant,
-			sink,
-			kind: "create-epic",
-			findingId: rows[0].findingId,
-			payload: JSON.stringify(epic),
-			dedupeKey: `${sink}:epic:${tenant}:${rows.map((r) => r.id).join(",")}`,
-			nextAttemptAt: now,
-			createdAt: now,
-		});
-		for (const r of rows) {
-			store.markOutboxDelivered(r.id, now, "collapsed-into-epic");
+	const collapse = store.db.transaction((): number => {
+		const pending = store.listPendingOutbox(sink, "create-issue");
+		const byTenant = new Map<string, OutboxRow[]>();
+		for (const row of pending) {
+			const bucket = byTenant.get(row.tenant);
+			if (bucket) bucket.push(row);
+			else byTenant.set(row.tenant, [row]);
 		}
-		collapsed++;
-	}
-	return collapsed;
+		let collapsed = 0;
+		for (const [tenant, rows] of byTenant) {
+			if (rows.length < threshold) continue;
+			const payloads = rows.map(
+				(r) => JSON.parse(r.payload) as SinkDeliveryPayload,
+			);
+			const epic: SinkDeliveryPayload = {
+				finding: payloads[0].finding,
+				labels: payloads[0].labels,
+				children: payloads.map((p) => p.finding),
+			};
+			store.enqueueOutbox({
+				tenant,
+				sink,
+				kind: "create-epic",
+				findingId: rows[0].findingId,
+				payload: JSON.stringify(epic),
+				dedupeKey: `${sink}:epic:${tenant}:${rows.map((r) => r.id).join(",")}`,
+				nextAttemptAt: now,
+				createdAt: now,
+			});
+			for (const r of rows) {
+				store.markOutboxDelivered(r.id, now, "collapsed-into-epic");
+			}
+			collapsed++;
+		}
+		return collapsed;
+	});
+	return collapse();
 }
 
 export async function drainOutbox(
@@ -145,11 +160,10 @@ export async function drainOutbox(
 			store.markOutboxDead(row.id, result.error);
 			report.dead++;
 		} else {
-			store.markOutboxRetry(
-				row.id,
-				result.error,
-				backoffAt(now, row.attempts + 1),
-			);
+			// backoffAt(now, row.attempts) — the CURRENT attempts count, not
+			// +1: the first retry (attempts=0 going in) must land on the
+			// documented 30s rung, not skip straight to 60s.
+			store.markOutboxRetry(row.id, result.error, backoffAt(now, row.attempts));
 			report.retried++;
 		}
 	}

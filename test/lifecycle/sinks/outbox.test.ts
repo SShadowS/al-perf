@@ -128,7 +128,9 @@ describe("drainOutbox", () => {
 		const later = "2026-07-10T00:00:00Z";
 		const row = store.listDueOutbox("github", later, 10)[0];
 		expect(row.attempts).toBe(1);
-		expect(row.nextAttemptAt > NOW).toBe(true);
+		// First retry lands on the documented 30s rung (attempts was 0 going
+		// in) — not 60s, which would mean the exponent got shifted by one.
+		expect(row.nextAttemptAt).toBe(backoffAt(NOW, 0));
 
 		// Push attempts to the cap: it dead-letters instead of retrying forever.
 		for (let i = 1; i < MAX_ATTEMPTS - 1; i++) {
@@ -194,6 +196,49 @@ describe("drainOutbox", () => {
 			)
 			.get();
 		expect(collapsedNote?.n).toBe(5);
+		store.close();
+	});
+
+	it("collapse is atomic: a crash mid-batch rolls back the whole collapse; a clean re-drain collapses once", async () => {
+		const store = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 5; n++) enqueueCreate(store, n);
+
+		// Force the THIRD markOutboxDelivered call (mid-way through folding
+		// the 5 originals into the epic) to throw, simulating a crash
+		// between the epic insert and the last originals being closed out.
+		let calls = 0;
+		const originalMarkDelivered = store.markOutboxDelivered.bind(store);
+		store.markOutboxDelivered = (id: number, at: string, note?: string) => {
+			calls++;
+			if (calls === 3) throw new Error("simulated crash");
+			return originalMarkDelivered(id, at, note);
+		};
+
+		const adapter = fakeAdapter([{ ok: true, externalId: "99" }]);
+		await expect(
+			drainOutbox(store, adapter, RUNTIME, { now: NOW, sleep: async () => {} }),
+		).rejects.toThrow("simulated crash");
+
+		// Nothing from the failed collapse persisted: no epic row, and every
+		// original is still pending (none stranded as a lone straggler that
+		// would deliver individually — alongside the epic — next drain).
+		expect(store.listPendingOutbox("github", "create-issue")).toHaveLength(5);
+		const epicRows = store.db
+			.query<{ n: number }, []>(
+				"SELECT count(*) AS n FROM outbox WHERE kind = 'create-epic'",
+			)
+			.get();
+		expect(epicRows?.n).toBe(0);
+
+		// Retry with the real markOutboxDelivered — collapses cleanly, once.
+		store.markOutboxDelivered = originalMarkDelivered;
+		const report = await drainOutbox(store, adapter, RUNTIME, {
+			now: NOW,
+			sleep: async () => {},
+		});
+		expect(report.collapsed).toBe(1);
+		expect(report.delivered).toBe(1);
+		expect(store.listPendingOutbox("github")).toHaveLength(0);
 		store.close();
 	});
 });
