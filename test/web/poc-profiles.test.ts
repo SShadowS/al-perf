@@ -19,12 +19,14 @@ afterAll(() => {
 
 const VALID_GUID = "550e8400-e29b-41d4-a716-446655440000";
 
+let tenantToken = "";
+
 async function setupAndIngest() {
 	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const jwk = publicKey.export({ format: "jwk" }) as { n: string; e: string };
 	const publicXml = `<RSAKeyValue><Modulus>${Buffer.from(jwk.n, "base64url").toString("base64")}</Modulus><Exponent>${Buffer.from(jwk.e, "base64url").toString("base64")}</Exponent></RSAKeyValue>`;
 
-	await fetch(`${BASE}/api/tenants/register`, {
+	const regRes = await fetch(`${BASE}/api/tenants/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
@@ -33,6 +35,8 @@ async function setupAndIngest() {
 			publicKeyXml: publicXml,
 		}),
 	});
+	const regBody = (await regRes.json()) as { tenantToken?: string };
+	if (regBody.tenantToken) tenantToken = regBody.tenantToken;
 
 	const profilePath = resolve(
 		import.meta.dir,
@@ -64,7 +68,7 @@ async function setupAndIngest() {
 	await fetch(`${BASE}/api/ingest`, {
 		method: "POST",
 		headers: {
-			Authorization: "Bearer test-secret-1234",
+			Authorization: `Bearer ${tenantToken}`,
 			"X-Tenant-Id": "poc",
 			"X-Idempotency-Key": VALID_GUID,
 		},
@@ -72,11 +76,11 @@ async function setupAndIngest() {
 	});
 }
 
-describe("GET /api/profiles/{activityId} (POC v0 plaintext)", () => {
+describe("GET /api/profiles/{activityId} (POC, per-tenant token)", () => {
 	it("returns ciphertext bundle + plaintext manifest", async () => {
 		await setupAndIngest();
 		const res = await fetch(`${BASE}/api/profiles/${VALID_GUID}?tenant=poc`, {
-			headers: { Authorization: "Bearer test-secret-1234" },
+			headers: { Authorization: `Bearer ${tenantToken}` },
 		});
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-type")).toBe("application/json");
@@ -100,7 +104,7 @@ describe("GET /api/profiles/{activityId} (POC v0 plaintext)", () => {
 		const res = await fetch(
 			`${BASE}/api/profiles/00000000-0000-0000-0000-000000000000?tenant=poc`,
 			{
-				headers: { Authorization: "Bearer test-secret-1234" },
+				headers: { Authorization: `Bearer ${tenantToken}` },
 			},
 		);
 		expect(res.status).toBe(404);
@@ -111,9 +115,26 @@ describe("GET /api/profiles/{activityId} (POC v0 plaintext)", () => {
 		expect(res.status).toBe(401);
 	});
 
+	it("rejects the legacy shared secret by default", async () => {
+		const res = await fetch(`${BASE}/api/profiles/${VALID_GUID}?tenant=poc`, {
+			headers: { Authorization: "Bearer test-secret-1234" },
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it("rejects a valid token aimed at another tenant's store", async () => {
+		const res = await fetch(
+			`${BASE}/api/profiles/${VALID_GUID}?tenant=other`,
+			{
+				headers: { Authorization: `Bearer ${tenantToken}` },
+			},
+		);
+		expect(res.status).toBe(401);
+	});
+
 	it("rejects bad activityId", async () => {
 		const res = await fetch(`${BASE}/api/profiles/not-a-guid?tenant=poc`, {
-			headers: { Authorization: "Bearer test-secret-1234" },
+			headers: { Authorization: `Bearer ${tenantToken}` },
 		});
 		expect(res.status).toBe(400);
 	});

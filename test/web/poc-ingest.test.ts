@@ -16,11 +16,13 @@ afterAll(() => {
 	rmSync(TEST_DATA, { recursive: true, force: true });
 });
 
-async function registerPoc() {
+let tenantToken = "";
+
+async function registerPoc(): Promise<void> {
 	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const jwk = publicKey.export({ format: "jwk" }) as { n: string; e: string };
 	const publicXml = `<RSAKeyValue><Modulus>${Buffer.from(jwk.n, "base64url").toString("base64")}</Modulus><Exponent>${Buffer.from(jwk.e, "base64url").toString("base64")}</Exponent></RSAKeyValue>`;
-	await fetch(`${BASE}/api/tenants/register`, {
+	const res = await fetch(`${BASE}/api/tenants/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
@@ -29,6 +31,8 @@ async function registerPoc() {
 			publicKeyXml: publicXml,
 		}),
 	});
+	const body = (await res.json()) as { tenantToken?: string };
+	if (body.tenantToken) tenantToken = body.tenantToken;
 }
 
 function loadFixture(): Buffer {
@@ -77,14 +81,15 @@ function buildFormData(activityId = VALID_GUID): FormData {
 	return fd;
 }
 
-describe("POST /api/ingest (POC v0 plaintext)", () => {
-	it("accepts ingest with valid bearer + manifest + profile", async () => {
+describe("POST /api/ingest (POC, per-tenant token)", () => {
+	it("accepts ingest with the tenant's own token + manifest + profile", async () => {
 		await registerPoc();
+		expect(tenantToken.length).toBeGreaterThan(0);
 		const fd = buildFormData();
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
-				Authorization: "Bearer test-secret-1234",
+				Authorization: `Bearer ${tenantToken}`,
 				"X-Tenant-Id": "poc",
 				"X-Idempotency-Key": VALID_GUID,
 			},
@@ -95,7 +100,7 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		expect(body.id).toBe(VALID_GUID);
 		expect(body.status).toBe("stored");
 
-		// Verify on-disk artifacts (v0: plaintext)
+		// Verify on-disk artifacts
 		const profileDir = join(
 			TEST_DATA,
 			"storage",
@@ -111,6 +116,21 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		expect(existsSync(join(profileDir, "keyversion.txt"))).toBe(true);
 	});
 
+	it("treats a repeated idempotency key as a no-op duplicate", async () => {
+		const res = await fetch(`${BASE}/api/ingest`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${tenantToken}`,
+				"X-Tenant-Id": "poc",
+				"X-Idempotency-Key": VALID_GUID,
+			},
+			body: buildFormData(),
+		});
+		expect(res.status).toBe(202);
+		const body = await res.json();
+		expect(body.status).toBe("duplicate");
+	});
+
 	it("rejects missing bearer", async () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
@@ -120,11 +140,24 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("rejects bad activityId", async () => {
+	it("rejects the legacy shared secret by default", async () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
 				Authorization: "Bearer test-secret-1234",
+				"X-Tenant-Id": "poc",
+				"X-Idempotency-Key": VALID_GUID,
+			},
+			body: buildFormData(),
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it("rejects bad activityId", async () => {
+		const res = await fetch(`${BASE}/api/ingest`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${tenantToken}`,
 				"X-Tenant-Id": "poc",
 				"X-Idempotency-Key": "not-a-guid",
 			},
@@ -133,16 +166,16 @@ describe("POST /api/ingest (POC v0 plaintext)", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("rejects unknown tenant", async () => {
+	it("rejects a token used against another tenant (unknown tenant → 401, no enumeration)", async () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
-				Authorization: "Bearer test-secret-1234",
+				Authorization: `Bearer ${tenantToken}`,
 				"X-Tenant-Id": "unknown",
 				"X-Idempotency-Key": VALID_GUID,
 			},
 			body: buildFormData(),
 		});
-		expect(res.status).toBe(404);
+		expect(res.status).toBe(401);
 	});
 });

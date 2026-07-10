@@ -7,7 +7,12 @@ import {
 } from "fs";
 import { analyzeProfile } from "../../src/core/analyzer.ts";
 import { encryptBundle, type RsaJwk, xmlRsaToJwk } from "../crypto.ts";
-import { checkBearerToken, loadPocSecret } from "../poc-secret.ts";
+import {
+	checkBearerAgainstHash,
+	checkBearerToken,
+	loadPocSecret,
+	sharedSecretAllowed,
+} from "../poc-secret.ts";
 import {
 	isValidActivityId,
 	isValidTenantCode,
@@ -18,15 +23,15 @@ import {
 
 const KEY_VERSION_POC = "1";
 
+interface TenantRecord {
+	publicKeyXml?: string;
+	tokenHash?: string;
+}
+
 export async function handleIngest(
 	req: Request,
 	dataDir: string,
 ): Promise<Response> {
-	const auth = req.headers.get("authorization");
-	if (!checkBearerToken(auth, loadPocSecret())) {
-		return jsonResponse(401, { error: "unauthorized" });
-	}
-
 	const tenantCodeRaw = req.headers.get("x-tenant-id");
 	if (!tenantCodeRaw || !isValidTenantCode(tenantCodeRaw)) {
 		return jsonResponse(400, { error: "invalid_tenant_id" });
@@ -44,13 +49,28 @@ export async function handleIngest(
 		"tenants",
 		`${tenantCode}.json`,
 	);
-	if (!existsSync(tenantFile)) {
-		return jsonResponse(404, { error: "tenant_not_registered" });
+	let tenantRecord: TenantRecord | undefined;
+	if (existsSync(tenantFile)) {
+		tenantRecord = JSON.parse(readFileSync(tenantFile, "utf8")) as TenantRecord;
 	}
 
-	const tenantRecord = JSON.parse(readFileSync(tenantFile, "utf8")) as {
-		publicKeyXml?: string;
-	};
+	// Auth binds tenant to credential: the bearer must be the tenant's own token.
+	// The legacy shared-secret path (bearer == POC secret, tenant from header) is
+	// opt-in via AL_PERF_ALLOW_SHARED_SECRET=1 for clients not yet migrated.
+	const auth = req.headers.get("authorization");
+	const tokenOk = tenantRecord?.tokenHash
+		? checkBearerAgainstHash(auth, tenantRecord.tokenHash)
+		: false;
+	const legacyOk = sharedSecretAllowed()
+		? checkBearerToken(auth, loadPocSecret())
+		: false;
+	if (!tokenOk && !legacyOk) {
+		return jsonResponse(401, { error: "unauthorized" });
+	}
+
+	if (!tenantRecord) {
+		return jsonResponse(404, { error: "tenant_not_registered" });
+	}
 	if (!tenantRecord.publicKeyXml) {
 		return jsonResponse(409, { error: "tenant_missing_public_key" });
 	}
@@ -58,9 +78,27 @@ export async function handleIngest(
 	try {
 		jwk = xmlRsaToJwk(tenantRecord.publicKeyXml);
 	} catch (err) {
-		return jsonResponse(409, {
-			error: "tenant_public_key_invalid",
-			detail: String(err),
+		console.error(`[ingest] invalid public key for tenant ${tenantCode}: ${err}`);
+		return jsonResponse(409, { error: "tenant_public_key_invalid" });
+	}
+
+	const profileDir = resolveStoragePath(
+		dataDir,
+		"storage",
+		tenantCode,
+		"profiles",
+		activityId,
+	);
+
+	// Idempotency: a completed ingest (keyversion.txt is written last) makes a
+	// repeat POST a no-op — never a re-analysis or overwrite.
+	const completedMarker = resolveStoragePath(profileDir, "keyversion.txt");
+	if (existsSync(completedMarker)) {
+		const keyVersion = readFileSync(completedMarker, "utf8").trim();
+		return jsonResponse(202, {
+			id: activityId,
+			status: "duplicate",
+			keyVersion: Number(keyVersion || KEY_VERSION_POC),
 		});
 	}
 
@@ -90,13 +128,6 @@ export async function handleIngest(
 		return jsonResponse(400, { error: "manifest_not_json" });
 	}
 
-	const profileDir = resolveStoragePath(
-		dataDir,
-		"storage",
-		tenantCode,
-		"profiles",
-		activityId,
-	);
 	mkdirSync(profileDir, { recursive: true });
 
 	// Write profile.bin to disk so analyzeProfile can read it as a filePath, then delete after.
@@ -110,7 +141,10 @@ export async function handleIngest(
 		try {
 			unlinkSync(tempProfilePath);
 		} catch {}
-		return jsonResponse(500, { error: "analyze_failed", detail: String(err) });
+		console.error(
+			`[ingest] analysis failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
+		);
+		return jsonResponse(500, { error: "analyze_failed" });
 	}
 
 	const resultBytes = Buffer.from(JSON.stringify(analysisResult), "utf8");

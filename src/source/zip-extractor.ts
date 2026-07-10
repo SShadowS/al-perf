@@ -6,6 +6,7 @@ import { basename, dirname, resolve, sep } from "path";
 /** Size limits to prevent decompression bombs */
 export const MAX_ENTRY_SIZE = 50 * 1024 * 1024; // 50MB per file
 export const MAX_TOTAL_SIZE = 500 * 1024 * 1024; // 500MB total extraction
+export const MAX_ENTRIES = 10_000; // entry-count cap (many tiny entries is also a bomb)
 
 /**
  * Find a companion .zip file for a given profile path.
@@ -129,6 +130,9 @@ async function readZipEntries(
 		}
 
 		entries.push({ name, data });
+		if (entries.length >= MAX_ENTRIES) {
+			break;
+		}
 		offset = dataStart + compressedSize;
 	}
 

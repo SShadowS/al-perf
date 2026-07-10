@@ -38,6 +38,9 @@ describe("POST /api/tenants/register (POC)", () => {
 		expect(res.status).toBe(201);
 		const body = await res.json();
 		expect(body.tenantCode).toBe("poc");
+		// Per-tenant ingest token is issued exactly once at registration.
+		expect(typeof body.tenantToken).toBe("string");
+		expect(body.tenantToken.length).toBeGreaterThanOrEqual(32);
 	});
 
 	it("rejects re-registration of same tenant", async () => {

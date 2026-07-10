@@ -1,5 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { loadPocSecret } from "../poc-secret.ts";
+import {
+	generateTenantToken,
+	hashToken,
+	loadAdminSecret,
+	secureEquals,
+} from "../poc-secret.ts";
 import {
 	isValidTenantCode,
 	normalizeTenantCode,
@@ -37,8 +42,10 @@ export async function handleTenantRegister(
 	}
 	const tenantCode = normalizeTenantCode(tenantCodeRaw);
 
-	const expected = loadPocSecret();
-	if (sharedSecret !== expected) {
+	if (
+		typeof sharedSecret !== "string" ||
+		!secureEquals(sharedSecret, loadAdminSecret())
+	) {
 		return new Response(JSON.stringify({ error: "invalid_secret" }), {
 			status: 401,
 			headers: { "Content-Type": "application/json" },
@@ -74,16 +81,24 @@ export async function handleTenantRegister(
 		);
 	}
 
+	// Per-tenant ingest token: returned exactly once here; only its hash is stored.
+	const tenantToken = generateTenantToken();
+
 	const record = {
 		tenantCode,
 		publicKeyXml,
 		tenantTag: body.tenantTag ?? tenantCode,
+		tokenHash: hashToken(tenantToken),
 		registeredAt: new Date().toISOString(),
 	};
 	writeFileSync(tenantFile, JSON.stringify(record, null, 2));
 
 	return new Response(
-		JSON.stringify({ tenantCode, registeredAt: record.registeredAt }),
+		JSON.stringify({
+			tenantCode,
+			registeredAt: record.registeredAt,
+			tenantToken,
+		}),
 		{
 			status: 201,
 			headers: { "Content-Type": "application/json" },

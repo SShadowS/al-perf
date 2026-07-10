@@ -18,16 +18,25 @@ const privatePem = privateKey.export({
 	type: "pkcs8",
 }) as string;
 
+// Unique tenant per run — registration is one-shot and returns the per-tenant
+// token exactly once, so re-using a code on a live server would leave us tokenless.
+const tenantCode = `rt${Date.now().toString(36)}`;
 const regRes = await fetch(`${BASE}/api/tenants/register`, {
 	method: "POST",
 	headers: { "Content-Type": "application/json" },
 	body: JSON.stringify({
-		tenantCode: "rt",
+		tenantCode,
 		sharedSecret: SECRET,
 		publicKeyXml: publicXml,
 	}),
 });
+const regBody = (await regRes.json()) as { tenantToken?: string };
 console.log("register:", regRes.status);
+if (!regBody.tenantToken) {
+	console.error("FAIL: registration did not return a tenantToken");
+	process.exit(1);
+}
+const tenantToken = regBody.tenantToken;
 
 const profileBytes = readFileSync(
 	resolve("test/fixtures/instrumentation-minimal.alcpuprofile"),
@@ -57,17 +66,20 @@ fd.append(
 const ingestRes = await fetch(`${BASE}/api/ingest`, {
 	method: "POST",
 	headers: {
-		Authorization: `Bearer ${SECRET}`,
-		"X-Tenant-Id": "rt",
+		Authorization: `Bearer ${tenantToken}`,
+		"X-Tenant-Id": tenantCode,
 		"X-Idempotency-Key": activityId,
 	},
 	body: fd,
 });
 console.log("ingest:", ingestRes.status, await ingestRes.text());
 
-const fetchRes = await fetch(`${BASE}/api/profiles/${activityId}?tenant=rt`, {
-	headers: { Authorization: `Bearer ${SECRET}` },
-});
+const fetchRes = await fetch(
+	`${BASE}/api/profiles/${activityId}?tenant=${tenantCode}`,
+	{
+		headers: { Authorization: `Bearer ${tenantToken}` },
+	},
+);
 const body = (await fetchRes.json()) as {
 	keyVersion: number;
 	manifest: string;

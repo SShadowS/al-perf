@@ -19,6 +19,9 @@ COPY web/ web/
 
 EXPOSE 3010
 
+# Production gates dev-only endpoints (e.g. /api/record-next-batch).
+ENV NODE_ENV=production
+
 # Persistent data (debug/consent captures, stats, tenants) lives under /data so it
 # survives container redeploys. Mount a volume here:
 #   docker run -v al-perf-data:/data -p 3010:3010 sshadows/al-perf

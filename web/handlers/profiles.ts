@@ -1,5 +1,10 @@
 import { existsSync, readFileSync } from "fs";
-import { checkBearerToken, loadPocSecret } from "../poc-secret.ts";
+import {
+	checkBearerAgainstHash,
+	checkBearerToken,
+	loadPocSecret,
+	sharedSecretAllowed,
+} from "../poc-secret.ts";
 import {
 	isValidActivityId,
 	isValidTenantCode,
@@ -8,17 +13,16 @@ import {
 	resolveStoragePath,
 } from "../storage.ts";
 
+interface TenantRecord {
+	tokenHash?: string;
+}
+
 export async function handleGetProfile(
 	req: Request,
 	url: URL,
 	dataDir: string,
 	activityIdRaw: string,
 ): Promise<Response> {
-	const auth = req.headers.get("authorization");
-	if (!checkBearerToken(auth, loadPocSecret())) {
-		return jsonResponse(401, { error: "unauthorized" });
-	}
-
 	if (!isValidActivityId(activityIdRaw)) {
 		return jsonResponse(400, { error: "invalid_activity_id" });
 	}
@@ -29,6 +33,29 @@ export async function handleGetProfile(
 		return jsonResponse(400, { error: "invalid_tenant" });
 	}
 	const tenantCode = normalizeTenantCode(tenantCodeRaw);
+
+	// The tenant param only locates the record; access requires that tenant's
+	// own token. Legacy shared-secret reads are opt-in (AL_PERF_ALLOW_SHARED_SECRET=1).
+	const tenantFile = resolveStoragePath(
+		dataDir,
+		"tenants",
+		`${tenantCode}.json`,
+	);
+	let tenantRecord: TenantRecord | undefined;
+	if (existsSync(tenantFile)) {
+		tenantRecord = JSON.parse(readFileSync(tenantFile, "utf8")) as TenantRecord;
+	}
+
+	const auth = req.headers.get("authorization");
+	const tokenOk = tenantRecord?.tokenHash
+		? checkBearerAgainstHash(auth, tenantRecord.tokenHash)
+		: false;
+	const legacyOk = sharedSecretAllowed()
+		? checkBearerToken(auth, loadPocSecret())
+		: false;
+	if (!tokenOk && !legacyOk) {
+		return jsonResponse(401, { error: "unauthorized" });
+	}
 
 	const profileDir = resolveStoragePath(
 		dataDir,

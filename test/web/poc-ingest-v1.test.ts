@@ -32,7 +32,7 @@ describe("POST /api/ingest (v1 encrypted)", () => {
 			type: "pkcs8",
 		}) as string;
 
-		await fetch(`${BASE}/api/tenants/register`, {
+		const regRes = await fetch(`${BASE}/api/tenants/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -41,6 +41,7 @@ describe("POST /api/ingest (v1 encrypted)", () => {
 				publicKeyXml: publicXml,
 			}),
 		});
+		const { tenantToken } = (await regRes.json()) as { tenantToken: string };
 
 		const profilePath = resolve(
 			import.meta.dir,
@@ -69,7 +70,7 @@ describe("POST /api/ingest (v1 encrypted)", () => {
 		const res = await fetch(`${BASE}/api/ingest`, {
 			method: "POST",
 			headers: {
-				Authorization: "Bearer test-secret-1234",
+				Authorization: `Bearer ${tenantToken}`,
 				"X-Tenant-Id": "poc",
 				"X-Idempotency-Key": VALID_GUID,
 			},

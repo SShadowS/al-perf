@@ -63,7 +63,10 @@ const APP_VERSION = (
 // Ensure the data root exists so stats writes succeed on a fresh local checkout.
 await mkdir(DATA_DIR, { recursive: true });
 await initIdCounter(DEBUG_DIR);
-const sweepInterval = setInterval(() => debugStore.sweep(), 5 * 60 * 1000);
+const sweepInterval = setInterval(() => {
+	debugStore.sweep();
+	pruneRateBuckets();
+}, 5 * 60 * 1000);
 
 interface Stats {
 	totalAnalyses: number;
@@ -79,12 +82,51 @@ async function loadStats(): Promise<Stats> {
 	}
 }
 
-async function recordAnalysis(): Promise<void> {
-	const stats = await loadStats();
-	stats.totalAnalyses++;
-	const today = new Date().toISOString().slice(0, 10);
-	stats.dailyCounts[today] = (stats.dailyCounts[today] || 0) + 1;
-	await writeFile(STATS_FILE, JSON.stringify(stats, null, 2));
+// Stats updates are serialized through a promise chain — concurrent ingests
+// would otherwise interleave read-modify-write and lose counts.
+let statsChain: Promise<void> = Promise.resolve();
+function recordAnalysis(): Promise<void> {
+	statsChain = statsChain
+		.then(async () => {
+			const stats = await loadStats();
+			stats.totalAnalyses++;
+			const today = new Date().toISOString().slice(0, 10);
+			stats.dailyCounts[today] = (stats.dailyCounts[today] || 0) + 1;
+			await writeFile(STATS_FILE, JSON.stringify(stats, null, 2));
+		})
+		.catch(() => {});
+	return statsChain;
+}
+
+// ---------------------------------------------------------------------------
+// Per-IP rate limiting for the anonymous analyze endpoints. Each request can
+// trigger paid AI calls, so unauthenticated volume needs a ceiling.
+// ---------------------------------------------------------------------------
+const RATE_LIMIT = parseInt(process.env.AL_PERF_RATE_LIMIT || "20", 10);
+const RATE_WINDOW_MS =
+	parseInt(process.env.AL_PERF_RATE_WINDOW_SEC || "600", 10) * 1000;
+const rateBuckets = new Map<string, number[]>();
+
+function rateLimited(ip: string): boolean {
+	if (process.env.NODE_ENV === "test" || RATE_LIMIT <= 0) return false;
+	const cutoff = Date.now() - RATE_WINDOW_MS;
+	const hits = (rateBuckets.get(ip) ?? []).filter((t) => t > cutoff);
+	if (hits.length >= RATE_LIMIT) {
+		rateBuckets.set(ip, hits);
+		return true;
+	}
+	hits.push(Date.now());
+	rateBuckets.set(ip, hits);
+	return false;
+}
+
+function pruneRateBuckets(): void {
+	const cutoff = Date.now() - RATE_WINDOW_MS;
+	for (const [ip, hits] of rateBuckets) {
+		const live = hits.filter((t) => t > cutoff);
+		if (live.length === 0) rateBuckets.delete(ip);
+		else rateBuckets.set(ip, live);
+	}
 }
 
 /**
@@ -803,6 +845,11 @@ export const server = Bun.serve({
 
 		// API routes
 		if (url.pathname === "/api/analyze" && req.method === "POST") {
+			if (rateLimited(ip)) {
+				return withSecurityHeaders(
+					Response.json({ error: "rate_limited" }, { status: 429 }),
+				);
+			}
 			const res = await handleAnalyze(req);
 			console.log(
 				`${new Date().toISOString()} ${ip} POST /api/analyze ${res.status} ${Date.now() - start}ms`,
@@ -816,6 +863,24 @@ export const server = Bun.serve({
 					new Response("Not available in production", { status: 403 }),
 				);
 			}
+			// Dev-only fixture recorder, but still admin-gated: an unauthenticated
+			// POST must never be able to arm persistence of the next upload.
+			const { checkBearerToken, loadAdminSecret } = await import(
+				"./poc-secret.ts"
+			);
+			let adminSecret: string;
+			try {
+				adminSecret = loadAdminSecret();
+			} catch {
+				return withSecurityHeaders(
+					Response.json({ error: "admin_secret_not_configured" }, { status: 403 }),
+				);
+			}
+			if (!checkBearerToken(req.headers.get("authorization"), adminSecret)) {
+				return withSecurityHeaders(
+					Response.json({ error: "unauthorized" }, { status: 401 }),
+				);
+			}
 			recordNextBatch = true;
 			console.log(
 				"[record] Armed — next batch request will be saved to test fixtures",
@@ -824,6 +889,11 @@ export const server = Bun.serve({
 		}
 
 		if (url.pathname === "/api/analyze-batch" && req.method === "POST") {
+			if (rateLimited(ip)) {
+				return withSecurityHeaders(
+					Response.json({ error: "rate_limited" }, { status: 429 }),
+				);
+			}
 			const res = await handleAnalyzeBatch(req);
 			console.log(
 				`${new Date().toISOString()} ${ip} POST /api/analyze-batch ${res.status} ${Date.now() - start}ms`,
