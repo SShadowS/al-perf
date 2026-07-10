@@ -69,6 +69,8 @@ export interface RawProfile {
 
 export type ProfileType = "sampling" | "instrumentation";
 
+export type ProfileSourceFormat = "alcpuprofile" | "ir-json";
+
 export interface ParsedProfile {
 	type: ProfileType;
 	nodes: RawProfileNode[];
@@ -81,4 +83,17 @@ export interface ParsedProfile {
 	timeDeltas?: number[];
 	sampleExecutionTimes?: number[];
 	samplingInterval?: number; // Derived average interval for sampling profiles (microseconds)
+	/** Wire format this profile was parsed from. Absent = "alcpuprofile" (legacy callers). */
+	sourceFormat?: ProfileSourceFormat;
+	/**
+	 * Exact per-node self time in µs, keyed by node id (ir-json only).
+	 * When present it overrides the positionTicks / sample-count computation.
+	 */
+	exactSelfTimes?: Map<number, number>;
+	/** ir-json capture-level counters (ir-json only). */
+	irCapture?: {
+		invocationCount: number;
+		incompleteCount: number;
+		exceptionCount: number;
+	};
 }

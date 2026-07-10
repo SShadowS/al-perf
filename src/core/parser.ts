@@ -57,6 +57,7 @@ export function parseProfileFromRaw(raw: RawProfile): ParsedProfile {
 
 	return {
 		type,
+		sourceFormat: "alcpuprofile",
 		nodes: raw.nodes,
 		nodeMap,
 		rootNodes,
