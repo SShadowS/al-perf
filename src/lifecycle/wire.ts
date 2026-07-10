@@ -14,7 +14,14 @@
  *
  * The anchor routine of a DetectedPattern is `involvedMethods[0]`, ALWAYS.
  * Two consumers anchoring differently would split identities, so no other
- * module may re-derive a pattern anchor.
+ * module may re-derive a pattern anchor FOR FINGERPRINT IDENTITY.
+ *
+ * NOT the same concept as src/semantic/corroboration-map.ts's `anchorIndex`:
+ * that map picks the loop/recursion-OWNING involvedMethods[] entry for
+ * CORROBORATION matching, a deliberately different question. For
+ * high-hit-count they diverge on purpose — corroboration anchors the parent
+ * (index 1, the loop owner) while fingerprint identity anchors the hot child
+ * (index 0, per the policy above).
  *
  * Verified against every detector (src/core/patterns.ts,
  * src/source/source-patterns.ts, src/source/source-only-patterns.ts):
@@ -61,7 +68,13 @@ export interface PatternAnchor {
  * Index methods by their display label — the exact string the detectors write
  * into involvedMethods: `"<functionName> (<objectType> <objectId>)"`
  * (formatMethodRef in core/patterns.ts, methodLabel in source-patterns.ts,
- * memberLabel in source-only-patterns.ts — all three emit this format).
+ * memberLabel in source-only-patterns.ts — plus two inline producers that
+ * build the same literal by hand instead of calling a shared helper:
+ * detectDangerousCallsInLoop in source-only-patterns.ts, ~line 187, and the
+ * record-ops-in-loop findings in cli/commands/analyze-source.ts, ~line 122).
+ * All five sites must stay byte-identical to this format — a future producer
+ * that drifts silently falls to the parseable-unresolved or unparseable rung
+ * of resolvePatternAnchor's ladder below instead of resolving cleanly.
  * First write wins; method keys are unique after aggregation, so collisions
  * only occur for pathological synthetic input.
  */
