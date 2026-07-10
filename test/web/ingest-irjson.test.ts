@@ -150,4 +150,44 @@ describe("POST /api/ingest with ir-json", () => {
 			"invalid_capture_kind",
 		);
 	});
+
+	it("fails closed on a non-numeric AL_PERF_MAX_PROFILE_BYTES (falls back to the default, still rejects oversized)", async () => {
+		const token = await registerTenant("irjf");
+		const key = "550e8400-e29b-41d4-a716-446655440106";
+		process.env.AL_PERF_MAX_PROFILE_BYTES = "banana";
+		try {
+			// 1 byte over the 128 MiB default — proves Number("banana") -> NaN
+			// does not silently disable the budget (length > NaN is always false).
+			const big = Buffer.alloc(134_217_729);
+			const gz = Bun.gzipSync(big);
+			const res = await postIngest(token, "irjf", key, gz, {
+				activityId: key,
+			});
+			expect(res.status).toBe(413);
+			expect(((await res.json()) as { error: string }).error).toBe(
+				"payload_too_large",
+			);
+		} finally {
+			delete process.env.AL_PERF_MAX_PROFILE_BYTES;
+		}
+	});
+
+	it("bounds decompression incrementally — a 2 MiB zero payload trips a 1 MiB cap without full inflation", async () => {
+		const token = await registerTenant("irjg");
+		const key = "550e8400-e29b-41d4-a716-446655440107";
+		process.env.AL_PERF_MAX_PROFILE_BYTES = String(1024 * 1024);
+		try {
+			const zeros = Buffer.alloc(2 * 1024 * 1024); // decompressed 2 MiB
+			const gz = Bun.gzipSync(zeros);
+			const res = await postIngest(token, "irjg", key, gz, {
+				activityId: key,
+			});
+			expect(res.status).toBe(413);
+			expect(((await res.json()) as { error: string }).error).toBe(
+				"payload_too_large",
+			);
+		} finally {
+			delete process.env.AL_PERF_MAX_PROFILE_BYTES;
+		}
+	});
 });

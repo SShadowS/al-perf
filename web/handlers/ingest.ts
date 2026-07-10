@@ -29,6 +29,71 @@ interface TenantRecord {
 	tokenHash?: string;
 }
 
+/** Read AL_PERF_MAX_PROFILE_BYTES per request; fail closed (use the default) on junk. */
+function resolveMaxProfileBytes(): number {
+	const raw = process.env.AL_PERF_MAX_PROFILE_BYTES;
+	if (raw === undefined) return DEFAULT_MAX_PROFILE_BYTES;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		console.error(
+			`[ingest] invalid AL_PERF_MAX_PROFILE_BYTES=${JSON.stringify(raw)}; falling back to default ${DEFAULT_MAX_PROFILE_BYTES}`,
+		);
+		return DEFAULT_MAX_PROFILE_BYTES;
+	}
+	return parsed;
+}
+
+class ProfileTooLargeError extends Error {}
+
+/**
+ * Decompress gzip data using DecompressionStream, aborting the stream as soon
+ * as the accumulated output exceeds maxSize — bounds the decompression itself
+ * (gzip-bomb guard), not just the size of the finished buffer. Mirrors
+ * inflateData in src/source/zip-extractor.ts.
+ */
+async function gunzipBounded(
+	compressed: Uint8Array,
+	maxSize: number,
+): Promise<Buffer> {
+	const ds = new DecompressionStream("gzip");
+	const writer = ds.writable.getWriter();
+	const reader = ds.readable.getReader();
+
+	// The writable side's write()/close() promises also reject when the
+	// stream errors (e.g. malformed gzip); left unhandled, that crashes as an
+	// unhandled rejection even though the readable side's rejection below is
+	// caught. Swallow them here — the readable side is the source of truth.
+	writer.write(compressed as BufferSource).catch(() => {});
+	writer.close().catch(() => {});
+
+	const chunks: Uint8Array[] = [];
+	let totalLength = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+		totalLength += value.length;
+		if (totalLength > maxSize) {
+			// Best-effort cancellation; report the size violation regardless of
+			// whether cancel() itself resolves cleanly.
+			try {
+				await reader.cancel();
+			} catch {}
+			throw new ProfileTooLargeError(
+				`Decompressed size exceeds limit of ${maxSize} bytes`,
+			);
+		}
+	}
+
+	const result = new Uint8Array(totalLength);
+	let pos = 0;
+	for (const chunk of chunks) {
+		result.set(chunk, pos);
+		pos += chunk.length;
+	}
+	return Buffer.from(result);
+}
+
 export async function handleIngest(
 	req: Request,
 	dataDir: string,
@@ -121,26 +186,32 @@ export async function handleIngest(
 	const manifestBytes = Buffer.from(await manifestPart.arrayBuffer());
 	let profileBytes = Buffer.from(await profilePart.arrayBuffer());
 
+	// Size budget on DECOMPRESSED bytes (gzip-bomb guard). Read per request so
+	// tests can override; the invocation-count budget lives in the parser.
+	const maxProfileBytes = resolveMaxProfileBytes();
+
 	// gzip transfer encoding, detected by content (magic bytes 0x1f 0x8b) —
 	// multipart part headers are not visible through req.formData(), so the
 	// contract is: gzip the profile bytes themselves before appending the part.
+	// Decompression is bounded incrementally (gunzipBounded aborts the stream
+	// once output exceeds maxProfileBytes) so a compressed bomb can't force
+	// unbounded synchronous allocation before the budget check runs.
 	if (
 		profileBytes.length >= 2 &&
 		profileBytes[0] === 0x1f &&
 		profileBytes[1] === 0x8b
 	) {
 		try {
-			profileBytes = Buffer.from(Bun.gunzipSync(profileBytes));
-		} catch {
+			profileBytes = await gunzipBounded(profileBytes, maxProfileBytes);
+		} catch (err) {
+			if (err instanceof ProfileTooLargeError) {
+				return jsonResponse(413, { error: "payload_too_large" });
+			}
 			return jsonResponse(400, { error: "invalid_gzip" });
 		}
 	}
 
-	// Size budget on DECOMPRESSED bytes (gzip-bomb guard). Read per request so
-	// tests can override; the invocation-count budget lives in the parser.
-	const maxProfileBytes = Number(
-		process.env.AL_PERF_MAX_PROFILE_BYTES ?? DEFAULT_MAX_PROFILE_BYTES,
-	);
+	// Belt-and-suspenders: also covers plain (non-gzip) uploads.
 	if (profileBytes.length > maxProfileBytes) {
 		return jsonResponse(413, { error: "payload_too_large" });
 	}
