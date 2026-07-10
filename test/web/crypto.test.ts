@@ -1,11 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	createPrivateKey,
-	createPublicKey,
-	constants as cryptoConst,
-	generateKeyPairSync,
-	privateDecrypt,
-} from "crypto";
+import { generateKeyPairSync } from "crypto";
 import {
 	decryptBundleForTest,
 	encryptBundle,

@@ -61,5 +61,5 @@ export function corroboratesDetector(
 	alSemDetector: string,
 ): boolean {
 	const entry = CORROBORATION_MAP[patternId];
-	return entry !== undefined && entry.alSemDetectors.includes(alSemDetector);
+	return entry?.alSemDetectors.includes(alSemDetector) ?? false;
 }

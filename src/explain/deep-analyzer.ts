@@ -211,7 +211,7 @@ export function buildDeepPayload(
 
 	// Diagnostics — controlled by payloadConfig
 	let diagnostics: ProfileDiagnostics | undefined;
-	if (!payloadConfig || payloadConfig.includeDiagnostics !== false) {
+	if (payloadConfig?.includeDiagnostics !== false) {
 		const full = computeDiagnostics(profile, result);
 		if (payloadConfig?.includeDiagnostics === "lite") {
 			diagnostics = {

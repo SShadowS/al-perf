@@ -30,7 +30,7 @@ export interface EncryptedBundle {
 	result: BundlePart;
 }
 
-const TAG_BYTES = 32;
+const _TAG_BYTES = 32;
 const IV_BYTES = 16;
 
 function base64ToBase64Url(s: string): string {
@@ -101,7 +101,7 @@ function aesCbc256Decrypt(key: Buffer, iv: Buffer, ciphertext: Buffer): Buffer {
 	return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
-function hmacSha256(key: Buffer, data: Buffer): Buffer {
+function _hmacSha256(key: Buffer, data: Buffer): Buffer {
 	return createHmac("sha256", key).update(data).digest();
 }
 
