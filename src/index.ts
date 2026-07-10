@@ -8,7 +8,11 @@ export {
 	aggregateByMethod,
 	aggregateByObject,
 } from "./core/aggregator.js";
-export { analyzeProfile, compareProfiles } from "./core/analyzer.js";
+export {
+	analyzeProfile,
+	comparabilityWarning,
+	compareProfiles,
+} from "./core/analyzer.js";
 export type { BatchOptions } from "./core/batch-analyzer.js";
 export { aggregateResults, analyzeBatch } from "./core/batch-analyzer.js";
 export { drilldownMethod } from "./core/drilldown.js";
@@ -63,6 +67,34 @@ export {
 } from "./explain/response-parser.js";
 // History
 export { HistoryStore } from "./history/store.js";
+// Lifecycle (phase 2) — finding-identity contract + fingerprint wiring
+export type {
+	CaptureKind,
+	FindingFingerprint,
+	FingerprintMigration,
+	FingerprintMigrationReason,
+	FingerprintNamespace,
+	FingerprintRoutineIdentity,
+	PatternFingerprintInput,
+	SalientLocation,
+	TelemetryFingerprintInput,
+} from "./lifecycle/fingerprint.js";
+export {
+	computePatternFingerprint,
+	computeTelemetryFingerprint,
+	FINGERPRINT_ALGO_VERSION,
+	formatFingerprint,
+	linkFingerprints,
+	normalizeSalientLocation,
+	routineIdentityFromCorrelation,
+	wrapAlsemFingerprint,
+} from "./lifecycle/fingerprint.js";
+export type { PatternAnchor } from "./lifecycle/wire.js";
+export {
+	buildMethodLabelMap,
+	fingerprintPatterns,
+	resolvePatternAnchor,
+} from "./lifecycle/wire.js";
 export type { McpServerOptions } from "./mcp/server.js";
 // MCP server
 export { createMcpServer } from "./mcp/server.js";
