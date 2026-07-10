@@ -657,7 +657,9 @@ function findTableRelationTarget(node: SyntaxNode): string | undefined {
  */
 function declarationChildren(node: SyntaxNode): SyntaxNode[] {
 	const body = node.namedChildren.find((c) => c.type === "declaration_body");
-	return body ? [...node.namedChildren, ...body.namedChildren] : node.namedChildren;
+	return body
+		? [...node.namedChildren, ...body.namedChildren]
+		: node.namedChildren;
 }
 
 /**

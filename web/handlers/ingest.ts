@@ -78,7 +78,9 @@ export async function handleIngest(
 	try {
 		jwk = xmlRsaToJwk(tenantRecord.publicKeyXml);
 	} catch (err) {
-		console.error(`[ingest] invalid public key for tenant ${tenantCode}: ${err}`);
+		console.error(
+			`[ingest] invalid public key for tenant ${tenantCode}: ${err}`,
+		);
 		return jsonResponse(409, { error: "tenant_public_key_invalid" });
 	}
 

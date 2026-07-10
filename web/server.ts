@@ -63,10 +63,13 @@ const APP_VERSION = (
 // Ensure the data root exists so stats writes succeed on a fresh local checkout.
 await mkdir(DATA_DIR, { recursive: true });
 await initIdCounter(DEBUG_DIR);
-const sweepInterval = setInterval(() => {
-	debugStore.sweep();
-	pruneRateBuckets();
-}, 5 * 60 * 1000);
+const sweepInterval = setInterval(
+	() => {
+		debugStore.sweep();
+		pruneRateBuckets();
+	},
+	5 * 60 * 1000,
+);
 
 interface Stats {
 	totalAnalyses: number;
@@ -873,7 +876,10 @@ export const server = Bun.serve({
 				adminSecret = loadAdminSecret();
 			} catch {
 				return withSecurityHeaders(
-					Response.json({ error: "admin_secret_not_configured" }, { status: 403 }),
+					Response.json(
+						{ error: "admin_secret_not_configured" },
+						{ status: 403 },
+					),
 				);
 			}
 			if (!checkBearerToken(req.headers.get("authorization"), adminSecret)) {

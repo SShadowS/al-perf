@@ -123,12 +123,9 @@ describe("GET /api/profiles/{activityId} (POC, per-tenant token)", () => {
 	});
 
 	it("rejects a valid token aimed at another tenant's store", async () => {
-		const res = await fetch(
-			`${BASE}/api/profiles/${VALID_GUID}?tenant=other`,
-			{
-				headers: { Authorization: `Bearer ${tenantToken}` },
-			},
-		);
+		const res = await fetch(`${BASE}/api/profiles/${VALID_GUID}?tenant=other`, {
+			headers: { Authorization: `Bearer ${tenantToken}` },
+		});
 		expect(res.status).toBe(401);
 	});
 
