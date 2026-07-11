@@ -528,6 +528,10 @@ export function createLifecycleCommand(): Command {
 			DEFAULT_SIGNALS.join(","),
 		)
 		.option(
+			"--client-types <list>",
+			"Comma-separated BC client types to filter (e.g. Background,WebClient); default: no filter",
+		)
+		.option(
 			"--out <path>",
 			"Write the normalized batch JSON here instead of evaluating (does not touch the DB)",
 		)
@@ -549,11 +553,18 @@ export function createLifecycleCommand(): Command {
 					.split(",")
 					.map((s: string) => s.trim())
 					.filter((s: string) => s.length > 0);
+				const clientTypes = opts.clientTypes
+					? String(opts.clientTypes)
+							.split(",")
+							.map((s: string) => s.trim())
+							.filter((s: string) => s.length > 0)
+					: undefined;
 				batch = await pullTelemetry({
 					appId: opts.appId,
 					apiKeyEnv: opts.apiKeyEnv,
 					since: opts.since,
 					signals,
+					clientTypes,
 				});
 			} catch (err) {
 				console.error(err instanceof Error ? err.message : String(err));

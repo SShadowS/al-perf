@@ -40,6 +40,14 @@ const APPINSIGHTS_API_BASE = "https://api.applicationinsights.io";
 /** Signal ids are spliced into the KQL string literal — restrict to a safe identifier shape. */
 const SIGNAL_ID_RE = /^[A-Za-z0-9_]+$/;
 
+/**
+ * `--client-types` values are spliced into the KQL `in (...)` filter clause —
+ * same injection posture as SIGNAL_ID_RE, and the same shape the
+ * telemetry-parser validates a pulled clientType against
+ * (src/core/telemetry-parser.ts CLIENT_TYPE_RE).
+ */
+const CLIENT_TYPE_RE = /^[A-Za-z]+$/;
+
 export interface PullTelemetryOptions {
 	/** Application Insights application id (GUID). */
 	appId: string;
@@ -49,6 +57,12 @@ export interface PullTelemetryOptions {
 	since?: string;
 	/** Signal (event) ids to pull. Defaults to RT0018 + RT0005. */
 	signals?: readonly string[];
+	/**
+	 * BC session client types to filter on (e.g. "Background", "WebClient").
+	 * Default (omitted/empty) pulls every client type — clientType still rides
+	 * along in the by-key and each emitted signal either way (D5).
+	 */
+	clientTypes?: readonly string[];
 	/** `TelemetryBatchDocument.source` override. */
 	source?: string;
 	/** Injectable clock for deterministic `--since` resolution and windowEnd in tests. */
@@ -118,13 +132,24 @@ export function parseTimespanMs(value: string): number {
 
 /**
  * Build the per-signal KQL query. Aggregation happens server-side so the
- * batch arrives pre-aggregated (one row per appId/object/method). `ms` stays
- * a double from `executionTimeInMs` when present; `stackTrace` is carried
- * through (via `any()`, not grouped on) so the TS normalizer — never KQL —
- * can fall back to its first line when `alMethod` is empty.
+ * batch arrives pre-aggregated (one row per appId/object/method/clientType).
+ * `ms` stays a double from `executionTimeInMs` when present; `stackTrace` is
+ * carried through (via `any()`, not grouped on) so the TS normalizer — never
+ * KQL — can fall back to its first line when `alMethod` is empty.
+ *
+ * `clientType` (D5) always rides the extend + summarize by-key, independent
+ * of `--client-types` — it's carried through to every emitted signal so the
+ * severity ladder (telemetry-parser.ts) can key off it downstream even when
+ * the pull itself isn't filtered. `clientTypes` only adds the extra `| where`
+ * filter clause; each value is validated by the caller (pullTelemetry)
+ * BEFORE it reaches this function.
  */
-function buildKqlQuery(signalId: string, sinceIso: string): string {
-	return [
+function buildKqlQuery(
+	signalId: string,
+	sinceIso: string,
+	clientTypes?: readonly string[],
+): string {
+	const lines = [
 		"traces",
 		`| where timestamp > datetime(${sinceIso})`,
 		`| where customDimensions.eventId == "${signalId}"`,
@@ -135,10 +160,18 @@ function buildKqlQuery(signalId: string, sinceIso: string): string {
 		"         objectName = tostring(customDimensions.alObjectName),",
 		"         methodName = tostring(customDimensions.alMethod),",
 		"         stackTrace = tostring(customDimensions.alStackTrace),",
+		"         clientType = tostring(customDimensions.clientType),",
 		"         ms = todouble(customDimensions.executionTimeInMs)",
+	];
+	if (clientTypes && clientTypes.length > 0) {
+		const list = clientTypes.map((ct) => `"${ct}"`).join(", ");
+		lines.push(`| where clientType in (${list})`);
+	}
+	lines.push(
 		"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace)",
-		"    by appId, appName, objectType, objectId, objectName, methodName",
-	].join("\n");
+		"    by appId, appName, objectType, objectId, objectName, methodName, clientType",
+	);
+	return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +260,7 @@ function normalizeTable(
 
 		const appName = asDisplayString(cell(row, "appName"));
 		const objectName = asDisplayString(cell(row, "objectName"));
+		const clientType = asDisplayString(cell(row, "clientType"));
 		const avgRaw = cell(row, "avgDurationMs");
 
 		signals.push({
@@ -237,6 +271,7 @@ function normalizeTable(
 			objectId: Number(cell(row, "objectId")),
 			objectName: objectName !== "" ? objectName : undefined,
 			methodName,
+			clientType: clientType !== "" ? clientType : undefined,
 			count: Number(cell(row, "count")),
 			maxDurationMs: asDurationMs(
 				cell(row, "maxDurationMs"),
@@ -302,6 +337,18 @@ export async function pullTelemetry(
 		}
 	}
 
+	const clientTypes =
+		opts.clientTypes && opts.clientTypes.length > 0 ? opts.clientTypes : undefined;
+	if (clientTypes) {
+		for (const clientType of clientTypes) {
+			if (!CLIENT_TYPE_RE.test(clientType)) {
+				throw new Error(
+					`pull-telemetry: invalid --client-types value '${clientType}'`,
+				);
+			}
+		}
+	}
+
 	const now = (opts.now ?? (() => new Date()))();
 	const sinceIso = resolveSince(opts.since ?? DEFAULT_SINCE, now);
 	const windowEnd = now.toISOString();
@@ -309,7 +356,7 @@ export async function pullTelemetry(
 	const allSignals: TelemetrySignal[] = [];
 	let skippedTotal = 0;
 	for (const signalId of signalIds) {
-		const kql = buildKqlQuery(signalId, sinceIso);
+		const kql = buildKqlQuery(signalId, sinceIso, clientTypes);
 		const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(opts.appId)}/query?query=${encodeURIComponent(kql)}`;
 
 		let res: Response;

@@ -559,6 +559,69 @@ describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
 		expect(errText).toContain(DEFAULT_API_KEY_ENV);
 		expect(errText).not.toContain(PULL_DECOY_KEY);
 	});
+
+	it("--client-types splices a comma-separated list into the KQL filter clause", async () => {
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		const calls: string[] = [];
+		globalThis.fetch = (async (url: string) => {
+			calls.push(url);
+			return new Response(JSON.stringify(appInsightsResponse()), {
+				status: 200,
+			});
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--client-types",
+				"Background,WebClient",
+			],
+			{ from: "user" },
+		);
+
+		expect(calls).toHaveLength(1);
+		const decoded = decodeURIComponent(calls[0]);
+		expect(decoded).toContain('| where clientType in ("Background", "WebClient")');
+	});
+
+	it("an invalid --client-types value exits 1 with zero fetch calls (usage error, same posture as an invalid signal id)", async () => {
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--client-types",
+				"Background;drop",
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(1);
+		expect(existsSync(dbPath)).toBe(false);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("client-types");
+	});
 });
 
 // ---------------------------------------------------------------------------

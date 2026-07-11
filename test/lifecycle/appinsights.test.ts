@@ -31,6 +31,7 @@ const COLUMNS = [
 	{ name: "maxDurationMs", type: "real" },
 	{ name: "avgDurationMs", type: "real" },
 	{ name: "stackTrace", type: "string" },
+	{ name: "clientType", type: "string" },
 ];
 
 function primaryTableResponse(rows: unknown[][], extraTables: unknown[] = []) {
@@ -292,6 +293,176 @@ describe("pullTelemetry — row normalization", () => {
 		} finally {
 			console.error = originalError;
 		}
+	});
+});
+
+describe("pullTelemetry — clientType (D5: telemetry-config-clienttype plan Task 4)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("KQL always extends + groups by clientType, even without --client-types", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetry({ appId: APP_ID, signals: ["RT0018"] }, fetchImpl);
+
+		const decoded = decodeURIComponent(calls[0]);
+		expect(decoded).toContain("clientType = tostring(customDimensions.clientType)");
+		expect(decoded).toMatch(/\bby\b[^\n]*clientType/);
+		expect(decoded).not.toContain("| where clientType in");
+	});
+
+	it("--client-types adds a filter clause before summarize, validated values only", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018"], clientTypes: ["Background", "WebClient"] },
+			fetchImpl,
+		);
+
+		const decoded = decodeURIComponent(calls[0]);
+		expect(decoded).toContain('| where clientType in ("Background", "WebClient")');
+	});
+
+	it("rejects an invalid --client-types value before any fetch call (injection posture)", async () => {
+		let fetchCalled = false;
+		const fetchImpl = (async () => {
+			fetchCalled = true;
+			throw new Error("fetch should not be called");
+		}) as typeof fetch;
+
+		await expect(
+			pullTelemetry(
+				{ appId: APP_ID, signals: ["RT0018"], clientTypes: ["Background;drop"] },
+				fetchImpl,
+			),
+		).rejects.toThrow(/invalid.*client-types/i);
+		expect(fetchCalled).toBe(false);
+	});
+
+	it("rejects '__proto__' as a --client-types value (letters-only regex, same posture as telemetry-parser)", async () => {
+		const fetchImpl = (async () => {
+			throw new Error("fetch should not be called");
+		}) as typeof fetch;
+
+		await expect(
+			pullTelemetry(
+				{ appId: APP_ID, signals: ["RT0018"], clientTypes: ["__proto__"] },
+				fetchImpl,
+			),
+		).rejects.toThrow(/invalid.*client-types/i);
+	});
+
+	it("normalizes a present clientType column into signal.clientType", async () => {
+		const row = [
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"My ISV App",
+			"Codeunit",
+			50100,
+			"Sales Post",
+			"ProcessLine",
+			3,
+			12000,
+			9500,
+			"",
+			"Background",
+		];
+		const fetchImpl = (async () =>
+			okResponse(primaryTableResponse([row]))) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018"] },
+			fetchImpl,
+		);
+
+		expect(batch.signals).toHaveLength(1);
+		expect(batch.signals[0].clientType).toBe("Background");
+	});
+
+	it("omits clientType when the column is absent or empty (old App Insights rows)", async () => {
+		const rowWithoutColumn = [
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"My ISV App",
+			"Codeunit",
+			50100,
+			"Sales Post",
+			"ProcessLine",
+			3,
+			12000,
+			9500,
+			"",
+			// no clientType value at all
+		];
+		const rowWithEmptyColumn = [
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"My ISV App",
+			"Codeunit",
+			50200,
+			"Sales Post",
+			"ProcessLine2",
+			1,
+			1000,
+			1000,
+			"",
+			"",
+		];
+		let call = 0;
+		const fetchImpl = (async () => {
+			call++;
+			return okResponse(
+				primaryTableResponse(call === 1 ? [rowWithoutColumn] : [rowWithEmptyColumn]),
+			);
+		}) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018", "RT0005"] },
+			fetchImpl,
+		);
+
+		expect(batch.signals).toHaveLength(2);
+		expect(batch.signals[0].clientType).toBeUndefined();
+		expect(batch.signals[1].clientType).toBeUndefined();
+	});
+
+	it("a pulled batch with clientTypes round-trips through the Task-3 parser", async () => {
+		const bgRow = [
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"My ISV App",
+			"Codeunit",
+			50100,
+			"Sales Post",
+			"ProcessLine",
+			5,
+			76934,
+			50000,
+			"",
+			"Background",
+		];
+		const fetchImpl = (async () =>
+			okResponse(primaryTableResponse([bgRow]))) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018"], clientTypes: ["Background"] },
+			fetchImpl,
+		);
+
+		expect(batch.signals[0].clientType).toBe("Background");
+
+		const parsed = parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.signalCount).toBe(1);
+		expect(parsed.result.patterns).toHaveLength(1);
+		expect(parsed.result.patterns[0].fingerprint).toMatch(/^telemetry:[0-9a-f]{16}$/);
 	});
 });
 
