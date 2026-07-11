@@ -280,6 +280,52 @@ describe("zip-extractor security", () => {
 		});
 	});
 
+	describe("corrupt deflate stream", () => {
+		it("rejects via the extractor's own error, not an unhandled rejection", async () => {
+			// A compressed payload that is not valid raw-deflate data. The
+			// DecompressionStream reader detects this (Z_DATA_ERROR) and its
+			// error must be the ONLY way this surfaces — the writer's own
+			// write()/close() promises (unawaited, per the streaming API) must
+			// never independently reject as an unhandled rejection.
+			const nameBytes = Buffer.from("corrupt.al", "utf-8");
+			const garbage = new Uint8Array([
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			]);
+
+			const header = Buffer.alloc(30);
+			header.writeUInt32LE(0x04034b50, 0);
+			header.writeUInt16LE(20, 4);
+			header.writeUInt16LE(0, 6);
+			header.writeUInt16LE(8, 8); // compression method 8 (Deflate)
+			header.writeUInt16LE(0, 10);
+			header.writeUInt16LE(0, 12);
+			header.writeUInt32LE(0, 14);
+			header.writeUInt32LE(garbage.length, 18); // compressed size
+			header.writeUInt32LE(1024, 22); // declared uncompressed size
+			header.writeUInt16LE(nameBytes.length, 26);
+			header.writeUInt16LE(0, 28);
+
+			const zip = Buffer.concat([header, nameBytes, Buffer.from(garbage)]);
+			const zipPath = await writeTempZip(zip);
+
+			let unhandled: unknown = null;
+			const onUnhandledRejection = (err: unknown) => {
+				unhandled = err;
+			};
+			process.on("unhandledRejection", onUnhandledRejection);
+
+			try {
+				await expect(extractCompanionZip(zipPath)).rejects.toBeTruthy();
+			} finally {
+				// Give a stray unhandled rejection a tick to surface before checking.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				process.off("unhandledRejection", onUnhandledRejection);
+			}
+
+			expect(unhandled).toBeNull();
+		});
+	});
+
 	describe("total size limit", () => {
 		it("should stop extracting when total decompressed size exceeds limit", async () => {
 			// We can't easily create 500MB of data in a test, but we can verify the

@@ -151,8 +151,13 @@ async function inflateData(
 	const writer = ds.writable.getWriter();
 	const reader = ds.readable.getReader();
 
-	writer.write(compressedData as BufferSource);
-	writer.close();
+	// Unhandled-rejection guard: a corrupt deflate stream can error the
+	// writable side out-of-band. The reader.read() loop below already
+	// surfaces that error through the normal awaited path — these two
+	// promises are otherwise never awaited, so a rejection here would
+	// fire as a process-level unhandled rejection.
+	writer.write(compressedData as BufferSource).catch(() => {});
+	writer.close().catch(() => {});
 
 	const chunks: Uint8Array[] = [];
 	let totalLength = 0;
