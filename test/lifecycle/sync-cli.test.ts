@@ -92,17 +92,22 @@ function seedPendingDelivery(dbPath: string): void {
 
 /** A telemetry-namespaced finding with 3+ occurrences — qualifies for a capture request under the default config. */
 const TELEMETRY_FP = "telemetry:sync000000000cap1";
-function seedQualifyingTelemetryFinding(dbPath: string): void {
+function seedQualifyingTelemetryFinding(
+	dbPath: string,
+	overrides?: { fingerprint?: string; routineKey?: string },
+): void {
+	const fingerprint = overrides?.fingerprint ?? TELEMETRY_FP;
+	const routineKey = overrides?.routineKey ?? "abc123|Codeunit|50100|postorder";
 	const store = new LifecycleStore(dbPath);
 	const id = store.insertFinding(
 		finding({
-			fingerprint: TELEMETRY_FP,
+			fingerprint,
 			source: "telemetry",
 			patternId: "telemetry-rt0018",
 			title: "RT0018: PostOrder (Codeunit 50100) slow — max 42000ms × 3",
 			severity: "warning",
 			appId: "abc123",
-			routineKey: "abc123|Codeunit|50100|postorder",
+			routineKey,
 			state: "open",
 		}),
 	);
@@ -110,7 +115,7 @@ function seedQualifyingTelemetryFinding(dbPath: string): void {
 		const { runId } = store.recordRun({
 			tenant: TENANT,
 			stream: "telemetry",
-			profileId: `p-cap-${i}`,
+			profileId: `p-cap-${fingerprint}-${i}`,
 			captureKind: "telemetry",
 			captureTime: `2026-07-0${i + 1}T00:00:00Z`,
 			versionStamp: "",
@@ -193,10 +198,14 @@ describe("lifecycle sync — security boundary", () => {
 		await rmSyncRetrying(dir);
 	});
 
-	async function runSync(args: string[]): Promise<void> {
+	// --config moved from a sync-level option to the lifecycle parent (Task 2 of
+	// the telemetry-config-clienttype plan): it must precede the subcommand name.
+	async function runSync(args: string[], config = configPath): Promise<void> {
 		const cmd = createLifecycleCommand();
 		cmd.exitOverride();
-		await cmd.parseAsync(["--db", dbPath, ...args], { from: "user" });
+		await cmd.parseAsync(["--db", dbPath, "--config", config, ...args], {
+			from: "user",
+		});
 	}
 
 	it("--dry-run enqueues outbox rows, makes zero fetch calls, leaves them pending, exits 0", async () => {
@@ -208,7 +217,7 @@ describe("lifecycle sync — security boundary", () => {
 			}),
 		);
 
-		await runSync(["sync", "--config", configPath, "--dry-run"]);
+		await runSync(["sync", "--dry-run"]);
 
 		expect(fetchCalls).toHaveLength(0);
 		expect(process.exitCode ?? 0).toBe(0);
@@ -233,7 +242,7 @@ describe("lifecycle sync — security boundary", () => {
 			}),
 		);
 
-		await runSync(["sync", "--config", configPath, "--dry-run"]);
+		await runSync(["sync", "--dry-run"]);
 
 		expect(fetchCalls).toHaveLength(0);
 		const summary = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
@@ -251,7 +260,7 @@ describe("lifecycle sync — security boundary", () => {
 			}),
 		);
 
-		await runSync(["sync", "--config", configPath, "--dry-run", "-f", "json"]);
+		await runSync(["sync", "--dry-run", "-f", "json"]);
 
 		expect(fetchCalls).toHaveLength(0);
 		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
@@ -289,7 +298,7 @@ describe("lifecycle sync — security boundary", () => {
 		);
 		delete process.env.AL_PERF_SYNC_TEST_TOKEN_UNSET;
 
-		await runSync(["sync", "--config", configPath]);
+		await runSync(["sync"]);
 
 		expect(fetchCalls).toHaveLength(0);
 		expect(process.exitCode).toBe(1);
@@ -309,7 +318,7 @@ describe("lifecycle sync — security boundary", () => {
 		// Deliberately no writeFileSync(configPath, ...) — the sinks config file
 		// does not exist at all.
 
-		await runSync(["sync", "--config", configPath, "-f", "json"]);
+		await runSync(["sync", "-f", "json"]);
 
 		expect(fetchCalls).toHaveLength(0);
 		expect(process.exitCode ?? 0).toBe(0);
@@ -317,6 +326,39 @@ describe("lifecycle sync — security boundary", () => {
 		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
 		const summary = JSON.parse(output);
 		expect(summary.captureRequests.created).toBe(1);
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
+		store.close();
+	});
+
+	it("telemetry-only config file (no sinks key, per telemetry-recipe §10/§11): capture-request scan still runs, exits 0, delivery gracefully skipped", async () => {
+		seedQualifyingTelemetryFinding(dbPath);
+		// Exactly the file shape telemetry-recipe.md §10/§11 documents as legal
+		// ("every block optional") — a config file that only tunes telemetry
+		// severity, with no `sinks` key at all.
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					severity: {
+						"RT0018@Background": { warningMs: 300000, criticalMs: 1800000 },
+					},
+				},
+			}),
+		);
+
+		await runSync(["sync", "-f", "json"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		expect(process.exitCode ?? 0).toBe(0);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const summary = JSON.parse(output);
+		expect(summary.captureRequests.created).toBe(1);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("sink delivery skipped");
 
 		const store = new LifecycleStore(dbPath);
 		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
@@ -332,7 +374,7 @@ describe("lifecycle sync — security boundary", () => {
 			}),
 		);
 
-		await runSync(["sync", "--config", configPath, "--dry-run", "-f", "json"]);
+		await runSync(["sync", "--dry-run", "-f", "json"]);
 
 		expect(fetchCalls).toHaveLength(0);
 		expect(process.exitCode ?? 0).toBe(0);
@@ -340,6 +382,32 @@ describe("lifecycle sync — security boundary", () => {
 		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
 		const summary = JSON.parse(output);
 		expect(summary.captureRequests.created).toBe(1);
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
+		store.close();
+	});
+
+	it("--config file lowering captureRequests.maxPending caps how many requests a scan creates (Task 2: config file reaches the trigger scan)", async () => {
+		seedQualifyingTelemetryFinding(dbPath);
+		seedQualifyingTelemetryFinding(dbPath, {
+			fingerprint: "telemetry:sync000000000cap2",
+			routineKey: "abc123|Codeunit|50100|postline",
+		});
+		writeFileSync(
+			configPath,
+			JSON.stringify({ captureRequests: { maxPending: 1 } }),
+		);
+
+		await runSync(["sync", "-f", "json"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		expect(process.exitCode ?? 0).toBe(0);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const summary = JSON.parse(output);
+		expect(summary.captureRequests.created).toBe(1);
+		expect(summary.captureRequests.skippedMaxPending).toBe(1);
 
 		const store = new LifecycleStore(dbPath);
 		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);

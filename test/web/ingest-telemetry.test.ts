@@ -9,7 +9,13 @@
 
 import { afterAll, describe, expect, it } from "bun:test";
 import { generateKeyPairSync } from "crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { LifecycleStore } from "../../src/lifecycle/store.ts";
@@ -28,10 +34,32 @@ process.env.PORT ??= "3999";
 const { server } = await import("../../web/server.ts");
 const BASE = `http://localhost:${server.port}`;
 
-afterAll(() => {
+/**
+ * Windows-only flake guard (same as test/lifecycle/cli.test.ts): a WAL-mode
+ * sqlite file's `-shm`/`-wal` mapping can stay transiently locked for a beat
+ * after `.close()` returns — `fs.rmSync`'s built-in retry doesn't paper over
+ * it under Bun on Windows, so retry by hand with a real await between tries.
+ */
+async function rmSyncRetrying(
+	path: string,
+	attempts = 10,
+	delayMs = 200,
+): Promise<void> {
+	for (let i = 1; i <= attempts; i++) {
+		try {
+			rmSync(path, { recursive: true, force: true });
+			return;
+		} catch (err) {
+			if (i === attempts) throw err;
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+	}
+}
+
+afterAll(async () => {
 	delete process.env.AL_PERF_LIFECYCLE;
 	closeLifecycleStoreForTest(TEST_DATA);
-	rmSync(TEST_DATA, { recursive: true, force: true });
+	await rmSyncRetrying(TEST_DATA);
 });
 
 function signal(overrides: Partial<TelemetrySignal> = {}): TelemetrySignal {
@@ -313,6 +341,139 @@ describe("POST /api/ingest with a telemetry-batch", () => {
 			expect(res.status).toBe(404);
 		} finally {
 			delete process.env.AL_PERF_ALLOW_SHARED_SECRET;
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// AL_PERF_LIFECYCLE_CONFIG (telemetry-config-clienttype plan Task 2): the
+// config file's telemetry.severity thresholds must reach the SAME
+// parseTelemetryBatch call that determines the stored finding's severity, and
+// a malformed file must fail BEFORE the keyversion.txt completion marker —
+// never inside the lifecycle hook's swallowed try/catch, which would leave
+// the batch stored-but-never-evaluated with no way to re-POST.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/ingest telemetry-batch with AL_PERF_LIFECYCLE_CONFIG", () => {
+	afterAll(() => {
+		delete process.env.AL_PERF_LIFECYCLE;
+		delete process.env.AL_PERF_LIFECYCLE_CONFIG;
+	});
+
+	it("a threshold-raising config file changes the stored finding's severity", async () => {
+		process.env.AL_PERF_LIFECYCLE = "1";
+		const configPath = join(TEST_DATA, "raise-rt0018.config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					severity: { RT0018: { warningMs: 20_000, criticalMs: 50_000 } },
+				},
+			}),
+		);
+		process.env.AL_PERF_LIFECYCLE_CONFIG = configPath;
+		try {
+			const token = await registerTenant("telcfg1");
+			// Default RT0018 thresholds (warningMs 10_000 / criticalMs 30_000):
+			// 35s is critical. The raised thresholds above land it in warning.
+			const doc = batch([signal({ maxDurationMs: 35_000 })], {
+				windowEnd: "2026-07-11T03:00:00.000Z",
+			});
+			const key = "550e8400-e29b-41d4-a716-446655440310";
+			const res = await postIngest(
+				token,
+				"telcfg1",
+				key,
+				Buffer.from(JSON.stringify(doc), "utf8"),
+				{ activityId: key, captureKind: "telemetry" },
+			);
+			expect(res.status).toBe(202);
+
+			const store = new LifecycleStore(join(TEST_DATA, "lifecycle.sqlite"));
+			const findings = store.listFindings({ tenant: "telcfg1" });
+			expect(findings).toHaveLength(1);
+			expect(findings[0].severity).toBe("warning");
+			store.close();
+		} finally {
+			delete process.env.AL_PERF_LIFECYCLE;
+			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
+		}
+	});
+
+	it("a malformed config file fails the request and never marks the batch ingested; re-POST works after fixing the file", async () => {
+		process.env.AL_PERF_LIFECYCLE = "1";
+		const configPath = join(TEST_DATA, "malformed.config.json");
+		writeFileSync(configPath, "{ not valid json");
+		process.env.AL_PERF_LIFECYCLE_CONFIG = configPath;
+		try {
+			const token = await registerTenant("telcfg2");
+			const doc = batch([signal()]);
+			const key = "550e8400-e29b-41d4-a716-446655440311";
+			const res = await postIngest(
+				token,
+				"telcfg2",
+				key,
+				Buffer.from(JSON.stringify(doc), "utf8"),
+				{ activityId: key, captureKind: "telemetry" },
+			);
+			expect(res.status).toBeGreaterThanOrEqual(400);
+			expect(res.status).toBeLessThan(600);
+			expect(
+				existsSync(
+					join(
+						TEST_DATA,
+						"storage",
+						"telcfg2",
+						"profiles",
+						key,
+						"keyversion.txt",
+					),
+				),
+			).toBe(false);
+
+			// Fix the file and re-POST with the same idempotency key: no
+			// duplicate-run guard was ever armed, so this must succeed.
+			writeFileSync(configPath, JSON.stringify({}));
+			const res2 = await postIngest(
+				token,
+				"telcfg2",
+				key,
+				Buffer.from(JSON.stringify(doc), "utf8"),
+				{ activityId: key, captureKind: "telemetry" },
+			);
+			expect(res2.status).toBe(202);
+			const body2 = (await res2.json()) as { status: string };
+			expect(body2.status).toBe("stored");
+		} finally {
+			delete process.env.AL_PERF_LIFECYCLE;
+			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
+		}
+	});
+
+	it("lifecycle OFF: a malformed config file is never even read — batch stores normally", async () => {
+		// AL_PERF_LIFECYCLE deliberately left unset/OFF: evaluation never runs,
+		// so a broken AL_PERF_LIFECYCLE_CONFIG file must not fail this ingest —
+		// resolveGatedLifecycleConfig short-circuits to DEFAULT_LIFECYCLE_CONFIG
+		// without ever calling loadLifecycleConfigFile.
+		const configPath = join(TEST_DATA, "malformed-off.config.json");
+		writeFileSync(configPath, "{ not valid json");
+		process.env.AL_PERF_LIFECYCLE_CONFIG = configPath;
+		try {
+			const token = await registerTenant("telcfg3");
+			const doc = batch([signal()]);
+			const key = "550e8400-e29b-41d4-a716-446655440312";
+			const res = await postIngest(
+				token,
+				"telcfg3",
+				key,
+				Buffer.from(JSON.stringify(doc), "utf8"),
+				{ activityId: key, captureKind: "telemetry" },
+			);
+			expect(res.status).toBe(202);
+			const body = (await res.json()) as { status: string };
+			expect(body.status).toBe("stored");
+		} finally {
+			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
 		}
 	});
 });

@@ -1,6 +1,12 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { generateKeyPairSync } from "crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { LifecycleStore } from "../../src/lifecycle/store.js";
@@ -15,13 +21,35 @@ process.env.PORT ??= "3999";
 const { server } = await import("../../web/server.ts");
 const BASE = `http://localhost:${server.port}`;
 
-afterAll(() => {
+/**
+ * Windows-only flake guard (same as test/lifecycle/cli.test.ts): a WAL-mode
+ * sqlite file's `-shm`/`-wal` mapping can stay transiently locked for a beat
+ * after `.close()` returns — `fs.rmSync`'s built-in retry doesn't paper over
+ * it under Bun on Windows, so retry by hand with a real await between tries.
+ */
+async function rmSyncRetrying(
+	path: string,
+	attempts = 10,
+	delayMs = 200,
+): Promise<void> {
+	for (let i = 1; i <= attempts; i++) {
+		try {
+			rmSync(path, { recursive: true, force: true });
+			return;
+		} catch (err) {
+			if (i === attempts) throw err;
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+	}
+}
+
+afterAll(async () => {
 	delete process.env.AL_PERF_LIFECYCLE;
 	// The ingest handler's singleton keeps lifecycle.sqlite's WAL handle open
 	// for the process lifetime; close it here or rmSync fails with EBUSY on
 	// Windows.
 	closeLifecycleStoreForTest(TEST_DATA);
-	rmSync(TEST_DATA, { recursive: true, force: true });
+	await rmSyncRetrying(TEST_DATA);
 });
 
 const GUID_OFF = "550e8400-e29b-41d4-a716-446655440201";
@@ -123,5 +151,34 @@ describe("ingest lifecycle hook (AL_PERF_LIFECYCLE)", () => {
 		expect(res.status).toBe(202);
 		const body = (await res.json()) as { status: string };
 		expect(body.status).toBe("stored");
+	});
+
+	it("AL_PERF_LIFECYCLE=1 with a malformed AL_PERF_LIFECYCLE_CONFIG: fails before the keyversion marker, not swallowed like a runtime evaluation error", async () => {
+		process.env.AL_PERF_LIFECYCLE = "1";
+		const configPath = join(TEST_DATA, "malformed-profile.config.json");
+		writeFileSync(configPath, "{ not valid json");
+		process.env.AL_PERF_LIFECYCLE_CONFIG = configPath;
+		try {
+			const token = await registerTenant("lccfgbad");
+			const guid = "550e8400-e29b-41d4-a716-446655440210";
+			const res = await postIngest("lccfgbad", token, guid);
+			expect(res.status).toBeGreaterThanOrEqual(400);
+			expect(res.status).toBeLessThan(600);
+			expect(
+				existsSync(
+					join(
+						TEST_DATA,
+						"storage",
+						"lccfgbad",
+						"profiles",
+						guid,
+						"keyversion.txt",
+					),
+				),
+			).toBe(false);
+		} finally {
+			delete process.env.AL_PERF_LIFECYCLE;
+			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
+		}
 	});
 });

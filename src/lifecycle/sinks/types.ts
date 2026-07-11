@@ -189,9 +189,14 @@ function validateGitHubSinkShape(
 }
 
 /**
- * Load `.al-perf/lifecycle.config.json` (or an explicit path). Missing file
- * → null (the caller points the user at the gh recipe). Invalid content
- * throws — a misconfigured sink must fail loudly, not silently no-op.
+ * Load `.al-perf/lifecycle.config.json` (or an explicit path). Missing file,
+ * OR a file present but with no `sinks` key at all (a telemetry-only or
+ * captureRequests-only config — telemetry-recipe.md §10/§11 documents this
+ * shape as legal, since `loadLifecycleConfigFile` reads those blocks
+ * separately) → null; the caller (`lifecycle sync`) already treats null as
+ * "no delivery configured" and skips sink delivery gracefully while still
+ * running the capture-request scan. A PRESENT but malformed `sinks` block
+ * still throws — a misconfigured sink must fail loudly, not silently no-op.
  *
  * Shape is validated field-by-field (not just JSON-ness + repo format): a
  * malformed config must fail closed here, not surface as a downstream
@@ -213,7 +218,7 @@ export function loadSinksConfig(path: string): LifecycleSinksConfig | null {
 	const cfg = parsed as Record<string, unknown>;
 	const sinks = cfg.sinks;
 	if (sinks === undefined) {
-		throw new Error(`${path}: missing required "sinks" key`);
+		return null;
 	}
 	if (typeof sinks !== "object" || sinks === null || Array.isArray(sinks)) {
 		throw new Error(

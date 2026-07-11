@@ -25,6 +25,13 @@ export interface TelemetrySignal {
 	count: number;
 	maxDurationMs: number;
 	avgDurationMs?: number;
+	/**
+	 * BC session client type (Background, WebClient, WebServiceAPI, ...).
+	 * Optional, additive. Enters severity-key composition
+	 * (`${signalId}@${clientType}`, see config-file.ts D3) — validated
+	 * `^[A-Za-z]+$` by the parser, same injection posture as signalId.
+	 */
+	clientType?: string;
 }
 
 export interface TelemetryBatchDocument {

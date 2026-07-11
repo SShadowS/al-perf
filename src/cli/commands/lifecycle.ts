@@ -19,6 +19,10 @@ import {
 	DEFAULT_LIFECYCLE_CONFIG,
 	type LifecycleConfig,
 } from "../../lifecycle/config.js";
+import {
+	loadLifecycleConfigFile,
+	mergeLifecycleConfig,
+} from "../../lifecycle/config-file.js";
 import { buildDigest, renderDigestMarkdown } from "../../lifecycle/digest.js";
 import {
 	type EvaluationOutcome,
@@ -90,6 +94,19 @@ function captureRequestFailureMessage(
 	return `Capture request #${id} cannot be ${verb} — status is ${row.status}.`;
 }
 
+/**
+ * Build the effective LifecycleConfig for a subcommand: DEFAULT_LIFECYCLE_CONFIG
+ * deep-merged with the parent `--config` file's telemetry/captureRequests
+ * blocks (missing file → defaults; malformed file throws, uncaught — same
+ * fail-closed posture as every other CLI file-read error in this command).
+ */
+function resolveLifecycleConfig(configPath: string): LifecycleConfig {
+	return mergeLifecycleConfig(
+		DEFAULT_LIFECYCLE_CONFIG,
+		loadLifecycleConfigFile(configPath) ?? {},
+	);
+}
+
 /** Shared by `evaluate`, `telemetry`, and `pull-telemetry` (non---out path) — same outcome shape, same print rules. */
 function printEvaluationOutcome(
 	outcome: EvaluationOutcome,
@@ -115,7 +132,12 @@ export function createLifecycleCommand(): Command {
 		.description(
 			"Finding lifecycle engine — durable finding state across profile runs",
 		)
-		.option("--db <path>", "Lifecycle database file", DEFAULT_DB_PATH);
+		.option("--db <path>", "Lifecycle database file", DEFAULT_DB_PATH)
+		.option(
+			"--config <path>",
+			"Lifecycle config file (telemetry severity, capture-request thresholds, sinks)",
+			".al-perf/lifecycle.config.json",
+		);
 
 	cmd
 		.command("evaluate <profile>")
@@ -148,9 +170,12 @@ export function createLifecycleCommand(): Command {
 						.slice(0, 32);
 				const captureTime =
 					opts.captureTime ?? statSync(profilePath).mtime.toISOString();
-				const configPatch: Partial<LifecycleConfig> = {};
+				// File merge first, then the --resolve-after flag on top — the flag
+				// always wins (the file can't set resolveAfterRuns at all; see
+				// LifecycleConfigFilePatch).
+				const config = resolveLifecycleConfig(cmd.opts().config);
 				if (opts.resolveAfter !== undefined) {
-					configPatch.resolveAfterRuns = parseInt(opts.resolveAfter, 10);
+					config.resolveAfterRuns = parseInt(opts.resolveAfter, 10);
 				}
 				const outcome = evaluateRun(
 					store,
@@ -162,7 +187,7 @@ export function createLifecycleCommand(): Command {
 						captureKind: result.meta.captureKind ?? result.meta.profileType,
 						captureTime,
 					},
-					configPatch,
+					config,
 				);
 				printEvaluationOutcome(outcome, opts.format);
 			} finally {
@@ -326,19 +351,16 @@ export function createLifecycleCommand(): Command {
 			"Run the capture-request scan, apply sink trigger rules, and drain the delivery outbox",
 		)
 		.option(
-			"--config <path>",
-			"Sinks config file",
-			".al-perf/lifecycle.config.json",
-		)
-		.option(
 			"--dry-run",
 			"Scan and enqueue locally (capture requests + outbox), but do not deliver to sinks",
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action(async (opts: any) => {
 			const store = new LifecycleStore(cmd.opts().db);
+			const configPath = cmd.opts().config;
 			try {
 				const now = new Date().toISOString();
+				const lifecycleConfig = resolveLifecycleConfig(configPath);
 				// Independent of any sink being configured: capture-request filing
 				// is local DB state, not delivery, so it must not depend on — or be
 				// blocked by — a missing/absent sinks config.
@@ -348,15 +370,18 @@ export function createLifecycleCommand(): Command {
 					expired: 0,
 					skippedMaxPending: 0,
 				};
-				if (DEFAULT_LIFECYCLE_CONFIG.captureRequests.enabled) {
+				if (lifecycleConfig.captureRequests.enabled) {
 					captureRequests = processCaptureTriggers(
 						store,
-						DEFAULT_LIFECYCLE_CONFIG,
+						lifecycleConfig,
 						now,
 					);
 				}
 
-				const config = loadSinksConfig(opts.config);
+				// Sinks live under the same config file's `sinks` block, but
+				// loadSinksConfig owns that read separately (config-file.ts
+				// deliberately ignores `sinks`).
+				const config = loadSinksConfig(configPath);
 				let triggers = { processed: 0, enqueued: 0, skippedMigration: 0 };
 				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
 				let deadLetters: Array<{
@@ -369,7 +394,7 @@ export function createLifecycleCommand(): Command {
 
 				if (!config) {
 					console.error(
-						`No sink config at ${opts.config} — sink delivery skipped (capture-request scan still ran). Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
+						`No sink config at ${configPath} — sink delivery skipped (capture-request scan still ran). Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
 					);
 				} else {
 					triggers = processEventsForSinks(store, config);
@@ -464,11 +489,17 @@ export function createLifecycleCommand(): Command {
 				const profileId =
 					opts.profileId ??
 					createHash("sha256").update(raw).digest("hex").slice(0, 32);
-				const outcome = evaluateTelemetryBatch(store, batchJson, {
-					tenant: opts.tenant,
-					stream: opts.stream,
-					profileId,
-				});
+				const config = resolveLifecycleConfig(cmd.opts().config);
+				const outcome = evaluateTelemetryBatch(
+					store,
+					batchJson,
+					{
+						tenant: opts.tenant,
+						stream: opts.stream,
+						profileId,
+					},
+					config,
+				);
 				printEvaluationOutcome(outcome, opts.format);
 			} finally {
 				store.close();
@@ -497,6 +528,10 @@ export function createLifecycleCommand(): Command {
 			DEFAULT_SIGNALS.join(","),
 		)
 		.option(
+			"--client-types <list>",
+			"Comma-separated BC client types to filter (e.g. Background,WebClient); default: no filter",
+		)
+		.option(
 			"--out <path>",
 			"Write the normalized batch JSON here instead of evaluating (does not touch the DB)",
 		)
@@ -518,11 +553,18 @@ export function createLifecycleCommand(): Command {
 					.split(",")
 					.map((s: string) => s.trim())
 					.filter((s: string) => s.length > 0);
+				const clientTypes = opts.clientTypes
+					? String(opts.clientTypes)
+							.split(",")
+							.map((s: string) => s.trim())
+							.filter((s: string) => s.length > 0)
+					: undefined;
 				batch = await pullTelemetry({
 					appId: opts.appId,
 					apiKeyEnv: opts.apiKeyEnv,
 					since: opts.since,
 					signals,
+					clientTypes,
 				});
 			} catch (err) {
 				console.error(err instanceof Error ? err.message : String(err));
@@ -556,11 +598,17 @@ export function createLifecycleCommand(): Command {
 						.update(JSON.stringify(batch))
 						.digest("hex")
 						.slice(0, 32);
-				const outcome = evaluateTelemetryBatch(store, batch, {
-					tenant: opts.tenant,
-					stream: opts.stream,
-					profileId,
-				});
+				const config = resolveLifecycleConfig(cmd.opts().config);
+				const outcome = evaluateTelemetryBatch(
+					store,
+					batch,
+					{
+						tenant: opts.tenant,
+						stream: opts.stream,
+						profileId,
+					},
+					config,
+				);
 				printEvaluationOutcome(outcome, opts.format);
 			} finally {
 				store.close();

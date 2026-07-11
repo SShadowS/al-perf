@@ -95,12 +95,30 @@ describe("loadSinksConfig — shape validation (fail closed)", () => {
 		}
 	});
 
-	it("rejects a missing sinks key with a clear error, not a downstream TypeError", () => {
+	it("returns null for a file with no sinks key at all (telemetry-only/captureRequests-only config is legal — telemetry-recipe §10/§11)", () => {
 		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
 		try {
 			const file = join(dir, "no-sinks.json");
 			writeFileSync(file, JSON.stringify({}));
-			expect(() => loadSinksConfig(file)).toThrow(/sinks/);
+			expect(loadSinksConfig(file)).toBeNull();
+
+			const telemetryOnly = join(dir, "telemetry-only.json");
+			writeFileSync(
+				telemetryOnly,
+				JSON.stringify({ telemetry: { maxSignalsPerBatch: 500 } }),
+			);
+			expect(loadSinksConfig(telemetryOnly)).toBeNull();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("still throws when sinks IS present but the wrong type", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "sinks-wrong-type.json");
+			writeFileSync(file, JSON.stringify({ sinks: "nope" }));
+			expect(() => loadSinksConfig(file)).toThrow(/sinks must be an object/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

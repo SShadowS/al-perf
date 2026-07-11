@@ -16,9 +16,13 @@ scheduled task, or automation such as bc-dev-mcp.
 `lifecycle sync`'s trigger scan (`processCaptureTriggers`) walks
 `telemetry:`-namespaced findings and files a request for each one that
 clears these thresholds — code defaults in `src/lifecycle/config.ts`
-(`DEFAULT_LIFECYCLE_CONFIG.captureRequests`), same honest-docs posture as the
-telemetry severity thresholds (no CLI flag or config-file override in v1 —
-a different threshold today is a build-time fork of this block):
+(`DEFAULT_LIFECYCLE_CONFIG.captureRequests`), overridable per tenant via a
+`captureRequests` block in `.al-perf/lifecycle.config.json`, loaded through
+`lifecycle`'s parent `--config <path>` flag or the web ingest path's
+`AL_PERF_LIFECYCLE_CONFIG` env var — same mechanism as the telemetry
+severity thresholds (see [`docs/telemetry-recipe.md`](telemetry-recipe.md)
+§11 for a full example with `sinks` + `telemetry` + `captureRequests`
+coexisting). Fields not present in the file keep their code default:
 
 ```json
 {

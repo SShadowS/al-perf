@@ -232,6 +232,214 @@ describe("lifecycle telemetry (local batch evaluate)", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// lifecycle --config (telemetry-config-clienttype plan Task 2): the parent
+// --config flag threads mergeLifecycleConfig(DEFAULT, loadLifecycleConfigFile)
+// into evaluate/telemetry/pull-telemetry/sync.
+// ---------------------------------------------------------------------------
+
+/** Same 2-node shape as sampling-minimal.alcpuprofile but with an alternating
+ * samples[] array (self-time is derived from samples/timeDeltas, not the
+ * hitCount field) so neither node exceeds detectSingleMethodDominance's >50%
+ * threshold — same app/object identity so absence gating (appWasExercised)
+ * still matches the finding created from sampling-minimal.alcpuprofile. */
+function balancedSamplingProfile() {
+	return {
+		nodes: [
+			{
+				id: 1,
+				callFrame: {
+					functionName: "OnRun",
+					scriptId: "CodeUnit_50000",
+					url: "al-preview://allang/Codeunit/50000/Codeunit_50000.dal",
+					lineNumber: 10,
+					columnNumber: 8,
+				},
+				hitCount: 10,
+				children: [2],
+				declaringApplication: {
+					appName: "My Extension",
+					appPublisher: "Me",
+					appVersion: "1.0.0.0",
+				},
+				applicationDefinition: {
+					objectType: "CodeUnit",
+					objectName: "My Processor",
+					objectId: 50000,
+				},
+				frameIdentifier: 12345,
+			},
+			{
+				id: 2,
+				callFrame: {
+					functionName: "ProcessLine",
+					scriptId: "CodeUnit_50000",
+					url: "al-preview://allang/Codeunit/50000/Codeunit_50000.dal",
+					lineNumber: 25,
+					columnNumber: 8,
+				},
+				hitCount: 10,
+				children: [],
+				declaringApplication: {
+					appName: "My Extension",
+					appPublisher: "Me",
+					appVersion: "1.0.0.0",
+				},
+				applicationDefinition: {
+					objectType: "CodeUnit",
+					objectName: "My Processor",
+					objectId: 50000,
+				},
+				frameIdentifier: 67890,
+			},
+		],
+		startTime: 63793000000000000,
+		endTime: 63793000000400000,
+		samples: [1, 2, 1, 2],
+		timeDeltas: [0, 100000, 100000, 100000],
+		kind: 1,
+	};
+}
+
+describe("lifecycle --config (config-file wiring)", () => {
+	let dir: string;
+	let dbPath: string;
+	let configPath: string;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-config-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		configPath = join(dir, "lifecycle.config.json");
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(async () => {
+		logSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	it("telemetry: a --config file raising RT0018 thresholds downgrades a would-be-critical finding to warning", async () => {
+		const batchPath = join(dir, "batch.json");
+		const fixture = telemetryBatchFixture();
+		// Default RT0018 thresholds (warningMs 10_000 / criticalMs 30_000): 35s
+		// is critical. Raise both thresholds so 35s lands in the warning band.
+		fixture.signals[0].maxDurationMs = 35_000;
+		writeFileSync(batchPath, JSON.stringify(fixture));
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					severity: { RT0018: { warningMs: 20_000, criticalMs: 50_000 } },
+				},
+			}),
+		);
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			["--db", dbPath, "--config", configPath, "telemetry", batchPath],
+			{ from: "user" },
+		);
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "local" });
+		expect(findings).toHaveLength(1);
+		expect(findings[0].severity).toBe("warning");
+		store.close();
+	});
+
+	it("telemetry: without --config the same 35s signal is critical (control)", async () => {
+		const batchPath = join(dir, "batch.json");
+		const fixture = telemetryBatchFixture();
+		fixture.signals[0].maxDurationMs = 35_000;
+		writeFileSync(batchPath, JSON.stringify(fixture));
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, "telemetry", batchPath], {
+			from: "user",
+		});
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "local" });
+		expect(findings).toHaveLength(1);
+		expect(findings[0].severity).toBe("critical");
+		store.close();
+	});
+
+	it("evaluate: --resolve-after wins over the merged file config (which cannot set resolveAfterRuns at all)", async () => {
+		// The file patch has no resolveAfterRuns field — this proves the CLI
+		// flag still reaches evaluateRun after the merge, not that the file
+		// itself sets resolveAfterRuns (it structurally can't, see
+		// LifecycleConfigFilePatch). Unrelated field present so the file is
+		// demonstrably loaded, not just ignored.
+		writeFileSync(
+			configPath,
+			JSON.stringify({ captureRequests: { maxPending: 5 } }),
+		);
+
+		const fixtureBPath = join(dir, "balanced.alcpuprofile");
+		writeFileSync(fixtureBPath, JSON.stringify(balancedSamplingProfile()));
+
+		const cmd1 = createLifecycleCommand();
+		cmd1.exitOverride();
+		await cmd1.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"evaluate",
+				"test/fixtures/sampling-minimal.alcpuprofile",
+				"--resolve-after",
+				"1",
+				"--capture-time",
+				"2026-07-01T00:00:00Z",
+				"--stream",
+				"cfgtest",
+			],
+			{ from: "user" },
+		);
+
+		const store1 = new LifecycleStore(dbPath);
+		const before = store1
+			.listFindings({ tenant: "local" })
+			.find((f) => f.patternId === "single-method-dominance");
+		expect(before?.state).toBe("new");
+		store1.close();
+
+		// Second run: the balanced profile reproduces no pattern at all, so the
+		// single-method-dominance finding goes absent. With resolveAfterRuns=1
+		// (from the flag — default is 3) a single absent run resolves it.
+		const cmd2 = createLifecycleCommand();
+		cmd2.exitOverride();
+		await cmd2.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"evaluate",
+				fixtureBPath,
+				"--resolve-after",
+				"1",
+				"--capture-time",
+				"2026-07-02T00:00:00Z",
+				"--stream",
+				"cfgtest",
+			],
+			{ from: "user" },
+		);
+
+		const store2 = new LifecycleStore(dbPath);
+		const after = store2
+			.listFindings({ tenant: "local" })
+			.find((f) => f.patternId === "single-method-dominance");
+		expect(after?.state).toBe("resolved");
+		store2.close();
+	});
+});
+
 describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
 	let dir: string;
 	let dbPath: string;
@@ -350,6 +558,69 @@ describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
 		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
 		expect(errText).toContain(DEFAULT_API_KEY_ENV);
 		expect(errText).not.toContain(PULL_DECOY_KEY);
+	});
+
+	it("--client-types splices a comma-separated list into the KQL filter clause", async () => {
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		const calls: string[] = [];
+		globalThis.fetch = (async (url: string) => {
+			calls.push(url);
+			return new Response(JSON.stringify(appInsightsResponse()), {
+				status: 200,
+			});
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--client-types",
+				"Background,WebClient",
+			],
+			{ from: "user" },
+		);
+
+		expect(calls).toHaveLength(1);
+		const decoded = decodeURIComponent(calls[0]);
+		expect(decoded).toContain('| where clientType in ("Background", "WebClient")');
+	});
+
+	it("an invalid --client-types value exits 1 with zero fetch calls (usage error, same posture as an invalid signal id)", async () => {
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--client-types",
+				"Background;drop",
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(1);
+		expect(existsSync(dbPath)).toBe(false);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("client-types");
 	});
 });
 
