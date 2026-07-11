@@ -5,13 +5,45 @@
  * glue that isn't just commander wiring.
  */
 
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
 	applyClose,
 	createLifecycleCommand,
 	DEFAULT_DB_PATH,
 } from "../../src/cli/commands/lifecycle.js";
+import { DEFAULT_API_KEY_ENV } from "../../src/lifecycle/appinsights.js";
 import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
+
+/**
+ * Windows-only flake guard (same as sync-cli.test.ts): a WAL-mode sqlite
+ * file's `-shm`/`-wal` mapping can stay transiently locked for a beat after
+ * `.close()` returns, so `fs.rmSync`'s built-in retry doesn't paper over it
+ * under Bun on Windows — retry by hand with a real await between tries.
+ */
+async function rmSyncRetrying(
+	path: string,
+	attempts = 10,
+	delayMs = 200,
+): Promise<void> {
+	for (let i = 1; i <= attempts; i++) {
+		try {
+			rmSync(path, { recursive: true, force: true });
+			return;
+		} catch (err) {
+			if (i === attempts) throw err;
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+	}
+}
 
 function finding(state: NewFinding["state"]): NewFinding {
 	return {
@@ -92,9 +124,231 @@ describe("createLifecycleCommand", () => {
 			"triage",
 			"maintain",
 			"sync",
+			"telemetry",
+			"pull-telemetry",
 		]) {
 			expect(subs).toContain(s);
 		}
 		expect(DEFAULT_DB_PATH).toBe(".al-perf/lifecycle.sqlite");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// lifecycle telemetry (local batch evaluate) + lifecycle pull-telemetry
+// (App Insights puller CLI) — telemetry-ingest plan Task 5.
+// ---------------------------------------------------------------------------
+
+const APP_ID = "11111111-2222-3333-4444-555555555555";
+const PULL_DECOY_KEY = "super-secret-appinsights-cli-key-should-never-leak";
+
+function telemetryBatchFixture() {
+	return {
+		schemaVersion: 1,
+		payloadType: "telemetry-batch",
+		windowStart: "2026-07-11T00:00:00.000Z",
+		windowEnd: "2026-07-11T01:00:00.000Z",
+		signals: [
+			{
+				signalId: "RT0018",
+				appId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				appName: "My App",
+				objectType: "Codeunit",
+				objectId: 50100,
+				methodName: "ProcessLine",
+				count: 3,
+				maxDurationMs: 12_000,
+				avgDurationMs: 9_500,
+			},
+		],
+	};
+}
+
+function appInsightsResponse() {
+	return {
+		tables: [
+			{
+				name: "PrimaryTable",
+				columns: [
+					{ name: "appId", type: "string" },
+					{ name: "appName", type: "string" },
+					{ name: "objectType", type: "string" },
+					{ name: "objectId", type: "long" },
+					{ name: "objectName", type: "string" },
+					{ name: "methodName", type: "string" },
+					{ name: "count", type: "long" },
+					{ name: "maxDurationMs", type: "real" },
+					{ name: "avgDurationMs", type: "real" },
+					{ name: "stackTrace", type: "string" },
+				],
+				rows: [
+					[
+						"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+						"My App",
+						"Codeunit",
+						50100,
+						"Sales Post",
+						"ProcessLine",
+						3,
+						12_000,
+						9_500,
+						"",
+					],
+				],
+			},
+		],
+	};
+}
+
+describe("lifecycle telemetry (local batch evaluate)", () => {
+	let dir: string;
+	let dbPath: string;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-telemetry-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(async () => {
+		logSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	it("evaluates a local batch file into the lifecycle DB and findings appear", async () => {
+		const batchPath = join(dir, "batch.json");
+		writeFileSync(batchPath, JSON.stringify(telemetryBatchFixture()));
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, "telemetry", batchPath], {
+			from: "user",
+		});
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "local" });
+		expect(findings.length).toBeGreaterThan(0);
+		expect(findings[0].fingerprint).toMatch(/^telemetry:/);
+		store.close();
+	});
+});
+
+describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
+	let dir: string;
+	let dbPath: string;
+	let originalFetch: typeof fetch;
+	let originalExitCode: number | string | null | undefined;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+	let errorSpy: ReturnType<typeof spyOn<Console, "error">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-pull-telemetry-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		originalFetch = globalThis.fetch;
+		originalExitCode = process.exitCode;
+		// Bun quirk (verified empirically): `process.exitCode = undefined` does
+		// NOT clear a previously-set numeric value — only assigning 0 does. Using
+		// `undefined` here would leak exitCode=1 from the "missing API key" test
+		// into whichever test/file runs next.
+		process.exitCode = 0;
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+	});
+	afterEach(async () => {
+		globalThis.fetch = originalFetch;
+		process.exitCode = originalExitCode ?? 0;
+		logSpy.mockRestore();
+		errorSpy.mockRestore();
+		delete process.env[DEFAULT_API_KEY_ENV];
+		delete process.env.AL_PERF_PULL_TEST_DECOY;
+		await rmSyncRetrying(dir);
+	});
+
+	it("--out writes the normalized batch and never touches the DB", async () => {
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(appInsightsResponse()), {
+				status: 200,
+			})) as typeof fetch;
+		const outPath = join(dir, "out-batch.json");
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--out",
+				outPath,
+			],
+			{ from: "user" },
+		);
+
+		expect(existsSync(dbPath)).toBe(false);
+		const written = JSON.parse(readFileSync(outPath, "utf8"));
+		expect(written.payloadType).toBe("telemetry-batch");
+		expect(written.signals).toHaveLength(1);
+		const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(output).not.toContain(PULL_DECOY_KEY);
+	});
+
+	it("no --out evaluates locally into the lifecycle DB and findings appear", async () => {
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(appInsightsResponse()), {
+				status: 200,
+			})) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+			],
+			{ from: "user" },
+		);
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "local" });
+		expect(findings.length).toBeGreaterThan(0);
+		store.close();
+
+		const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(output).not.toContain(PULL_DECOY_KEY);
+	});
+
+	it("missing API key env var: exits 1, names the env var, never leaks a decoy secret, zero fetch calls", async () => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+		process.env.AL_PERF_PULL_TEST_DECOY = PULL_DECOY_KEY;
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			["--db", dbPath, "pull-telemetry", "--app-id", APP_ID],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(1);
+		expect(existsSync(dbPath)).toBe(false);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain(DEFAULT_API_KEY_ENV);
+		expect(errText).not.toContain(PULL_DECOY_KEY);
 	});
 });
