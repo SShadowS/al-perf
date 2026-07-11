@@ -10,7 +10,14 @@ import {
 	isTelemetryBatchDocument,
 	parseTelemetryBatch,
 } from "../../src/core/telemetry-parser.ts";
-import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.ts";
+import {
+	loadLifecycleConfigFile,
+	mergeLifecycleConfig,
+} from "../../src/lifecycle/config-file.ts";
+import {
+	DEFAULT_LIFECYCLE_CONFIG,
+	type LifecycleConfig,
+} from "../../src/lifecycle/config.ts";
 import { encryptBundle, type RsaJwk, xmlRsaToJwk } from "../crypto.ts";
 import {
 	checkBearerAgainstHash,
@@ -46,6 +53,21 @@ function resolveMaxProfileBytes(): number {
 		return DEFAULT_MAX_PROFILE_BYTES;
 	}
 	return parsed;
+}
+
+/**
+ * Read AL_PERF_LIFECYCLE_CONFIG per request; unset → defaults. A malformed
+ * file throws (propagated to the caller) — deliberately NOT caught here, so
+ * every call site decides its own placement relative to the completion
+ * marker instead of this helper silently degrading to defaults.
+ */
+function resolveLifecycleConfigFromEnv(): LifecycleConfig {
+	const path = process.env.AL_PERF_LIFECYCLE_CONFIG;
+	if (!path) return DEFAULT_LIFECYCLE_CONFIG;
+	return mergeLifecycleConfig(
+		DEFAULT_LIFECYCLE_CONFIG,
+		loadLifecycleConfigFile(path) ?? {},
+	);
 }
 
 class ProfileTooLargeError extends Error {}
@@ -262,6 +284,28 @@ export async function handleIngest(
 		});
 	}
 
+	// Resolve the lifecycle config BEFORE any storage write: only the
+	// AL_PERF_LIFECYCLE=1 hook below consumes it, but a malformed
+	// AL_PERF_LIFECYCLE_CONFIG file must fail the request outright (never
+	// swallowed into the hook's own try/catch, which exists for RUNTIME
+	// evaluation errors on an already-stored profile, not operator
+	// misconfiguration) — checking it here, before keyversion.txt is ever
+	// written, keeps a bad config file from poisoning re-POSTs.
+	let lifecycleConfig: LifecycleConfig = DEFAULT_LIFECYCLE_CONFIG;
+	if (process.env.AL_PERF_LIFECYCLE === "1") {
+		try {
+			lifecycleConfig = resolveLifecycleConfigFromEnv();
+		} catch (err) {
+			console.error(
+				`[lifecycle] invalid AL_PERF_LIFECYCLE_CONFIG for tenant ${tenantCode} activity ${activityId}: ${err}`,
+			);
+			return jsonResponse(500, {
+				error: "lifecycle_config_invalid",
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	mkdirSync(profileDir, { recursive: true });
 
 	// Write profile.bin to disk so analyzeProfile can read it as a filePath, then delete after.
@@ -332,20 +376,26 @@ export async function handleIngest(
 				manifest.captureKind === "sampling"
 					? manifest.captureKind
 					: (result.meta.captureKind ?? result.meta.profileType);
-			evaluateRun(getLifecycleStore(dataDir), result, {
-				tenant: tenantCode,
-				stream:
-					typeof manifest.scheduleId === "string" && manifest.scheduleId !== ""
-						? manifest.scheduleId
-						: "adhoc",
-				profileId: activityId,
-				captureKind,
-				captureTime:
-					typeof manifest.startTime === "string"
-						? manifest.startTime
-						: new Date().toISOString(),
-				versions: parseManifestVersions(manifest),
-			});
+			evaluateRun(
+				getLifecycleStore(dataDir),
+				result,
+				{
+					tenant: tenantCode,
+					stream:
+						typeof manifest.scheduleId === "string" &&
+						manifest.scheduleId !== ""
+							? manifest.scheduleId
+							: "adhoc",
+					profileId: activityId,
+					captureKind,
+					captureTime:
+						typeof manifest.startTime === "string"
+							? manifest.startTime
+							: new Date().toISOString(),
+					versions: parseManifestVersions(manifest),
+				},
+				lifecycleConfig,
+			);
 		} catch (err) {
 			console.error(
 				`[lifecycle] evaluation failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
@@ -405,9 +455,28 @@ async function handleTelemetryIngest(
 		});
 	}
 
+	// AL_PERF_LIFECYCLE_CONFIG's telemetry.severity block must drive the SAME
+	// severity classification used below (and, if AL_PERF_LIFECYCLE=1, the
+	// stored finding's severity) — resolved here, alongside the parse, and
+	// BEFORE any storage write, so a malformed file fails the request outright
+	// rather than landing in the lifecycle hook's swallowed try/catch further
+	// down (which exists for runtime evaluation errors, not a bad config file).
+	let lifecycleConfig: LifecycleConfig;
+	try {
+		lifecycleConfig = resolveLifecycleConfigFromEnv();
+	} catch (err) {
+		console.error(
+			`[lifecycle] invalid AL_PERF_LIFECYCLE_CONFIG for tenant ${tenantCode} activity ${activityId}: ${err}`,
+		);
+		return jsonResponse(500, {
+			error: "lifecycle_config_invalid",
+			message: err instanceof Error ? err.message : String(err),
+		});
+	}
+
 	let parsed: ReturnType<typeof parseTelemetryBatch>;
 	try {
-		parsed = parseTelemetryBatch(batchJson, DEFAULT_LIFECYCLE_CONFIG);
+		parsed = parseTelemetryBatch(batchJson, lifecycleConfig);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		return jsonResponse(400, { error: "invalid_telemetry_batch", message });
@@ -469,14 +538,20 @@ async function handleTelemetryIngest(
 			const { evaluateTelemetryBatch } = await import(
 				"../../src/lifecycle/telemetry.ts"
 			);
-			evaluateTelemetryBatch(getLifecycleStore(dataDir), batchJson, {
-				tenant: tenantCode,
-				stream:
-					typeof manifest.scheduleId === "string" && manifest.scheduleId !== ""
-						? manifest.scheduleId
-						: "telemetry",
-				profileId: activityId,
-			});
+			evaluateTelemetryBatch(
+				getLifecycleStore(dataDir),
+				batchJson,
+				{
+					tenant: tenantCode,
+					stream:
+						typeof manifest.scheduleId === "string" &&
+						manifest.scheduleId !== ""
+							? manifest.scheduleId
+							: "telemetry",
+					profileId: activityId,
+				},
+				lifecycleConfig,
+			);
 		} catch (err) {
 			console.error(
 				`[lifecycle] telemetry evaluation failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
