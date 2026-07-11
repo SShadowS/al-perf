@@ -220,9 +220,32 @@ auto-resolving — silence is not resolution; close them explicitly with
 `lifecycle close`, or wait for the app to reappear in a later batch with
 signals but without that particular finding.
 
-What telemetry does NOT do yet: trigger a deep capture automatically. A
-recurring `RT0018` finding on a routine tells you where a profiler run would
-pay off — acting on that (scheduling the capture, running
-`al-profile analyze ... --explain --deep`) is presently a human decision
-made off the digest, not an automated follow-up. Wiring that loop shut is
-explicitly a later phase.
+What telemetry now automates: **scheduling** a deep capture, not running
+one. A recurring `RT0018`/`RT0005` finding that clears the
+`captureRequests` thresholds (`src/lifecycle/config.ts`) gets a
+`capture_requests` row filed by `lifecycle sync`'s trigger scan. Actually
+running the capture and shipping the resulting profile is still an external
+executor's job — see §8 below.
+
+## 8. Closing the loop: telemetry → scheduled capture → fulfillment
+
+The full cycle, end to end:
+
+```
+pull-telemetry cron (§4, every 15m)
+  → RT0018/RT0005 findings land in the lifecycle DB
+  → lifecycle sync's capture-request scan (processCaptureTriggers)
+      files a capture_requests row once a finding clears
+      minOccurrences / minSeverity
+  → lifecycle captures list -f json --status pending
+      is how an executor discovers it
+  → executor claims it, runs the capture, ships a profile to the SAME tenant
+  → evaluating that profile (lifecycle evaluate / web ingest) matches its
+      method index against the request's routine key and marks it
+      fulfilled automatically — no extra step
+```
+
+`lifecycle sync` itself needs to run on a schedule for the scan to happen —
+treat it as a separate cron tick alongside `pull-telemetry` (§4). The full
+executor-side contract — poll cadence, claim semantics, the exact JSON row
+shape, TTL expiry — is [`docs/capture-request-contract.md`](capture-request-contract.md).

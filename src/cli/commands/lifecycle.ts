@@ -74,6 +74,22 @@ export function applyClose(
 	return { ok: true, message: `Closed ${fingerprint}` };
 }
 
+/**
+ * Shared claim/cancel failure message (capture-requests plan Task 4): names
+ * the row's CURRENT status, not just "failed" — an executor needs to tell
+ * "already claimed by someone else" from "already fulfilled" from "no such
+ * id" apart without a second query. Unknown id gets its own wording.
+ */
+function captureRequestFailureMessage(
+	store: LifecycleStore,
+	id: number,
+	verb: "claimed" | "cancelled",
+): string {
+	const row = store.listCaptureRequests().find((r) => r.id === id);
+	if (!row) return `No capture request with id ${id}.`;
+	return `Capture request #${id} cannot be ${verb} — status is ${row.status}.`;
+}
+
 /** Shared by `evaluate`, `telemetry`, and `pull-telemetry` (non---out path) — same outcome shape, same print rules. */
 function printEvaluationOutcome(
 	outcome: EvaluationOutcome,
@@ -546,6 +562,118 @@ export function createLifecycleCommand(): Command {
 					profileId,
 				});
 				printEvaluationOutcome(outcome, opts.format);
+			} finally {
+				store.close();
+			}
+		});
+
+	const captures = cmd
+		.command("captures")
+		.description(
+			"Deep-capture request queue — operator visibility, claim, and cancel (see docs/capture-request-contract.md)",
+		);
+
+	captures
+		.command("list")
+		.description("List capture requests")
+		.option("--tenant <tenant>", "Tenant key (all tenants if omitted)")
+		.option(
+			"--status <status>",
+			"Filter by status: pending|claimed|fulfilled|expired|cancelled",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((opts: any) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const rows = store.listCaptureRequests(opts.tenant, opts.status);
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+					return;
+				}
+				if (rows.length === 0) {
+					console.log("No capture requests.");
+					return;
+				}
+				const table = new Table({
+					head: [
+						chalk.gray("ID"),
+						chalk.gray("Status"),
+						chalk.gray("Tenant"),
+						chalk.gray("App"),
+						chalk.gray("Object"),
+						chalk.gray("Method"),
+						chalk.gray("Reason"),
+						chalk.gray("Requested"),
+						chalk.gray("Expires"),
+						chalk.gray("Claimed by"),
+					],
+					style: { head: [], border: [] },
+				});
+				for (const r of rows) {
+					table.push([
+						String(r.id),
+						r.status,
+						r.tenant,
+						r.appName ?? r.appId,
+						`${r.objectType} ${r.objectId}`,
+						r.methodName,
+						r.reason.slice(0, 40),
+						r.requestedAt.slice(0, 19),
+						r.expiresAt.slice(0, 19),
+						r.claimedBy ?? "",
+					]);
+				}
+				console.log(table.toString());
+			} finally {
+				store.close();
+			}
+		});
+
+	captures
+		.command("claim <id>")
+		.description("Claim a pending capture request for an executor")
+		.requiredOption(
+			"--by <executor>",
+			"Stable executor name claiming the request",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((idArg: string, opts: any) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const id = parseInt(idArg, 10);
+				const now = new Date().toISOString();
+				const ok = store.claimCaptureRequest(id, opts.by, now);
+				const message = ok
+					? `Claimed capture request #${id} for ${opts.by}`
+					: captureRequestFailureMessage(store, id, "claimed");
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify({ ok, message }, null, 2) + "\n");
+				} else if (ok) {
+					console.log(message);
+				} else {
+					console.error(message);
+				}
+				if (!ok) process.exitCode = 1;
+			} finally {
+				store.close();
+			}
+		});
+
+	captures
+		.command("cancel <id>")
+		.description("Cancel a pending or claimed capture request")
+		.action((idArg: string) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const id = parseInt(idArg, 10);
+				const now = new Date().toISOString();
+				const ok = store.cancelCaptureRequest(id, now);
+				if (!ok) {
+					console.error(captureRequestFailureMessage(store, id, "cancelled"));
+					process.exitCode = 1;
+					return;
+				}
+				console.log(`Cancelled capture request #${id}`);
 			} finally {
 				store.close();
 			}
