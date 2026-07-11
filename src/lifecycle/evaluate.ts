@@ -64,7 +64,7 @@ export interface RunMetadata {
 	stream: string;
 	/** Idempotency key: ingest activityId, or a content hash for CLI files. */
 	profileId: string;
-	captureKind: "sampling" | "instrumentation";
+	captureKind: "sampling" | "instrumentation" | "telemetry";
 	/**
 	 * Profile CAPTURE time (ISO 8601) — the event time all state is keyed to.
 	 * Canonical form is UTC (`evaluateRun` runs every value through
@@ -130,6 +130,16 @@ function canonicalCaptureTime(raw: string): string {
 	return parsed.toISOString();
 }
 
+/**
+ * KNOWN EDGE: the index key is (objectType, objectId, functionName) alone —
+ * no appId. If two apps in the SAME result both produce a method with that
+ * exact triple (rare in BC, since object numbers are effectively app-scoped,
+ * but possible with shared numbering or an overlapping extension point), the
+ * FIRST app's entry wins and the second app's identity is lost. A telemetry
+ * finding on that second app's method then resolves its appId here to the
+ * first app, so absence gating (appWasExercised) checks it against the wrong
+ * app's exercised set. Revisit if this bites in practice.
+ */
 function buildMethodIndex(
 	result: AnalysisResult,
 ): Map<string, MethodBreakdown> {

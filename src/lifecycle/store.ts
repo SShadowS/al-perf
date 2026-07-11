@@ -160,6 +160,41 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		`ALTER TABLE finding_events ADD COLUMN sink_processed INTEGER NOT NULL DEFAULT 0`,
 		`CREATE INDEX IF NOT EXISTS idx_events_unprocessed ON finding_events(sink_processed, id)`,
 	],
+	[
+		// SQLite cannot ALTER a CHECK constraint, so the `telemetry` capture
+		// kind requires rebuilding the `runs` table (the documented 12-step
+		// ALTER pattern): create runs_new with the widened CHECK, copy rows,
+		// carry over the AUTOINCREMENT high-water mark explicitly (a plain
+		// row copy only advances runs_new's own sqlite_sequence entry as far
+		// as the highest copied id — if `runs` ever had a row deleted, that
+		// leaves a lower watermark than the original and a future insert
+		// could reissue an id that was already handed out), drop the old
+		// table, rename, recreate its index. See migrate() below for why
+		// foreign_keys must be OFF for this step: occurrences/finding_events
+		// still hold live references to `runs` and SQLite's implicit
+		// pre-DROP DELETE would otherwise reject the DROP as a constraint
+		// violation even though the table is about to come back with the
+		// same rows under the same name.
+		`CREATE TABLE runs_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant TEXT NOT NULL,
+			stream TEXT NOT NULL,
+			profile_id TEXT NOT NULL,
+			capture_kind TEXT NOT NULL CHECK (capture_kind IN ('sampling','instrumentation','telemetry')),
+			capture_time TEXT NOT NULL,
+			version_stamp TEXT NOT NULL DEFAULT '',
+			incomplete INTEGER NOT NULL DEFAULT 0,
+			exercised_apps TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL,
+			UNIQUE (tenant, profile_id)
+		)`,
+		`INSERT INTO runs_new (id, tenant, stream, profile_id, capture_kind, capture_time, version_stamp, incomplete, exercised_apps, created_at)
+		 SELECT id, tenant, stream, profile_id, capture_kind, capture_time, version_stamp, incomplete, exercised_apps, created_at FROM runs`,
+		`UPDATE sqlite_sequence SET seq = (SELECT seq FROM sqlite_sequence WHERE name = 'runs') WHERE name = 'runs_new'`,
+		`DROP TABLE runs`,
+		`ALTER TABLE runs_new RENAME TO runs`,
+		`CREATE INDEX IF NOT EXISTS idx_runs_stream ON runs(tenant, stream, capture_time)`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -171,7 +206,7 @@ export interface RunInput {
 	tenant: string;
 	stream: string;
 	profileId: string;
-	captureKind: "sampling" | "instrumentation";
+	captureKind: "sampling" | "instrumentation" | "telemetry";
 	captureTime: string;
 	versionStamp: string;
 	incomplete: boolean;
@@ -301,13 +336,30 @@ export class LifecycleStore {
 			.get();
 		let version = row?.user_version ?? 0;
 		while (version < LIFECYCLE_MIGRATIONS.length) {
-			const apply = this.db.transaction(() => {
-				for (const stmt of LIFECYCLE_MIGRATIONS[version]) {
-					this.db.run(stmt);
-				}
-				this.db.run(`PRAGMA user_version = ${version + 1}`);
-			});
-			apply();
+			// PRAGMA foreign_keys only takes effect outside a pending
+			// transaction (SQLite silently no-ops it inside one) — toggled
+			// here, around the transaction, not inside it. Off for the
+			// duration because a table-rebuild migration (v3) DROPs a table
+			// that other tables still hold live FK references to; see the
+			// v3 migration's comment above for why that requires this.
+			this.db.run("PRAGMA foreign_keys = OFF");
+			try {
+				const apply = this.db.transaction(() => {
+					for (const stmt of LIFECYCLE_MIGRATIONS[version]) {
+						this.db.run(stmt);
+					}
+					this.db.run(`PRAGMA user_version = ${version + 1}`);
+				});
+				apply();
+			} finally {
+				this.db.run("PRAGMA foreign_keys = ON");
+			}
+			const violations = this.db.query("PRAGMA foreign_key_check").all();
+			if (violations.length > 0) {
+				throw new Error(
+					`migration to schema v${version + 1} left dangling foreign key references: ${JSON.stringify(violations)}`,
+				);
+			}
 			version++;
 		}
 	}
@@ -522,7 +574,7 @@ export class LifecycleStore {
 			tenant: row.tenant as string,
 			stream: row.stream as string,
 			profileId: row.profile_id as string,
-			captureKind: row.capture_kind as "sampling" | "instrumentation",
+			captureKind: row.capture_kind as "sampling" | "instrumentation" | "telemetry",
 			captureTime: row.capture_time as string,
 			versionStamp: row.version_stamp as string,
 			incomplete: (row.incomplete as number) === 1,

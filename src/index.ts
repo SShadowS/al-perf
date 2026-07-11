@@ -25,6 +25,11 @@ export {
 export { runDetectors } from "./core/patterns.js";
 export { processProfile } from "./core/processor.js";
 export { buildTableBreakdown } from "./core/table-view.js";
+export type { ParsedTelemetryBatch } from "./core/telemetry-parser.js";
+export {
+	isTelemetryBatchDocument,
+	parseTelemetryBatch,
+} from "./core/telemetry-parser.js";
 export type { ApiCallCost, ApiCostSummary } from "./explain/api-cost.js";
 export {
 	computeCallCost,
@@ -214,3 +219,8 @@ export type {
 	TableRelationInfo,
 	TriggerInfo,
 } from "./types/source-index.js";
+export type {
+	TelemetryBatchDocument,
+	TelemetrySignal,
+} from "./types/telemetry.js";
+export { TELEMETRY_BATCH_SCHEMA_VERSION } from "./types/telemetry.js";

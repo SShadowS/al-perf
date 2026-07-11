@@ -83,10 +83,16 @@ export interface FindingFingerprint {
 /**
  * The wire format a location came from. The line-base convention is a
  * property of the serialization format:
- *  - "alcpuprofile" — 1-based display lines (Microsoft's profile format).
- *  - "ir-json"      — 0-based wire lines (bc-mdc-converter interchange IR).
+ *  - "alcpuprofile"    — 1-based display lines (Microsoft's profile format).
+ *  - "ir-json"         — 0-based wire lines (bc-mdc-converter interchange IR).
+ *  - "telemetry-batch" — App Insights telemetry batch wire format; 1-based
+ *                        display lines like "alcpuprofile" (unaffected by
+ *                        the ir-json +1 shift below). Distinct from the
+ *                        lifecycle `runs.capture_kind` union in store.ts —
+ *                        this describes a wire SERIALIZATION's line-base
+ *                        convention, not what recorded the run.
  */
-export type CaptureKind = "alcpuprofile" | "ir-json";
+export type CaptureKind = "alcpuprofile" | "ir-json" | "telemetry-batch";
 
 /**
  * A normalized, capture-kind-independent source location.

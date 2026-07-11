@@ -127,7 +127,11 @@ describe("lifecycle sync — security boundary", () => {
 		configPath = join(dir, "lifecycle.config.json");
 		originalFetch = globalThis.fetch;
 		originalExitCode = process.exitCode;
-		process.exitCode = undefined;
+		// Bun quirk (verified empirically): `process.exitCode = undefined` does
+		// NOT clear a previously-set numeric value — only assigning 0 does. Using
+		// `undefined` here would leak a nonzero exitCode from an earlier test
+		// file (alphabetically-prior test files run in the same process).
+		process.exitCode = 0;
 		fetchCalls = [];
 		// Recorder that throws: any accidental call both fails loudly (a
 		// swallowed throw inside drainOutbox/github.ts would otherwise just
@@ -144,7 +148,7 @@ describe("lifecycle sync — security boundary", () => {
 
 	afterEach(async () => {
 		globalThis.fetch = originalFetch;
-		process.exitCode = originalExitCode;
+		process.exitCode = originalExitCode ?? 0;
 		errorSpy.mockRestore();
 		logSpy.mockRestore();
 		stdoutSpy.mockRestore();

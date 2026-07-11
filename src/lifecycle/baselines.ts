@@ -63,7 +63,7 @@ export function routineKeyFor(m: {
 export interface MetricRunKey {
 	tenant: string;
 	stream: string;
-	captureKind: "sampling" | "instrumentation";
+	captureKind: "sampling" | "instrumentation" | "telemetry";
 	profileId: string;
 	captureTime: string;
 	versionStamp: string;

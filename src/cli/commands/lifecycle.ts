@@ -2,15 +2,24 @@ import chalk from "chalk";
 import Table from "cli-table3";
 import { Command } from "commander";
 import { createHash } from "crypto";
-import { readFileSync, statSync } from "fs";
+import { readFileSync, statSync, writeFileSync } from "fs";
 import { analyzeProfile } from "../../core/analyzer.js";
+import {
+	DEFAULT_API_KEY_ENV,
+	DEFAULT_SIGNALS,
+	DEFAULT_SINCE,
+	pullTelemetry,
+} from "../../lifecycle/appinsights.js";
 import { rollupRoutineMetrics } from "../../lifecycle/baselines.js";
 import {
 	DEFAULT_LIFECYCLE_CONFIG,
 	type LifecycleConfig,
 } from "../../lifecycle/config.js";
 import { buildDigest, renderDigestMarkdown } from "../../lifecycle/digest.js";
-import { evaluateRun } from "../../lifecycle/evaluate.js";
+import {
+	type EvaluationOutcome,
+	evaluateRun,
+} from "../../lifecycle/evaluate.js";
 import { createGitHubSink } from "../../lifecycle/sinks/github.js";
 import { drainOutbox } from "../../lifecycle/sinks/outbox.js";
 import { processEventsForSinks } from "../../lifecycle/sinks/triggers.js";
@@ -20,6 +29,8 @@ import {
 } from "../../lifecycle/sinks/types.js";
 import { transition } from "../../lifecycle/states.js";
 import { LifecycleStore } from "../../lifecycle/store.js";
+import { evaluateTelemetryBatch } from "../../lifecycle/telemetry.js";
+import type { TelemetryBatchDocument } from "../../types/telemetry.js";
 
 /** CLI default DB location (plan decision: dot-dir in cwd, one file). */
 export const DEFAULT_DB_PATH = ".al-perf/lifecycle.sqlite";
@@ -57,6 +68,26 @@ export function applyClose(
 		at: now,
 	});
 	return { ok: true, message: `Closed ${fingerprint}` };
+}
+
+/** Shared by `evaluate`, `telemetry`, and `pull-telemetry` (non---out path) — same outcome shape, same print rules. */
+function printEvaluationOutcome(
+	outcome: EvaluationOutcome,
+	format: string,
+): void {
+	if (format === "json") {
+		process.stdout.write(JSON.stringify(outcome, null, 2) + "\n");
+		return;
+	}
+	const skipped = outcome.skipped ? ` (${outcome.skipped})` : "";
+	console.log(
+		`Run ${outcome.runId}${skipped}: ${outcome.findingsSeen} findings seen, ` +
+			`${outcome.transitions.length} transitions, ${outcome.unfingerprinted} unfingerprinted` +
+			(outcome.incomplete ? " [incomplete capture — absence not counted]" : ""),
+	);
+	for (const t of outcome.transitions) {
+		console.log(`  ${t.fingerprint}: ${t.from ?? "-"} -> ${t.to} (${t.event})`);
+	}
 }
 
 export function createLifecycleCommand(): Command {
@@ -113,23 +144,7 @@ export function createLifecycleCommand(): Command {
 					},
 					configPatch,
 				);
-				if (opts.format === "json") {
-					process.stdout.write(JSON.stringify(outcome, null, 2) + "\n");
-					return;
-				}
-				const skipped = outcome.skipped ? ` (${outcome.skipped})` : "";
-				console.log(
-					`Run ${outcome.runId}${skipped}: ${outcome.findingsSeen} findings seen, ` +
-						`${outcome.transitions.length} transitions, ${outcome.unfingerprinted} unfingerprinted` +
-						(outcome.incomplete
-							? " [incomplete capture — absence not counted]"
-							: ""),
-				);
-				for (const t of outcome.transitions) {
-					console.log(
-						`  ${t.fingerprint}: ${t.from ?? "-"} -> ${t.to} (${t.event})`,
-					);
-				}
+				printEvaluationOutcome(outcome, opts.format);
 			} finally {
 				store.close();
 			}
@@ -363,6 +378,129 @@ export function createLifecycleCommand(): Command {
 						);
 					}
 				}
+			} finally {
+				store.close();
+			}
+		});
+
+	cmd
+		.command("telemetry <batch>")
+		.description(
+			"Evaluate a local telemetry-batch JSON file into the lifecycle DB",
+		)
+		.option("--tenant <tenant>", "Tenant key", "local")
+		.option("--stream <stream>", "Capture stream", "telemetry")
+		.option(
+			"--profile-id <id>",
+			"Idempotency key (default: sha256 of the file content)",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((batchPath: string, opts: any) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const raw = readFileSync(batchPath, "utf8");
+				const batchJson = JSON.parse(raw);
+				const profileId =
+					opts.profileId ??
+					createHash("sha256").update(raw).digest("hex").slice(0, 32);
+				const outcome = evaluateTelemetryBatch(store, batchJson, {
+					tenant: opts.tenant,
+					stream: opts.stream,
+					profileId,
+				});
+				printEvaluationOutcome(outcome, opts.format);
+			} finally {
+				store.close();
+			}
+		});
+
+	cmd
+		.command("pull-telemetry")
+		.description(
+			"Pull BC telemetry signals from Application Insights, then evaluate locally or write --out (does not retry — cron-driven)",
+		)
+		.requiredOption("--app-id <guid>", "Application Insights app id")
+		.option(
+			"--api-key-env <name>",
+			"Environment variable holding the App Insights API key",
+			DEFAULT_API_KEY_ENV,
+		)
+		.option(
+			"--since <isoOrDuration>",
+			"Window start: ISO 8601 timestamp or relative duration (e.g. 4h, 30m)",
+			DEFAULT_SINCE,
+		)
+		.option(
+			"--signals <list>",
+			"Comma-separated signal ids to pull",
+			DEFAULT_SIGNALS.join(","),
+		)
+		.option(
+			"--out <path>",
+			"Write the normalized batch JSON here instead of evaluating (does not touch the DB)",
+		)
+		.option("--tenant <tenant>", "Tenant key", "local")
+		.option("--stream <stream>", "Capture stream", "telemetry")
+		.option(
+			"--profile-id <id>",
+			"Idempotency key (default: sha256 of the normalized batch)",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action(async (opts: any) => {
+			// The API key check inside pullTelemetry happens before any fetch —
+			// deliberately caught here (not rethrown) so a missing key never
+			// opens the lifecycle store either, matching --out's "no side effects
+			// beyond the requested one" contract.
+			let batch: TelemetryBatchDocument;
+			try {
+				const signals = String(opts.signals)
+					.split(",")
+					.map((s: string) => s.trim())
+					.filter((s: string) => s.length > 0);
+				batch = await pullTelemetry({
+					appId: opts.appId,
+					apiKeyEnv: opts.apiKeyEnv,
+					since: opts.since,
+					signals,
+				});
+			} catch (err) {
+				console.error(err instanceof Error ? err.message : String(err));
+				process.exitCode = 1;
+				return;
+			}
+
+			if (opts.out) {
+				writeFileSync(opts.out, JSON.stringify(batch, null, 2) + "\n");
+				if (opts.format === "json") {
+					process.stdout.write(
+						JSON.stringify(
+							{ written: opts.out, signalCount: batch.signals.length },
+							null,
+							2,
+						) + "\n",
+					);
+				} else {
+					console.log(
+						`Wrote telemetry batch (${batch.signals.length} signal(s)) to ${opts.out}`,
+					);
+				}
+				return;
+			}
+
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const profileId =
+					opts.profileId ??
+					createHash("sha256")
+						.update(JSON.stringify(batch))
+						.digest("hex")
+						.slice(0, 32);
+				const outcome = evaluateTelemetryBatch(store, batch, {
+					tenant: opts.tenant,
+					stream: opts.stream,
+					profileId,
+				});
+				printEvaluationOutcome(outcome, opts.format);
 			} finally {
 				store.close();
 			}

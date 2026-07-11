@@ -21,6 +21,13 @@ export interface LifecycleConfig {
 	routineMetricsPerRunCap: number;
 	/** Raw routine-metric retention before daily rollup (spec: 90 days). */
 	rawMetricsRetentionDays: number;
+	/** telemetry-batch ingestion thresholds (umbrella spec: telemetry-ingest plan). */
+	telemetry: {
+		/** Reject telemetry-batch documents with more signals than this (payload budget). */
+		maxSignalsPerBatch: number;
+		/** Per-signalId severity thresholds (ms) on maxDurationMs; "default" covers unknown signalIds. */
+		severity: Record<string, { warningMs: number; criticalMs: number }>;
+	};
 }
 
 export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
@@ -32,7 +39,15 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 	improvementFactor: 0.67,
 	routineMetricsPerRunCap: 500,
 	rawMetricsRetentionDays: 90,
+	telemetry: {
+		maxSignalsPerBatch: 10_000,
+		severity: {
+			RT0018: { warningMs: 10_000, criticalMs: 30_000 },
+			RT0005: { warningMs: 10_000, criticalMs: 60_000 },
+			default: { warningMs: 10_000, criticalMs: 60_000 },
+		},
+	},
 };
 
 /** Current lifecycle SQLite schema version (PRAGMA user_version target). See store.ts LIFECYCLE_MIGRATIONS. */
-export const LIFECYCLE_SCHEMA_VERSION = 2;
+export const LIFECYCLE_SCHEMA_VERSION = 3;
