@@ -8,6 +8,10 @@ import {
 	buildDigest,
 	renderDigestMarkdown,
 } from "../../src/lifecycle/digest.js";
+import {
+	computeTelemetryFingerprint,
+	formatFingerprint,
+} from "../../src/lifecycle/fingerprint.js";
 import type { FindingState } from "../../src/lifecycle/states.js";
 import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 
@@ -120,6 +124,62 @@ describe("buildDigest", () => {
 		expect(digest.resolved).toHaveLength(0);
 		// Totals stay unfiltered (current inventory, not deltas).
 		expect(digest.totals.new).toBe(2);
+		store.close();
+	});
+});
+
+describe("telemetry findings in the digest", () => {
+	// digest.ts is source-agnostic (toEntry never reads row.source) — a
+	// telemetry finding must render correctly through the EXISTING sectioning
+	// and markdown rendering with zero digest.ts changes (YAGNI gate,
+	// telemetry-ingest plan Task 6 step 1). This test is the deliverable.
+	it("renders a telemetry finding with its telemetry: fingerprint and RT-prefixed title, and leaves the 11-field digest contract untouched", () => {
+		const store = new LifecycleStore(":memory:");
+		const fingerprint = formatFingerprint(
+			computeTelemetryFingerprint({
+				signalId: "RT0018",
+				appId: "11111111-2222-3333-4444-555555555555",
+				objectType: "Codeunit",
+				objectNumber: 50100,
+				routineName: "PostSalesLine",
+			}),
+		);
+		seed(store, "new", {
+			fingerprint,
+			source: "telemetry",
+			patternId: "telemetry-rt0018",
+			title: "RT0018: PostSalesLine (Codeunit 50100) slow — max 15000ms × 3",
+			severity: "warning",
+			appName: "My App",
+		});
+
+		const digest = buildDigest(store, { tenant: "t1" });
+		const entry = digest.newFindings[0];
+		expect(entry.fingerprint).toBe(fingerprint);
+		expect(entry.fingerprint).toMatch(/^telemetry:[0-9a-f]{16}$/);
+		expect(entry.title).toMatch(/^RT0018:/);
+		// The 11-field JSON contract (digest.test.ts "locks the
+		// DigestFindingEntry contract shape" above) is unchanged for a
+		// telemetry-sourced entry — same shape as pattern/alsem entries.
+		expect(Object.keys(entry).sort()).toEqual(
+			[
+				"fingerprint",
+				"title",
+				"severity",
+				"state",
+				"needsTriage",
+				"appName",
+				"patternId",
+				"firstSeenAt",
+				"lastSeenAt",
+				"occurrenceCount",
+				"lastEvent",
+			].sort(),
+		);
+
+		const md = renderDigestMarkdown(digest);
+		expect(md).toContain(fingerprint);
+		expect(md).toContain("RT0018: PostSalesLine");
 		store.close();
 	});
 });
