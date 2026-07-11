@@ -30,6 +30,36 @@ connection string points at. BC emits `RT0018` (long-running AL) and
 and `executionTime`/`executionTimeInMs` — the fields `pull-telemetry`
 (below) already knows how to read.
 
+### Environment-level wiring (everything, not just one extension)
+
+The app.json route only covers YOUR extension's objects. To capture
+platform-wide signals for a whole environment, set the connection string at
+the environment level instead (both routes can coexist — events then land in
+both resources):
+
+- **SaaS**: Admin Center → the environment → **Application Insights
+  Connection String**; takes effect on the environment's next restart.
+- **OnPrem**: on the BC server,
+  `Set-NAVServerConfiguration -ServerInstance BC -KeyName ApplicationInsightsConnectionString -KeyValue "InstrumentationKey=...;IngestionEndpoint=...;..."`
+  then `Restart-NAVServerInstance BC`.
+- **Docker container** (Windows daemon): same cmdlets through
+  `docker exec <container> powershell -Command "Import-Module 'C:\Program Files\Microsoft Dynamics NAV\*\Service\NavAdminTool.ps1'; Set-NAVServerConfiguration -ServerInstance BC -KeyName ApplicationInsightsConnectionString -KeyValue '<cs>'; Restart-NAVServerInstance BC"`
+  (NavAdminTool loads the Management module; read the current value back with
+  `Get-NAVServerConfiguration -ServerInstance BC -KeyName ApplicationInsightsConnectionString`).
+
+Ingestion is NOT immediate: expect 2–5 minutes of lag between a BC event
+and its row being queryable. Quick verify once wired — run in the
+resource's Logs blade:
+
+```
+traces | where customDimensions.eventId startswith "RT" | take 10
+```
+
+An empty result after generating traffic usually means nothing crossed the
+emit thresholds (RT0018 ≈ 10 s of AL, RT0005 ≈ 1 s of SQL by default) —
+quiet is normal on a healthy dev box, and `pull-telemetry` returning zero
+signals is the same non-event (§7).
+
 ## 2. Finding the App Insights app id
 
 `pull-telemetry --app-id` wants the Application Insights **Application ID**
