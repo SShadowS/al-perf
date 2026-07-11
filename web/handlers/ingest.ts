@@ -6,6 +6,11 @@ import {
 	writeFileSync,
 } from "fs";
 import { analyzeProfile } from "../../src/core/analyzer.ts";
+import {
+	isTelemetryBatchDocument,
+	parseTelemetryBatch,
+} from "../../src/core/telemetry-parser.ts";
+import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.ts";
 import { encryptBundle, type RsaJwk, xmlRsaToJwk } from "../crypto.ts";
 import {
 	checkBearerAgainstHash,
@@ -230,9 +235,31 @@ export async function handleIngest(
 	if (
 		captureKind !== undefined &&
 		captureKind !== "sampling" &&
-		captureKind !== "instrumentation"
+		captureKind !== "instrumentation" &&
+		captureKind !== "telemetry"
 	) {
 		return jsonResponse(400, { error: "invalid_capture_kind" });
+	}
+
+	// Telemetry batches are sniffed from CONTENT (isTelemetryBatchDocument),
+	// never from the manifest's captureKind — mirrors how ir-json vs
+	// .alcpuprofile is sniffed from content in parseProfile. They skip
+	// analysis entirely (no analyzeProfile, no flamegraph, no stored
+	// AnalysisResult beyond the batch itself) and evaluate through the
+	// lifecycle engine via evaluateTelemetryBatch instead of evaluateRun.
+	const profileText = profileBytes.toString("utf8");
+	if (isTelemetryBatchDocument(profileText)) {
+		return handleTelemetryIngest({
+			dataDir,
+			tenantCode,
+			activityId,
+			profileDir,
+			profileText,
+			profileBytes,
+			manifestBytes,
+			manifest,
+			jwk,
+		});
 	}
 
 	mkdirSync(profileDir, { recursive: true });
@@ -322,6 +349,137 @@ export async function handleIngest(
 		} catch (err) {
 			console.error(
 				`[lifecycle] evaluation failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
+			);
+		}
+	}
+
+	return jsonResponse(202, {
+		id: activityId,
+		status: "stored",
+		keyVersion: Number(KEY_VERSION_POC),
+	});
+}
+
+interface TelemetryIngestArgs {
+	dataDir: string;
+	tenantCode: string;
+	activityId: string;
+	profileDir: string;
+	profileText: string;
+	profileBytes: Buffer;
+	manifestBytes: Buffer;
+	manifest: Record<string, unknown>;
+	jwk: RsaJwk;
+}
+
+/**
+ * Telemetry-batch ingest: validates the batch (fail-closed, unconditionally —
+ * this is the request's only shape check, independent of AL_PERF_LIFECYCLE)
+ * before touching disk, then stores the raw batch + manifest via the same
+ * encrypted-bundle path profiles use. There is no AnalysisResult to store as
+ * "result" (an empty buffer stands in); lifecycle evaluation is opt-in via
+ * evaluateTelemetryBatch, mirroring the profile path's evaluateRun hook.
+ */
+async function handleTelemetryIngest(
+	args: TelemetryIngestArgs,
+): Promise<Response> {
+	const {
+		dataDir,
+		tenantCode,
+		activityId,
+		profileDir,
+		profileText,
+		profileBytes,
+		manifestBytes,
+		manifest,
+		jwk,
+	} = args;
+
+	let batchJson: unknown;
+	try {
+		batchJson = JSON.parse(profileText);
+	} catch {
+		return jsonResponse(400, {
+			error: "invalid_telemetry_batch",
+			message: "telemetry-batch: invalid JSON",
+		});
+	}
+
+	let parsed: ReturnType<typeof parseTelemetryBatch>;
+	try {
+		parsed = parseTelemetryBatch(batchJson, DEFAULT_LIFECYCLE_CONFIG);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return jsonResponse(400, { error: "invalid_telemetry_batch", message });
+	}
+
+	mkdirSync(profileDir, { recursive: true });
+
+	// No AnalysisResult beyond the batch itself: the "result" half of the
+	// encrypted bundle is an empty buffer rather than a synthesized payload.
+	const bundle = encryptBundle(
+		profileBytes,
+		Buffer.alloc(0),
+		manifestBytes,
+		jwk,
+	);
+
+	writeFileSync(resolveStoragePath(profileDir, "manifest.json"), manifestBytes);
+	writeFileSync(
+		resolveStoragePath(profileDir, "metrics.json"),
+		JSON.stringify(
+			{
+				activityId: manifest.activityId,
+				scheduleId: manifest.scheduleId,
+				activityType: manifest.activityType,
+				captureKind: "telemetry",
+				sourceFormat: "telemetry-batch",
+				windowEnd: parsed.windowEnd,
+				signalCount: parsed.signalCount,
+				profileSize: profileBytes.byteLength,
+				analyzedAt: new Date().toISOString(),
+			},
+			null,
+			2,
+		),
+	);
+	writeFileSync(resolveStoragePath(profileDir, "wrapped.bin"), bundle.wrapped);
+	writeFileSync(
+		resolveStoragePath(profileDir, "blob.enc"),
+		Buffer.concat([bundle.blob.iv, bundle.blob.tag, bundle.blob.ciphertext]),
+	);
+	writeFileSync(
+		resolveStoragePath(profileDir, "result.enc"),
+		Buffer.concat([
+			bundle.result.iv,
+			bundle.result.tag,
+			bundle.result.ciphertext,
+		]),
+	);
+	writeFileSync(
+		resolveStoragePath(profileDir, "keyversion.txt"),
+		KEY_VERSION_POC,
+	);
+
+	// Lifecycle evaluation (opt-in, matches the profile path's hook): errors
+	// are logged and never fail the ingest — the batch is already stored.
+	if (process.env.AL_PERF_LIFECYCLE === "1") {
+		try {
+			const { getLifecycleStore } = await import("../lifecycle-db.ts");
+			const { evaluateTelemetryBatch } = await import(
+				"../../src/lifecycle/telemetry.ts"
+			);
+			evaluateTelemetryBatch(getLifecycleStore(dataDir), batchJson, {
+				tenant: tenantCode,
+				stream:
+					typeof manifest.scheduleId === "string" && manifest.scheduleId !== ""
+						? manifest.scheduleId
+						: "telemetry",
+				profileId: activityId,
+			});
+		} catch (err) {
+			console.error(
+				`[lifecycle] telemetry evaluation failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
 			);
 		}
 	}
