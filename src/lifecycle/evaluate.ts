@@ -64,7 +64,7 @@ export interface RunMetadata {
 	stream: string;
 	/** Idempotency key: ingest activityId, or a content hash for CLI files. */
 	profileId: string;
-	captureKind: "sampling" | "instrumentation";
+	captureKind: "sampling" | "instrumentation" | "telemetry";
 	/**
 	 * Profile CAPTURE time (ISO 8601) — the event time all state is keyed to.
 	 * Canonical form is UTC (`evaluateRun` runs every value through

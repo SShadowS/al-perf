@@ -1,11 +1,20 @@
 /**
  * migrations.test.ts — applying FingerprintMigration records to the store:
  * rename (identity-upgrade), merge (both identities active), idempotency.
+ * Also: the schema v2 -> v3 runs-table rebuild (telemetry capture kind).
  */
 
+import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { linkFingerprints } from "../../src/lifecycle/fingerprint.js";
-import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
+import {
+	LIFECYCLE_MIGRATIONS,
+	LifecycleStore,
+	type NewFinding,
+} from "../../src/lifecycle/store.js";
 
 const OLD = {
 	value: "fallbackhash00001",
@@ -442,5 +451,57 @@ describe("applyFingerprintMigration", () => {
 		);
 		expect(canonical?.externalId).toBe("99"); // to-row's own issue survives
 		store.close();
+	});
+});
+
+/**
+ * Builds a genuine v2 database on disk: runs the real v1 + v2 migration
+ * statements directly against a raw bun:sqlite connection (bypassing
+ * LifecycleStore, whose constructor would otherwise upgrade straight past
+ * v2 to whatever the ladder's current head is) and inserts one pre-existing
+ * `runs` row. Reopening it through LifecycleStore then exercises the real
+ * v2 -> v3 migration step on open. Caller must `rmSync(dir, ...)` when done.
+ */
+function openV2FixtureWithOneRun(): { store: LifecycleStore; dir: string } {
+	const dir = mkdtempSync(join(tmpdir(), "alperf-migrations-v3-"));
+	const dbPath = join(dir, "lifecycle.sqlite");
+	const v2 = new Database(dbPath, { create: true });
+	for (const stmt of LIFECYCLE_MIGRATIONS[0]) v2.run(stmt);
+	for (const stmt of LIFECYCLE_MIGRATIONS[1]) v2.run(stmt);
+	v2.run("PRAGMA user_version = 2");
+	v2.run(
+		`INSERT INTO runs (tenant, stream, profile_id, capture_kind, capture_time, version_stamp, incomplete, exercised_apps, created_at)
+		 VALUES ('t', 'nightly', 'existing-profile', 'sampling', '2026-07-01T00:00:00.000Z', '', 0, '[]', '2026-07-01T00:00:00.000Z')`,
+	);
+	v2.close();
+	const store = new LifecycleStore(dbPath); // runs the real ladder from user_version 2 onward
+	return { store, dir };
+}
+
+describe("schema v3 (telemetry capture kind)", () => {
+	it("v3 accepts telemetry capture kind; v2 data survives the runs-table rebuild", () => {
+		const { store, dir } = openV2FixtureWithOneRun();
+		try {
+			const rec = store.recordRun({
+				tenant: "t",
+				stream: "telemetry",
+				profileId: "batch-1",
+				captureKind: "telemetry",
+				captureTime: "2026-07-11T00:00:00.000Z",
+				versionStamp: "",
+				incomplete: false,
+				exercisedApps: { ids: [], names: [] },
+			});
+			expect(rec.duplicate).toBe(false);
+			// pre-migration run row survived the table rebuild byte-for-byte
+			const preExisting = store.getRun("t", "existing-profile");
+			expect(preExisting).toBeTruthy();
+			expect(preExisting?.captureKind).toBe("sampling");
+			expect(preExisting?.stream).toBe("nightly");
+			expect(preExisting?.captureTime).toBe("2026-07-01T00:00:00.000Z");
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

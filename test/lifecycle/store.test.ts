@@ -134,6 +134,23 @@ describe("LifecycleStore CRUD", () => {
 		store.close();
 	});
 
+	it("recordRun accepts the telemetry capture kind", () => {
+		const store = new LifecycleStore(":memory:");
+		const rec = store.recordRun({
+			tenant: "t1",
+			stream: "telemetry",
+			profileId: "batch-001",
+			captureKind: "telemetry",
+			captureTime: "2026-07-11T00:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		expect(rec.duplicate).toBe(false);
+		expect(store.getRun("t1", "batch-001")?.captureKind).toBe("telemetry");
+		store.close();
+	});
+
 	it("insertFinding + getActiveFinding roundtrip; closed rows are not active", () => {
 		const store = new LifecycleStore(":memory:");
 		const id = store.insertFinding(baseFinding());

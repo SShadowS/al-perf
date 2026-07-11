@@ -37,13 +37,16 @@ function finding(fingerprint: string): NewFinding {
 }
 
 describe("schema v2", () => {
-	it("fresh stores land at version 2 with sink tables", () => {
+	it("fresh stores land at the current schema version with sink tables", () => {
 		const store = new LifecycleStore(":memory:");
-		expect(LIFECYCLE_SCHEMA_VERSION).toBe(2);
+		// The schema has since moved past v2 (see schema v3 tests); a fresh
+		// store always lands at whatever LIFECYCLE_SCHEMA_VERSION currently
+		// is, not pinned at 2 — this test's job is just confirming the v2
+		// sink tables are present in that fresh schema.
 		expect(
 			store.db.query<{ user_version: number }, []>("PRAGMA user_version").get()
 				?.user_version,
-		).toBe(2);
+		).toBe(LIFECYCLE_SCHEMA_VERSION);
 		const tables = store.db
 			.query<{ name: string }, []>(
 				"SELECT name FROM sqlite_master WHERE type='table'",
@@ -76,11 +79,13 @@ describe("schema v2", () => {
 			v1.close();
 
 			const store = new LifecycleStore(dbPath);
+			// A fresh v1 DB migrates all the way to the current head (now v3),
+			// not just the v2 step this file is nominally about.
 			expect(
 				store.db
 					.query<{ user_version: number }, []>("PRAGMA user_version")
 					.get()?.user_version,
-			).toBe(2);
+			).toBe(LIFECYCLE_SCHEMA_VERSION);
 			expect(store.getActiveFinding("t1", "pattern:v1row")).not.toBeNull();
 
 			// The pre-existing event's backfilled sink_processed reads back as 0
