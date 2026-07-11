@@ -27,6 +27,10 @@ export interface LifecycleConfig {
 		maxSignalsPerBatch: number;
 		/** Per-signalId severity thresholds (ms) on maxDurationMs; "default" covers unknown signalIds. */
 		severity: Record<string, { warningMs: number; criticalMs: number }>;
+		/** Multi-tenant split (pull-telemetry --split-by-customer): AAD tenant GUID → al-perf tenant code. */
+		tenantMap: Record<string, string>;
+		/** What to do with telemetry from AAD tenants absent from tenantMap: skip (default, loud) or bucket under the --tenant value. */
+		unmappedTenantPolicy: "skip" | "fleet";
 	};
 	/** Deep-capture request queue trigger thresholds (capture-requests plan). */
 	captureRequests: {
@@ -59,6 +63,8 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 			RT0005: { warningMs: 10_000, criticalMs: 60_000 },
 			default: { warningMs: 10_000, criticalMs: 60_000 },
 		},
+		tenantMap: {},
+		unmappedTenantPolicy: "skip",
 	},
 	captureRequests: {
 		enabled: true,
