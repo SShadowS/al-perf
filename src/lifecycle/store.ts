@@ -195,6 +195,37 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		`ALTER TABLE runs_new RENAME TO runs`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_stream ON runs(tenant, stream, capture_time)`,
 	],
+	[
+		// Purely additive — no table rebuild, no FK-toggle complications.
+		`CREATE TABLE capture_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			finding_id INTEGER NOT NULL REFERENCES findings(id),
+			app_id TEXT NOT NULL,
+			app_name TEXT,
+			object_type TEXT NOT NULL,
+			object_id INTEGER NOT NULL,
+			method_name TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending'
+				CHECK (status IN ('pending','claimed','fulfilled','expired','cancelled')),
+			requested_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			claimed_at TEXT,
+			claimed_by TEXT,
+			fulfilled_at TEXT,
+			fulfilled_by_profile_id TEXT
+		)`,
+		// The single dedupe enforcement point: one ACTIVE (pending/claimed)
+		// request per (tenant, fingerprint) — application code never needs
+		// its own duplicate check, INSERT OR IGNORE is sufficient.
+		`CREATE UNIQUE INDEX idx_capture_requests_active
+			ON capture_requests(tenant, fingerprint)
+			WHERE status IN ('pending','claimed')`,
+		`CREATE INDEX idx_capture_requests_tenant_status
+			ON capture_requests(tenant, status)`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -304,6 +335,27 @@ export interface OutboxRow {
 	lastError: string | null;
 	createdAt: string;
 	deliveredAt: string | null;
+}
+
+export interface CaptureRequestRow {
+	id: number;
+	tenant: string;
+	fingerprint: string; // telemetry:<16hex> — the requesting finding
+	findingId: number;
+	// Normalized routine key (D3) — stored pre-normalized at creation time:
+	appId: string;
+	appName: string | null;
+	objectType: string;
+	objectId: number;
+	methodName: string; // trigger-normalized, lowercased
+	reason: string; // human line, e.g. "RT0018 × 5 runs, max 42000ms"
+	status: "pending" | "claimed" | "fulfilled" | "expired" | "cancelled";
+	requestedAt: string;
+	expiresAt: string;
+	claimedAt: string | null;
+	claimedBy: string | null;
+	fulfilledAt: string | null;
+	fulfilledByProfileId: string | null;
 }
 
 export interface UnprocessedEvent {
@@ -1105,5 +1157,150 @@ export class LifecycleStore {
 		});
 
 		return apply();
+	}
+
+	private rowToCaptureRequest(row: Record<string, unknown>): CaptureRequestRow {
+		return {
+			id: row.id as number,
+			tenant: row.tenant as string,
+			fingerprint: row.fingerprint as string,
+			findingId: row.finding_id as number,
+			appId: row.app_id as string,
+			appName: (row.app_name as string | null) ?? null,
+			objectType: row.object_type as string,
+			objectId: row.object_id as number,
+			methodName: row.method_name as string,
+			reason: row.reason as string,
+			status: row.status as CaptureRequestRow["status"],
+			requestedAt: row.requested_at as string,
+			expiresAt: row.expires_at as string,
+			claimedAt: (row.claimed_at as string | null) ?? null,
+			claimedBy: (row.claimed_by as string | null) ?? null,
+			fulfilledAt: (row.fulfilled_at as string | null) ?? null,
+			fulfilledByProfileId:
+				(row.fulfilled_by_profile_id as string | null) ?? null,
+		};
+	}
+
+	/**
+	 * Dedupe is enforced entirely by idx_capture_requests_active (partial
+	 * unique on (tenant, fingerprint) WHERE status IN pending/claimed) — an
+	 * active duplicate makes this a no-op, not an error. Once the prior
+	 * request has left the active set (fulfilled/expired/cancelled), the
+	 * same identity can request again.
+	 */
+	createCaptureRequest(
+		input: Omit<
+			CaptureRequestRow,
+			"id" | "status" | "claimedAt" | "claimedBy" | "fulfilledAt" | "fulfilledByProfileId"
+		>,
+	): boolean {
+		const res = this.db.run(
+			`INSERT OR IGNORE INTO capture_requests (tenant, fingerprint, finding_id, app_id, app_name, object_type, object_id, method_name, reason, requested_at, expires_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				input.tenant,
+				input.fingerprint,
+				input.findingId,
+				input.appId,
+				input.appName,
+				input.objectType,
+				input.objectId,
+				input.methodName,
+				input.reason,
+				input.requestedAt,
+				input.expiresAt,
+			],
+		);
+		return res.changes > 0;
+	}
+
+	listCaptureRequests(
+		tenant?: string,
+		status?: CaptureRequestRow["status"],
+	): CaptureRequestRow[] {
+		const where: string[] = [];
+		const params: string[] = [];
+		if (tenant) {
+			where.push("tenant = ?");
+			params.push(tenant);
+		}
+		if (status) {
+			where.push("status = ?");
+			params.push(status);
+		}
+		let sql = "SELECT * FROM capture_requests";
+		if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+		sql += " ORDER BY id";
+		return this.db
+			.query<Record<string, unknown>, string[]>(sql)
+			.all(...params)
+			.map((row) => this.rowToCaptureRequest(row));
+	}
+
+	countActiveCaptureRequests(tenant: string): number {
+		const row = this.db
+			.query<{ n: number }, [string]>(
+				"SELECT count(*) AS n FROM capture_requests WHERE tenant = ? AND status IN ('pending','claimed')",
+			)
+			.get(tenant);
+		return row?.n ?? 0;
+	}
+
+	claimCaptureRequest(id: number, claimedBy: string, now: string): boolean {
+		const res = this.db.run(
+			`UPDATE capture_requests SET status = 'claimed', claimed_by = ?, claimed_at = ?
+			 WHERE id = ? AND status = 'pending'`,
+			[claimedBy, now, id],
+		);
+		return res.changes > 0;
+	}
+
+	cancelCaptureRequest(id: number, now: string): boolean {
+		const res = this.db.run(
+			`UPDATE capture_requests SET status = 'cancelled'
+			 WHERE id = ? AND status IN ('pending','claimed')`,
+			[id],
+		);
+		return res.changes > 0;
+	}
+
+	expireCaptureRequests(now: string): number {
+		const res = this.db.run(
+			`UPDATE capture_requests SET status = 'expired'
+			 WHERE status IN ('pending','claimed') AND expires_at <= ?`,
+			[now],
+		);
+		return res.changes;
+	}
+
+	/**
+	 * Row counts are small (bounded by maxPending per tenant), so the join
+	 * key is computed in TS per active row rather than pushed into SQL.
+	 */
+	fulfillMatchingCaptureRequests(
+		tenant: string,
+		routineKeys: Set<string>,
+		profileId: string,
+		now: string,
+	): number {
+		const active = this.db
+			.query<Record<string, unknown>, [string]>(
+				"SELECT * FROM capture_requests WHERE tenant = ? AND status IN ('pending','claimed')",
+			)
+			.all(tenant)
+			.map((row) => this.rowToCaptureRequest(row));
+		const fulfill = this.db.prepare(
+			`UPDATE capture_requests SET status = 'fulfilled', fulfilled_at = ?, fulfilled_by_profile_id = ?
+			 WHERE id = ? AND status IN ('pending','claimed')`,
+		);
+		let count = 0;
+		for (const row of active) {
+			const key = `${row.appId}|${row.objectType}|${row.objectId}|${row.methodName}`;
+			if (!routineKeys.has(key)) continue;
+			const res = fulfill.run(now, profileId, row.id);
+			if (res.changes > 0) count++;
+		}
+		return count;
 	}
 }

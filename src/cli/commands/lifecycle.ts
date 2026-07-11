@@ -12,6 +12,10 @@ import {
 } from "../../lifecycle/appinsights.js";
 import { rollupRoutineMetrics } from "../../lifecycle/baselines.js";
 import {
+	type CaptureTriggerReport,
+	processCaptureTriggers,
+} from "../../lifecycle/capture-triggers.js";
+import {
 	DEFAULT_LIFECYCLE_CONFIG,
 	type LifecycleConfig,
 } from "../../lifecycle/config.js";
@@ -68,6 +72,22 @@ export function applyClose(
 		at: now,
 	});
 	return { ok: true, message: `Closed ${fingerprint}` };
+}
+
+/**
+ * Shared claim/cancel failure message (capture-requests plan Task 4): names
+ * the row's CURRENT status, not just "failed" — an executor needs to tell
+ * "already claimed by someone else" from "already fulfilled" from "no such
+ * id" apart without a second query. Unknown id gets its own wording.
+ */
+function captureRequestFailureMessage(
+	store: LifecycleStore,
+	id: number,
+	verb: "claimed" | "cancelled",
+): string {
+	const row = store.listCaptureRequests().find((r) => r.id === id);
+	if (!row) return `No capture request with id ${id}.`;
+	return `Capture request #${id} cannot be ${verb} — status is ${row.status}.`;
 }
 
 /** Shared by `evaluate`, `telemetry`, and `pull-telemetry` (non---out path) — same outcome shape, same print rules. */
@@ -302,63 +322,99 @@ export function createLifecycleCommand(): Command {
 
 	cmd
 		.command("sync")
-		.description("Apply sink trigger rules and drain the delivery outbox")
+		.description(
+			"Run the capture-request scan, apply sink trigger rules, and drain the delivery outbox",
+		)
 		.option(
 			"--config <path>",
 			"Sinks config file",
 			".al-perf/lifecycle.config.json",
 		)
-		.option("--dry-run", "Enqueue outbox rows but do not deliver")
+		.option(
+			"--dry-run",
+			"Scan and enqueue locally (capture requests + outbox), but do not deliver to sinks",
+		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action(async (opts: any) => {
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				const now = new Date().toISOString();
+				// Independent of any sink being configured: capture-request filing
+				// is local DB state, not delivery, so it must not depend on — or be
+				// blocked by — a missing/absent sinks config.
+				let captureRequests: CaptureTriggerReport = {
+					scanned: 0,
+					created: 0,
+					expired: 0,
+					skippedMaxPending: 0,
+				};
+				if (DEFAULT_LIFECYCLE_CONFIG.captureRequests.enabled) {
+					captureRequests = processCaptureTriggers(
+						store,
+						DEFAULT_LIFECYCLE_CONFIG,
+						now,
+					);
+				}
+
 				const config = loadSinksConfig(opts.config);
+				let triggers = { processed: 0, enqueued: 0, skippedMigration: 0 };
+				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
+				let deadLetters: Array<{
+					id: number;
+					kind: string;
+					dedupeKey: string;
+					attempts: number;
+					lastError: string | null;
+				}> = [];
+
 				if (!config) {
 					console.error(
-						`No sink config at ${opts.config}. Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
+						`No sink config at ${opts.config} — sink delivery skipped (capture-request scan still ran). Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
 					);
-					process.exitCode = 1;
-					return;
-				}
-				const triggers = processEventsForSinks(store, config);
-				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
-				const gh = config.sinks.github;
-				if (!opts.dryRun && gh?.enabled) {
-					const resolved = resolveGitHubConfig(gh);
-					const token = process.env[resolved.tokenEnv];
-					if (!token) {
-						console.error(
-							`sinks.github is enabled but the ${resolved.tokenEnv} environment variable is not set.`,
+				} else {
+					triggers = processEventsForSinks(store, config);
+					const gh = config.sinks.github;
+					if (!opts.dryRun && gh?.enabled) {
+						const resolved = resolveGitHubConfig(gh);
+						const token = process.env[resolved.tokenEnv];
+						if (!token) {
+							console.error(
+								`sinks.github is enabled but the ${resolved.tokenEnv} environment variable is not set.`,
+							);
+							process.exitCode = 1;
+							return;
+						}
+						drain = await drainOutbox(
+							store,
+							createGitHubSink({ repo: resolved.repo, token }),
+							{
+								minMillisBetweenCalls: resolved.minMillisBetweenCalls,
+								maxPerDrain: resolved.maxPerDrain,
+								collapseThreshold: resolved.collapseThreshold,
+							},
 						);
-						process.exitCode = 1;
-						return;
 					}
-					drain = await drainOutbox(
-						store,
-						createGitHubSink({ repo: resolved.repo, token }),
-						{
-							minMillisBetweenCalls: resolved.minMillisBetweenCalls,
-							maxPerDrain: resolved.maxPerDrain,
-							collapseThreshold: resolved.collapseThreshold,
-						},
-					);
+					// Operator observability for dead-lettered rows: lastError is
+					// operator-trusted local data, printed verbatim, but payload is
+					// NEVER surfaced — it may embed profile-derived (attacker-influenceable) text.
+					deadLetters = store.listDeadOutbox("github").map((row) => ({
+						id: row.id,
+						kind: row.kind,
+						dedupeKey: row.dedupeKey,
+						attempts: row.attempts,
+						lastError: row.lastError,
+					}));
 				}
-				// Operator observability for dead-lettered rows: lastError is
-				// operator-trusted local data, printed verbatim, but payload is
-				// NEVER surfaced — it may embed profile-derived (attacker-influenceable) text.
-				const deadLetters = store.listDeadOutbox("github").map((row) => ({
-					id: row.id,
-					kind: row.kind,
-					dedupeKey: row.dedupeKey,
-					attempts: row.attempts,
-					lastError: row.lastError,
-				}));
 				const summary = {
 					triggers,
 					drain,
 					dryRun: Boolean(opts.dryRun),
 					deadLetters,
+					captureRequests: {
+						created: captureRequests.created,
+						expired: captureRequests.expired,
+						skippedMaxPending: captureRequests.skippedMaxPending,
+					},
 				};
 				if (opts.format === "json") {
 					process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
@@ -370,6 +426,11 @@ export function createLifecycleCommand(): Command {
 						`Drain: ${drain.delivered} delivered, ${drain.retried} retried, ${drain.dead} dead, ` +
 						`${drain.collapsed} collapsed.${opts.dryRun ? " (dry run)" : ""}`,
 				);
+				if (captureRequests.created > 0 || captureRequests.expired > 0) {
+					console.log(
+						`Capture requests: ${captureRequests.created} created, ${captureRequests.expired} expired.`,
+					);
+				}
 				if (deadLetters.length > 0) {
 					console.log("Dead letters:");
 					for (const dl of deadLetters) {
@@ -501,6 +562,118 @@ export function createLifecycleCommand(): Command {
 					profileId,
 				});
 				printEvaluationOutcome(outcome, opts.format);
+			} finally {
+				store.close();
+			}
+		});
+
+	const captures = cmd
+		.command("captures")
+		.description(
+			"Deep-capture request queue — operator visibility, claim, and cancel (see docs/capture-request-contract.md)",
+		);
+
+	captures
+		.command("list")
+		.description("List capture requests")
+		.option("--tenant <tenant>", "Tenant key (all tenants if omitted)")
+		.option(
+			"--status <status>",
+			"Filter by status: pending|claimed|fulfilled|expired|cancelled",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((opts: any) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const rows = store.listCaptureRequests(opts.tenant, opts.status);
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+					return;
+				}
+				if (rows.length === 0) {
+					console.log("No capture requests.");
+					return;
+				}
+				const table = new Table({
+					head: [
+						chalk.gray("ID"),
+						chalk.gray("Status"),
+						chalk.gray("Tenant"),
+						chalk.gray("App"),
+						chalk.gray("Object"),
+						chalk.gray("Method"),
+						chalk.gray("Reason"),
+						chalk.gray("Requested"),
+						chalk.gray("Expires"),
+						chalk.gray("Claimed by"),
+					],
+					style: { head: [], border: [] },
+				});
+				for (const r of rows) {
+					table.push([
+						String(r.id),
+						r.status,
+						r.tenant,
+						r.appName ?? r.appId,
+						`${r.objectType} ${r.objectId}`,
+						r.methodName,
+						r.reason.slice(0, 40),
+						r.requestedAt.slice(0, 19),
+						r.expiresAt.slice(0, 19),
+						r.claimedBy ?? "",
+					]);
+				}
+				console.log(table.toString());
+			} finally {
+				store.close();
+			}
+		});
+
+	captures
+		.command("claim <id>")
+		.description("Claim a pending capture request for an executor")
+		.requiredOption(
+			"--by <executor>",
+			"Stable executor name claiming the request",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((idArg: string, opts: any) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const id = parseInt(idArg, 10);
+				const now = new Date().toISOString();
+				const ok = store.claimCaptureRequest(id, opts.by, now);
+				const message = ok
+					? `Claimed capture request #${id} for ${opts.by}`
+					: captureRequestFailureMessage(store, id, "claimed");
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify({ ok, message }, null, 2) + "\n");
+				} else if (ok) {
+					console.log(message);
+				} else {
+					console.error(message);
+				}
+				if (!ok) process.exitCode = 1;
+			} finally {
+				store.close();
+			}
+		});
+
+	captures
+		.command("cancel <id>")
+		.description("Cancel a pending or claimed capture request")
+		.action((idArg: string) => {
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const id = parseInt(idArg, 10);
+				const now = new Date().toISOString();
+				const ok = store.cancelCaptureRequest(id, now);
+				if (!ok) {
+					console.error(captureRequestFailureMessage(store, id, "cancelled"));
+					process.exitCode = 1;
+					return;
+				}
+				console.log(`Cancelled capture request #${id}`);
 			} finally {
 				store.close();
 			}

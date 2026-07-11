@@ -352,3 +352,270 @@ describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
 		expect(errText).not.toContain(PULL_DECOY_KEY);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// lifecycle captures — deep-capture request queue operator CLI
+// (capture-requests plan Task 4). Operates on rows filed by
+// processCaptureTriggers (Task 2) and closed by evaluateRun's fulfillment
+// hook (Task 3); this suite only exercises list/claim/cancel plumbing.
+// ---------------------------------------------------------------------------
+
+function captureFinding(overrides?: Partial<NewFinding>): NewFinding {
+	return {
+		tenant: "t1",
+		fingerprint: "telemetry:deadbeef00000001",
+		algoVersion: 1,
+		state: "open",
+		source: "telemetry",
+		patternId: "telemetry-rt0018",
+		title: "RT0018: PostOrder (Codeunit 50100) slow",
+		severity: "warning",
+		appId: "abc123",
+		appName: "My App",
+		routineKey: "abc123|Codeunit|50100|postorder",
+		firstSeenAt: "2026-07-01T00:00:00Z",
+		lastSeenAt: "2026-07-05T00:00:00Z",
+		lastEventAt: "2026-07-05T00:00:00Z",
+		observedKinds: ["telemetry"],
+		observedStreams: ["telemetry"],
+		...overrides,
+	};
+}
+
+/** Seed one pending capture request (with its own backing finding); returns its id. */
+function seedCaptureRequest(
+	store: LifecycleStore,
+	overrides?: Partial<{
+		tenant: string;
+		fingerprint: string;
+		appId: string;
+		appName: string | null;
+		objectType: string;
+		objectId: number;
+		methodName: string;
+		reason: string;
+		requestedAt: string;
+		expiresAt: string;
+	}>,
+): number {
+	const tenant = overrides?.tenant ?? "t1";
+	const fingerprint = overrides?.fingerprint ?? "telemetry:deadbeef00000001";
+	const findingId = store.insertFinding(
+		captureFinding({ tenant, fingerprint }),
+	);
+	store.createCaptureRequest({
+		tenant,
+		fingerprint,
+		findingId,
+		appId: "abc123",
+		appName: "My App",
+		objectType: "Codeunit",
+		objectId: 50100,
+		methodName: "postorder",
+		reason: "RT0018: 3 runs, severity warning",
+		requestedAt: "2026-07-01T00:00:00Z",
+		expiresAt: "2026-08-01T00:00:00Z",
+		...overrides,
+	});
+	const row = store
+		.listCaptureRequests(tenant, "pending")
+		.find((r) => r.fingerprint === fingerprint);
+	if (!row) throw new Error(`seedCaptureRequest: no pending row for ${fingerprint}`);
+	return row.id;
+}
+
+describe("lifecycle captures", () => {
+	let dir: string;
+	let dbPath: string;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+	let errorSpy: ReturnType<typeof spyOn<Console, "error">>;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
+	let originalExitCode: number | string | null | undefined;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-captures-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		originalExitCode = process.exitCode;
+		// Same Bun quirk as the other describe blocks in this file — assigning
+		// undefined does not clear a prior nonzero exitCode.
+		process.exitCode = 0;
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	});
+	afterEach(async () => {
+		process.exitCode = originalExitCode ?? 0;
+		logSpy.mockRestore();
+		errorSpy.mockRestore();
+		stdoutSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	async function run(args: string[]): Promise<void> {
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, ...args], { from: "user" });
+	}
+
+	it("registers captures with list/claim/cancel subcommands", () => {
+		const cmd = createLifecycleCommand();
+		const captures = cmd.commands.find((c) => c.name() === "captures");
+		expect(captures).toBeDefined();
+		const subs = captures?.commands.map((c) => c.name()) ?? [];
+		expect(subs).toEqual(expect.arrayContaining(["list", "claim", "cancel"]));
+	});
+
+	it("list (text) renders a seeded pending row like the status table", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedCaptureRequest(store);
+		store.close();
+
+		await run(["captures", "list"]);
+
+		const out = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(out).toContain("pending");
+		expect(out).toContain("My App");
+		expect(out).toContain("Codeunit");
+		expect(out).toContain("50100");
+		expect(out).toContain("postorder");
+	});
+
+	it("list -f json returns the raw CaptureRequestRow array with exact camelCase field names", async () => {
+		const store = new LifecycleStore(dbPath);
+		const id = seedCaptureRequest(store);
+		store.close();
+
+		await run(["captures", "list", "-f", "json"]);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const rows = JSON.parse(output);
+		expect(rows).toHaveLength(1);
+		expect(Object.keys(rows[0]).sort()).toEqual(
+			[
+				"id",
+				"tenant",
+				"fingerprint",
+				"findingId",
+				"appId",
+				"appName",
+				"objectType",
+				"objectId",
+				"methodName",
+				"reason",
+				"status",
+				"requestedAt",
+				"expiresAt",
+				"claimedAt",
+				"claimedBy",
+				"fulfilledAt",
+				"fulfilledByProfileId",
+			].sort(),
+		);
+		expect(rows[0]).toMatchObject({
+			id,
+			tenant: "t1",
+			status: "pending",
+			appName: "My App",
+			objectType: "Codeunit",
+			objectId: 50100,
+			methodName: "postorder",
+		});
+	});
+
+	it("list --status filters to only the requested status", async () => {
+		const store = new LifecycleStore(dbPath);
+		const pendingId = seedCaptureRequest(store, {
+			fingerprint: "telemetry:deadbeef00000002",
+		});
+		const cancelId = seedCaptureRequest(store, {
+			fingerprint: "telemetry:deadbeef00000003",
+		});
+		store.cancelCaptureRequest(cancelId, "2026-07-02T00:00:00Z");
+		store.close();
+
+		await run(["captures", "list", "-f", "json", "--status", "pending"]);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const rows = JSON.parse(output);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].id).toBe(pendingId);
+	});
+
+	it("claim transitions a pending request to claimed and exits 0", async () => {
+		const store = new LifecycleStore(dbPath);
+		const id = seedCaptureRequest(store);
+		store.close();
+
+		await run(["captures", "claim", String(id), "--by", "agent-x"]);
+
+		expect(process.exitCode ?? 0).toBe(0);
+		const verify = new LifecycleStore(dbPath);
+		const [row] = verify.listCaptureRequests();
+		expect(row.status).toBe("claimed");
+		expect(row.claimedBy).toBe("agent-x");
+		verify.close();
+	});
+
+	it("claim on an already-fulfilled row exits 1 and names the current status", async () => {
+		const store = new LifecycleStore(dbPath);
+		const id = seedCaptureRequest(store);
+		store.db.run(
+			"UPDATE capture_requests SET status = 'fulfilled', fulfilled_at = ?, fulfilled_by_profile_id = ? WHERE id = ?",
+			["2026-07-02T00:00:00Z", "p1", id],
+		);
+		store.close();
+
+		await run(["captures", "claim", String(id), "--by", "agent-x"]);
+
+		expect(process.exitCode).toBe(1);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain(String(id));
+		expect(errText).toContain("fulfilled");
+	});
+
+	it("claim on an unknown id exits 1 and says so", async () => {
+		await run(["captures", "claim", "999999", "--by", "agent-x"]);
+
+		expect(process.exitCode).toBe(1);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("999999");
+		expect(errText.toLowerCase()).toContain("no capture request");
+	});
+
+	it("cancel transitions a pending request to cancelled and exits 0", async () => {
+		const store = new LifecycleStore(dbPath);
+		const id = seedCaptureRequest(store);
+		store.close();
+
+		await run(["captures", "cancel", String(id)]);
+
+		expect(process.exitCode ?? 0).toBe(0);
+		const verify = new LifecycleStore(dbPath);
+		const [row] = verify.listCaptureRequests();
+		expect(row.status).toBe("cancelled");
+		verify.close();
+	});
+
+	it("cancel on an already-cancelled row exits 1 and names the current status", async () => {
+		const store = new LifecycleStore(dbPath);
+		const id = seedCaptureRequest(store);
+		store.cancelCaptureRequest(id, "2026-07-02T00:00:00Z");
+		store.close();
+
+		await run(["captures", "cancel", String(id)]);
+
+		expect(process.exitCode).toBe(1);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain(String(id));
+		expect(errText).toContain("cancelled");
+	});
+
+	it("cancel on an unknown id exits 1 and says so", async () => {
+		await run(["captures", "cancel", "999999"]);
+
+		expect(process.exitCode).toBe(1);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("999999");
+		expect(errText.toLowerCase()).toContain("no capture request");
+	});
+});

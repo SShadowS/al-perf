@@ -514,6 +514,84 @@ function openV2FixtureWithOneRun(): {
 	return { store, dir, runId, findingId };
 }
 
+/**
+ * Builds a genuine v3 database on disk: runs the real v1 + v2 + v3
+ * migration statements directly against a raw bun:sqlite connection
+ * (bypassing LifecycleStore, whose constructor would otherwise upgrade
+ * straight past v3 to whatever the ladder's current head is) and inserts
+ * one pre-existing `findings` row. Reopening the DB through LifecycleStore
+ * then exercises the real v3 -> v4 migration step on open. Caller must
+ * `rmSync(dir, ...)` when done.
+ */
+function openV3FixtureWithOneFinding(): {
+	store: LifecycleStore;
+	dir: string;
+	findingId: number;
+} {
+	const dir = mkdtempSync(join(tmpdir(), "alperf-migrations-v4-"));
+	const dbPath = join(dir, "lifecycle.sqlite");
+	const v3 = new Database(dbPath, { create: true });
+	for (const stmts of LIFECYCLE_MIGRATIONS.slice(0, 3)) {
+		for (const stmt of stmts) v3.run(stmt);
+	}
+	v3.run("PRAGMA user_version = 3");
+	v3.run(
+		`INSERT INTO findings (tenant, fingerprint, algo_version, state, source, pattern_id, title, severity, first_seen_at, last_seen_at, last_event_at)
+		 VALUES ('t', 'telemetry:existingfinding0', 1, 'open', 'telemetry', 'x', 'x', 'warning', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+	);
+	const findingId = v3
+		.query<{ id: number }, []>(
+			"SELECT id FROM findings WHERE fingerprint = 'telemetry:existingfinding0'",
+		)
+		.get()?.id as number;
+	v3.close();
+	const store = new LifecycleStore(dbPath); // runs the real ladder from user_version 3 onward
+	return { store, dir, findingId };
+}
+
+describe("schema v4 (capture request queue)", () => {
+	it("v4 adds capture_requests; v3 data survives, no dangling FKs, user_version 4", () => {
+		const { store, dir, findingId } = openV3FixtureWithOneFinding();
+		try {
+			expect(
+				store.db
+					.query<{ user_version: number }, []>("PRAGMA user_version")
+					.get()?.user_version,
+			).toBe(4);
+			const tables = store.db
+				.query<{ name: string }, []>(
+					"SELECT name FROM sqlite_master WHERE type='table'",
+				)
+				.all()
+				.map((r) => r.name);
+			expect(tables).toContain("capture_requests");
+			// pre-migration finding row survived untouched
+			expect(store.getFinding(findingId)?.fingerprint).toBe(
+				"telemetry:existingfinding0",
+			);
+			expect(
+				store.createCaptureRequest({
+					tenant: "t",
+					fingerprint: "telemetry:existingfinding0",
+					findingId,
+					appId: "abc123",
+					appName: "My App",
+					objectType: "codeunit",
+					objectId: 50100,
+					methodName: "postorder",
+					reason: "RT0018 × 5 runs, max 42000ms",
+					requestedAt: "2026-07-11T00:00:00.000Z",
+					expiresAt: "2026-07-18T00:00:00.000Z",
+				}),
+			).toBe(true);
+			expect(store.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("schema v3 (telemetry capture kind)", () => {
 	it("v3 accepts telemetry capture kind; v2 data (including FK-child rows) survives the runs-table rebuild", () => {
 		const { store, dir, runId, findingId } = openV2FixtureWithOneRun();

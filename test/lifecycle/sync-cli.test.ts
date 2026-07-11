@@ -90,6 +90,43 @@ function seedPendingDelivery(dbPath: string): void {
 	store.close();
 }
 
+/** A telemetry-namespaced finding with 3+ occurrences — qualifies for a capture request under the default config. */
+const TELEMETRY_FP = "telemetry:sync000000000cap1";
+function seedQualifyingTelemetryFinding(dbPath: string): void {
+	const store = new LifecycleStore(dbPath);
+	const id = store.insertFinding(
+		finding({
+			fingerprint: TELEMETRY_FP,
+			source: "telemetry",
+			patternId: "telemetry-rt0018",
+			title: "RT0018: PostOrder (Codeunit 50100) slow — max 42000ms × 3",
+			severity: "warning",
+			appId: "abc123",
+			routineKey: "abc123|Codeunit|50100|postorder",
+			state: "open",
+		}),
+	);
+	for (let i = 0; i < 3; i++) {
+		const { runId } = store.recordRun({
+			tenant: TENANT,
+			stream: "telemetry",
+			profileId: `p-cap-${i}`,
+			captureKind: "telemetry",
+			captureTime: `2026-07-0${i + 1}T00:00:00Z`,
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		store.recordOccurrence({
+			findingId: id,
+			runId,
+			captureTime: `2026-07-0${i + 1}T00:00:00Z`,
+			severity: "warning",
+		});
+	}
+	store.close();
+}
+
 /** Seed a dead-lettered outbox row directly (no live drain needed). */
 const DEAD_FP = "pattern:sync0000000000dead";
 function seedDeadLetter(dbPath: string): void {
@@ -264,6 +301,48 @@ describe("lifecycle sync — security boundary", () => {
 		const store = new LifecycleStore(dbPath);
 		const pending = store.listPendingOutbox("github", "comment-regressed");
 		expect(pending).toHaveLength(1); // still pending — never drained
+		store.close();
+	});
+
+	it("no sinks config file present: capture-request scan still runs, exits 0, json reports captureRequests.created", async () => {
+		seedQualifyingTelemetryFinding(dbPath);
+		// Deliberately no writeFileSync(configPath, ...) — the sinks config file
+		// does not exist at all.
+
+		await runSync(["sync", "--config", configPath, "-f", "json"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		expect(process.exitCode ?? 0).toBe(0);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const summary = JSON.parse(output);
+		expect(summary.captureRequests.created).toBe(1);
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
+		store.close();
+	});
+
+	it("--dry-run still scans and creates a capture request (local DB state, not delivery)", async () => {
+		seedQualifyingTelemetryFinding(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				sinks: { github: { enabled: true, repo: "owner/repo" } },
+			}),
+		);
+
+		await runSync(["sync", "--config", configPath, "--dry-run", "-f", "json"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		expect(process.exitCode ?? 0).toBe(0);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const summary = JSON.parse(output);
+		expect(summary.captureRequests.created).toBe(1);
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
 		store.close();
 	});
 });
