@@ -91,6 +91,18 @@ describe("responsibility 1: fail-closed shape validation", () => {
 		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
 		expect(parsed.signalCount).toBe(1);
 	});
+
+	// windowEnd becomes RunMetadata.captureTime downstream (telemetry.ts) —
+	// evaluateRun's canonicalCaptureTime throws on an unparseable value AFTER
+	// the web ingest path has already stored the batch (its lifecycle hook
+	// swallows evaluation errors), leaving it stored-but-never-evaluated with
+	// no re-evaluate API. Must fail closed HERE, before storage.
+	test("rejects an unparseable windowEnd, naming the field", () => {
+		const doc = batch([signal()], { windowEnd: "not-a-date" });
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/windowEnd/,
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -177,6 +189,19 @@ describe("responsibility 4: severity via config thresholds", () => {
 		const doc = batch([signal({ signalId: "RT9999", maxDurationMs: 60_000 })]);
 		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
 		expect(parsed.result.patterns[0]?.severity).toBe("critical");
+	});
+
+	// A signalId of "__proto__"/"constructor" must NOT resolve through the
+	// prototype chain to an inherited Object.prototype value (thresholds
+	// would then have criticalMs/warningMs undefined, silently forcing
+	// "info" regardless of maxDurationMs) — it must fall back to "default"
+	// like any other unknown signalId.
+	test("signalId '__proto__' does not resolve via the prototype chain — falls back to default thresholds", () => {
+		const doc = batch([
+			signal({ signalId: "__proto__", maxDurationMs: 10_000 }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns[0]?.severity).toBe("warning"); // default warningMs=10000
 	});
 });
 

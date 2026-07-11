@@ -213,6 +213,13 @@ the exact same `autoFileMinSeverity` / `autoFileAfterRuns` rules documented
 in [`docs/lifecycle-gh-recipe.md`](lifecycle-gh-recipe.md). Nothing about
 telemetry gets special-cased in the sink.
 
+An app only counts as "exercised" when at least one of its RT0018/RT0005
+signals appears in a batch's window, so a fully healthy app that stops
+producing signals altogether leaves its earlier findings open rather than
+auto-resolving — silence is not resolution; close them explicitly with
+`lifecycle close`, or wait for the app to reappear in a later batch with
+signals but without that particular finding.
+
 What telemetry does NOT do yet: trigger a deep capture automatically. A
 recurring `RT0018` finding on a routine tells you where a profiler run would
 pay off — acting on that (scheduling the capture, running

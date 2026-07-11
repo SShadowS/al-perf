@@ -259,6 +259,27 @@ describe("POST /api/ingest with a telemetry-batch", () => {
 		).toBe(false);
 	});
 
+	it("rejects a batch with an unparseable windowEnd with 400 — never reaches the stored-but-poisoned state", async () => {
+		const token = await registerTenant("telh");
+		const doc = batch([signal()], { windowEnd: "not-a-date" });
+		const key = "550e8400-e29b-41d4-a716-446655440309";
+		const res = await postIngest(
+			token,
+			"telh",
+			key,
+			Buffer.from(JSON.stringify(doc), "utf8"),
+			{ activityId: key },
+		);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string; message: string };
+		expect(body.message).toMatch(/windowEnd/);
+		// Rejected before any storage write — no keyversion.txt ever lands, so
+		// there is no duplicate-run guard blocking a corrected re-POST.
+		expect(
+			existsSync(join(TEST_DATA, "storage", "telh", "profiles", key)),
+		).toBe(false);
+	});
+
 	it("still enforces auth: a telemetry batch without a bearer token is 401", async () => {
 		await registerTenant("telg");
 		const doc = batch([signal()]);

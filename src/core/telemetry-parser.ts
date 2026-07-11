@@ -183,8 +183,13 @@ function severityFor(
 	maxDurationMs: number,
 	config: LifecycleConfig,
 ): PatternSeverity {
-	const thresholds =
-		config.telemetry.severity[signalId] ?? config.telemetry.severity.default;
+	// Object.hasOwn guards against signalId values like "__proto__" or
+	// "constructor" resolving through the prototype chain to an inherited
+	// object (thresholds.criticalMs/warningMs then undefined, every comparison
+	// false, severity silently "info" instead of the "default" thresholds).
+	const thresholds = Object.hasOwn(config.telemetry.severity, signalId)
+		? config.telemetry.severity[signalId]
+		: config.telemetry.severity.default;
 	if (maxDurationMs >= thresholds.criticalMs) return "critical";
 	if (maxDurationMs >= thresholds.warningMs) return "warning";
 	return "info";
@@ -261,6 +266,17 @@ export function parseTelemetryBatch(
 	}
 	const windowStart = requireString(raw, "windowStart", "document");
 	const windowEnd = requireString(raw, "windowEnd", "document");
+	// Fail closed here, not downstream: windowEnd becomes RunMetadata.captureTime
+	// (telemetry.ts), and evaluateRun's canonicalCaptureTime throws on an
+	// unparseable value AFTER the web ingest path has already stored the batch
+	// (its lifecycle hook swallows evaluation errors) — a garbage windowEnd
+	// would otherwise leave the batch permanently stored-but-never-evaluated,
+	// with no re-evaluate API and a duplicate-run guard blocking any re-POST.
+	if (Number.isNaN(new Date(windowEnd).getTime())) {
+		throw new Error(
+			`telemetry-batch document: invalid field 'windowEnd' (not a parseable timestamp: "${windowEnd}")`,
+		);
+	}
 	if (!Array.isArray(raw.signals)) {
 		throw new Error(
 			"telemetry-batch document: missing/invalid field 'signals'",
