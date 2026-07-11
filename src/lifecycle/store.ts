@@ -424,6 +424,17 @@ export class LifecycleStore {
 			.map((r) => this.rowToOutbox(r));
 	}
 
+	listDeadOutbox(sink?: string): OutboxRow[] {
+		const sql = sink
+			? "SELECT * FROM outbox WHERE sink = ? AND status = 'dead' ORDER BY id"
+			: "SELECT * FROM outbox WHERE status = 'dead' ORDER BY id";
+		const params = sink ? [sink] : [];
+		return this.db
+			.query<Record<string, unknown>, string[]>(sql)
+			.all(...params)
+			.map((r) => this.rowToOutbox(r));
+	}
+
 	markOutboxDelivered(id: number, at: string, note?: string): void {
 		this.db.run(
 			"UPDATE outbox SET status = 'delivered', delivered_at = ?, last_error = coalesce(?, last_error) WHERE id = ?",

@@ -90,6 +90,26 @@ function seedPendingDelivery(dbPath: string): void {
 	store.close();
 }
 
+/** Seed a dead-lettered outbox row directly (no live drain needed). */
+const DEAD_FP = "pattern:sync0000000000dead";
+function seedDeadLetter(dbPath: string): void {
+	const store = new LifecycleStore(dbPath);
+	const id = store.insertFinding(finding({ fingerprint: DEAD_FP }));
+	store.enqueueOutbox({
+		tenant: TENANT,
+		sink: "github",
+		kind: "create-issue",
+		findingId: id,
+		payload: JSON.stringify({ secret: DECOY_VALUE }),
+		dedupeKey: `github:create:${TENANT}:${DEAD_FP}`,
+		nextAttemptAt: "2026-07-01T00:00:00Z",
+		createdAt: "2026-07-01T00:00:00Z",
+	});
+	const row = store.listPendingOutbox("github", "create-issue")[0];
+	store.markOutboxDead(row.id, "422 Unprocessable Entity");
+	store.close();
+}
+
 describe("lifecycle sync — security boundary", () => {
 	let dir: string;
 	let dbPath: string;
@@ -99,6 +119,7 @@ describe("lifecycle sync — security boundary", () => {
 	let fetchCalls: unknown[][];
 	let errorSpy: ReturnType<typeof spyOn<Console, "error">>;
 	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "alperf-sync-cli-"));
@@ -118,6 +139,7 @@ describe("lifecycle sync — security boundary", () => {
 		}) as typeof fetch;
 		errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
 	});
 
 	afterEach(async () => {
@@ -125,6 +147,7 @@ describe("lifecycle sync — security boundary", () => {
 		process.exitCode = originalExitCode;
 		errorSpy.mockRestore();
 		logSpy.mockRestore();
+		stdoutSpy.mockRestore();
 		delete process.env.AL_PERF_SYNC_TEST_DECOY;
 		await rmSyncRetrying(dir);
 	});
@@ -156,6 +179,53 @@ describe("lifecycle sync — security boundary", () => {
 
 		const summary = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
 		expect(summary).toContain("(dry run)");
+		// No dead-lettered rows exist — the section must not appear.
+		expect(summary).not.toContain("Dead letters:");
+	});
+
+	it("text format prints a Dead letters: section listing lastError when a dead row exists", async () => {
+		seedDeadLetter(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				sinks: { github: { enabled: true, repo: "owner/repo" } },
+			}),
+		);
+
+		await runSync(["sync", "--config", configPath, "--dry-run"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		const summary = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(summary).toContain("Dead letters:");
+		expect(summary).toContain("422 Unprocessable Entity");
+		expect(summary).not.toContain(DECOY_VALUE);
+	});
+
+	it("-f json output includes a deadLetters array with id/kind/dedupeKey/attempts/lastError, never payload", async () => {
+		seedDeadLetter(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				sinks: { github: { enabled: true, repo: "owner/repo" } },
+			}),
+		);
+
+		await runSync(["sync", "--config", configPath, "--dry-run", "-f", "json"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const summary = JSON.parse(output);
+		expect(summary.deadLetters).toHaveLength(1);
+		const dl = summary.deadLetters[0];
+		expect(Object.keys(dl).sort()).toEqual(
+			["attempts", "dedupeKey", "id", "kind", "lastError"].sort(),
+		);
+		expect(dl.kind).toBe("create-issue");
+		expect(dl.dedupeKey).toBe(`github:create:${TENANT}:${DEAD_FP}`);
+		expect(dl.attempts).toBe(1);
+		expect(dl.lastError).toBe("422 Unprocessable Entity");
+		expect(output).not.toContain(DECOY_VALUE);
+		expect(output).not.toContain("payload");
 	});
 
 	it("missing token env var: exits nonzero, names the env var but never leaks a value, no drain occurs, zero fetch calls", async () => {

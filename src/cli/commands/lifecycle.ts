@@ -329,7 +329,22 @@ export function createLifecycleCommand(): Command {
 						},
 					);
 				}
-				const summary = { triggers, drain, dryRun: Boolean(opts.dryRun) };
+				// Operator observability for dead-lettered rows: lastError is
+				// operator-trusted local data, printed verbatim, but payload is
+				// NEVER surfaced — it may embed profile-derived (attacker-influenceable) text.
+				const deadLetters = store.listDeadOutbox("github").map((row) => ({
+					id: row.id,
+					kind: row.kind,
+					dedupeKey: row.dedupeKey,
+					attempts: row.attempts,
+					lastError: row.lastError,
+				}));
+				const summary = {
+					triggers,
+					drain,
+					dryRun: Boolean(opts.dryRun),
+					deadLetters,
+				};
 				if (opts.format === "json") {
 					process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
 					return;
@@ -340,6 +355,14 @@ export function createLifecycleCommand(): Command {
 						`Drain: ${drain.delivered} delivered, ${drain.retried} retried, ${drain.dead} dead, ` +
 						`${drain.collapsed} collapsed.${opts.dryRun ? " (dry run)" : ""}`,
 				);
+				if (deadLetters.length > 0) {
+					console.log("Dead letters:");
+					for (const dl of deadLetters) {
+						console.log(
+							`  #${dl.id} ${dl.kind} (${dl.dedupeKey}) attempts=${dl.attempts} lastError=${dl.lastError ?? ""}`,
+						);
+					}
+				}
 			} finally {
 				store.close();
 			}
