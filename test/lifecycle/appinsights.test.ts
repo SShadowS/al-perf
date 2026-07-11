@@ -14,6 +14,7 @@ import {
 	DEFAULT_API_KEY_ENV,
 	parseTimespanMs,
 	pullTelemetry,
+	pullTelemetrySplit,
 } from "../../src/lifecycle/appinsights.js";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.js";
 
@@ -66,6 +67,106 @@ describe("parseTimespanMs", () => {
 
 	it("throws on garbage input", () => {
 		expect(() => parseTimespanMs("not-a-timespan")).toThrow();
+	});
+});
+
+describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan Task 2, behavior 1: captured BEFORE the split-mode refactor, must stay byte-identical after)", () => {
+	const FIXED_NOW = new Date("2026-01-01T12:00:00.000Z");
+
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	function expectedKql(signalId: string): string {
+		return [
+			"traces",
+			"| where timestamp > datetime(2026-01-01T08:00:00.000Z)",
+			`| where customDimensions.eventId == "${signalId}"`,
+			"| extend appId = tostring(customDimensions.extensionId),",
+			"         appName = tostring(customDimensions.extensionName),",
+			"         objectType = tostring(customDimensions.alObjectType),",
+			"         objectId = toint(customDimensions.alObjectId),",
+			"         objectName = tostring(customDimensions.alObjectName),",
+			"         methodName = tostring(customDimensions.alMethod),",
+			"         stackTrace = tostring(customDimensions.alStackTrace),",
+			"         clientType = tostring(customDimensions.clientType),",
+			"         ms = todouble(customDimensions.executionTimeInMs)",
+			"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace)",
+			"    by appId, appName, objectType, objectId, objectName, methodName, clientType",
+		].join("\n");
+	}
+
+	it("generated KQL for both default signals is byte-identical to the pre-refactor shape", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetry(
+			{
+				appId: APP_ID,
+				signals: ["RT0018", "RT0005"],
+				since: "4h",
+				now: () => FIXED_NOW,
+			},
+			fetchImpl,
+		);
+
+		expect(calls).toHaveLength(2);
+		const decoded = calls.map((u) =>
+			decodeURIComponent(new URL(u).searchParams.get("query") ?? ""),
+		);
+		expect(decoded[0]).toBe(expectedKql("RT0018"));
+		expect(decoded[1]).toBe(expectedKql("RT0005"));
+	});
+
+	it("output batch for the row-normalization fixture is byte-identical to the pre-refactor shape", async () => {
+		const numericRow = [
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"My ISV App",
+			"Codeunit",
+			50100,
+			"Sales Post",
+			"ProcessLine",
+			3,
+			12000,
+			9500,
+			"",
+		];
+		const fetchImpl = (async () =>
+			okResponse(primaryTableResponse([numericRow]))) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018"], since: "4h", now: () => FIXED_NOW },
+			fetchImpl,
+		);
+
+		expect(batch).toEqual({
+			schemaVersion: 1,
+			payloadType: "telemetry-batch",
+			windowStart: "2026-01-01T08:00:00.000Z",
+			windowEnd: "2026-01-01T12:00:00.000Z",
+			source: "appinsights-api",
+			signals: [
+				{
+					signalId: "RT0018",
+					appId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+					appName: "My ISV App",
+					objectType: "Codeunit",
+					objectId: 50100,
+					objectName: "Sales Post",
+					methodName: "ProcessLine",
+					clientType: undefined,
+					count: 3,
+					maxDurationMs: 12000,
+					avgDurationMs: 9500,
+				},
+			],
+		});
 	});
 });
 
@@ -314,7 +415,9 @@ describe("pullTelemetry — clientType (D5: telemetry-config-clienttype plan Tas
 		await pullTelemetry({ appId: APP_ID, signals: ["RT0018"] }, fetchImpl);
 
 		const decoded = decodeURIComponent(calls[0]);
-		expect(decoded).toContain("clientType = tostring(customDimensions.clientType)");
+		expect(decoded).toContain(
+			"clientType = tostring(customDimensions.clientType)",
+		);
 		expect(decoded).toMatch(/\bby\b[^\n]*clientType/);
 		expect(decoded).not.toContain("| where clientType in");
 	});
@@ -327,12 +430,18 @@ describe("pullTelemetry — clientType (D5: telemetry-config-clienttype plan Tas
 		}) as typeof fetch;
 
 		await pullTelemetry(
-			{ appId: APP_ID, signals: ["RT0018"], clientTypes: ["Background", "WebClient"] },
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				clientTypes: ["Background", "WebClient"],
+			},
 			fetchImpl,
 		);
 
 		const decoded = decodeURIComponent(calls[0]);
-		expect(decoded).toContain('| where clientType in ("Background", "WebClient")');
+		expect(decoded).toContain(
+			'| where clientType in ("Background", "WebClient")',
+		);
 	});
 
 	it("rejects an invalid --client-types value before any fetch call (injection posture)", async () => {
@@ -344,7 +453,11 @@ describe("pullTelemetry — clientType (D5: telemetry-config-clienttype plan Tas
 
 		await expect(
 			pullTelemetry(
-				{ appId: APP_ID, signals: ["RT0018"], clientTypes: ["Background;drop"] },
+				{
+					appId: APP_ID,
+					signals: ["RT0018"],
+					clientTypes: ["Background;drop"],
+				},
 				fetchImpl,
 			),
 		).rejects.toThrow(/invalid.*client-types/i);
@@ -421,7 +534,9 @@ describe("pullTelemetry — clientType (D5: telemetry-config-clienttype plan Tas
 		const fetchImpl = (async () => {
 			call++;
 			return okResponse(
-				primaryTableResponse(call === 1 ? [rowWithoutColumn] : [rowWithEmptyColumn]),
+				primaryTableResponse(
+					call === 1 ? [rowWithoutColumn] : [rowWithEmptyColumn],
+				),
 			);
 		}) as typeof fetch;
 
@@ -462,7 +577,9 @@ describe("pullTelemetry — clientType (D5: telemetry-config-clienttype plan Tas
 		const parsed = parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG);
 		expect(parsed.signalCount).toBe(1);
 		expect(parsed.result.patterns).toHaveLength(1);
-		expect(parsed.result.patterns[0].fingerprint).toMatch(/^telemetry:[0-9a-f]{16}$/);
+		expect(parsed.result.patterns[0].fingerprint).toMatch(
+			/^telemetry:[0-9a-f]{16}$/,
+		);
 	});
 });
 
@@ -514,4 +631,418 @@ describe("pullTelemetry — HTTP error classification (v1 does not retry)", () =
 			expect(message).not.toContain(DECOY_KEY);
 		});
 	}
+});
+
+// ---------------------------------------------------------------------------
+// pullTelemetrySplit (telemetry-multitenant plan, Task 2): split-mode KQL
+// dimensions, per-(aadTenantId, environmentName) grouping, tenantMap/policy
+// application. Non-split pullTelemetry's behavior is pinned above and MUST
+// stay untouched by this work.
+// ---------------------------------------------------------------------------
+
+const SPLIT_COLUMNS = [
+	...COLUMNS,
+	{ name: "aadTenantId", type: "string" },
+	{ name: "environmentName", type: "string" },
+];
+
+function splitPrimaryTableResponse(rows: unknown[][]) {
+	return { tables: [{ name: "PrimaryTable", columns: SPLIT_COLUMNS, rows }] };
+}
+
+function makeSplitRow(opts: {
+	appId?: string;
+	methodName?: string;
+	objectId?: number;
+	count?: number;
+	maxMs?: number;
+	avgMs?: number;
+	clientType?: string;
+	aadTenantId: string;
+	environmentName?: string;
+}): unknown[] {
+	return [
+		opts.appId ?? "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"My ISV App",
+		"Codeunit",
+		opts.objectId ?? 50100,
+		"Sales Post",
+		opts.methodName ?? "ProcessLine",
+		opts.count ?? 1,
+		opts.maxMs ?? 1000,
+		opts.avgMs ?? 900,
+		"",
+		opts.clientType ?? "",
+		opts.aadTenantId,
+		opts.environmentName ?? "",
+	];
+}
+
+const TENANT_X = "11111111-1111-1111-1111-111111111111";
+const TENANT_Y = "22222222-2222-2222-2222-222222222222";
+
+describe("pullTelemetrySplit — KQL dimensions (behavior 2)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("extends + groups by aadTenantId/environmentName for both signal queries", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(splitPrimaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018", "RT0005"],
+				tenantMap: {},
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(calls).toHaveLength(2);
+		for (const url of calls) {
+			const decoded = decodeURIComponent(url);
+			expect(decoded).toContain(
+				"aadTenantId = tostring(customDimensions.aadTenantId)",
+			);
+			expect(decoded).toContain(
+				"environmentName = tostring(customDimensions.environmentName)",
+			);
+			expect(decoded).toMatch(/\bby\b[^\n]*aadTenantId[^\n]*environmentName/);
+		}
+	});
+
+	it("--client-types filter still composes in split mode", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(splitPrimaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				clientTypes: ["Background"],
+				tenantMap: {},
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		const decoded = decodeURIComponent(calls[0]);
+		expect(decoded).toContain('| where clientType in ("Background")');
+	});
+});
+
+describe("pullTelemetrySplit — grouping (behavior 3)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("groups rows by (aadTenantId, environmentName); per-clientType rows survive inside a group", async () => {
+		const rows = [
+			makeSplitRow({
+				aadTenantId: TENANT_X,
+				environmentName: "PROD",
+				clientType: "Background",
+				methodName: "ProcessLineA",
+			}),
+			makeSplitRow({
+				aadTenantId: TENANT_X,
+				environmentName: "PROD",
+				clientType: "WebClient",
+				methodName: "ProcessLineB",
+			}),
+			makeSplitRow({
+				aadTenantId: TENANT_Y,
+				environmentName: "PROD",
+				methodName: "ProcessLineC",
+			}),
+		];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				since: "4h",
+				now: () => new Date("2026-01-01T12:00:00.000Z"),
+				tenantMap: { [TENANT_X]: "acme", [TENANT_Y]: "beta" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.skippedTenants).toEqual([]);
+		expect(result.groups).toHaveLength(2);
+
+		const acme = result.groups.find((g) => g.tenant === "acme");
+		expect(acme).toBeDefined();
+		expect(acme?.aadTenantId).toBe(TENANT_X);
+		expect(acme?.environmentName).toBe("PROD");
+		expect(acme?.stream).toBe("PROD");
+		expect(acme?.batch.signals).toHaveLength(2);
+		expect(acme?.batch.source).toBe("appinsights-api-split");
+		expect(acme?.batch.windowStart).toBe("2026-01-01T08:00:00.000Z");
+		expect(acme?.batch.windowEnd).toBe("2026-01-01T12:00:00.000Z");
+		expect(acme?.batch.schemaVersion).toBe(1);
+		expect(acme?.batch.payloadType).toBe("telemetry-batch");
+
+		const beta = result.groups.find((g) => g.tenant === "beta");
+		expect(beta).toBeDefined();
+		expect(beta?.batch.signals).toHaveLength(1);
+	});
+
+	it("empty/absent environmentName becomes stream 'telemetry' (D2); a real environmentName is used verbatim as the stream", async () => {
+		const rows = [
+			makeSplitRow({ aadTenantId: TENANT_X, environmentName: "" }),
+			makeSplitRow({ aadTenantId: TENANT_Y, environmentName: "Sandbox" }),
+		];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [TENANT_X]: "acme", [TENANT_Y]: "beta" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		const acme = result.groups.find((g) => g.tenant === "acme");
+		expect(acme?.stream).toBe("telemetry");
+		expect(acme?.environmentName).toBeNull();
+
+		const beta = result.groups.find((g) => g.tenant === "beta");
+		expect(beta?.stream).toBe("Sandbox");
+		expect(beta?.environmentName).toBe("Sandbox");
+	});
+});
+
+describe("pullTelemetrySplit — mapping and policy (behavior 4)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("unmapped + skip: no group, into skippedTenants with a summed signal count across environments", async () => {
+		const rows = [
+			makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+			makeSplitRow({ aadTenantId: TENANT_X, environmentName: "SANDBOX" }),
+		];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: {},
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(0);
+		expect(result.skippedTenants).toEqual([
+			{ aadTenantId: TENANT_X, signalCount: 2 },
+		]);
+	});
+
+	it("unmapped + fleet: group with tenant = fleetTenant, stream still from environmentName; distinct unmapped tenants stay distinct groups", async () => {
+		const rows = [
+			makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+			makeSplitRow({ aadTenantId: TENANT_Y, environmentName: "PROD" }),
+		];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: {},
+				unmappedTenantPolicy: "fleet",
+				fleetTenant: "acme-fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.skippedTenants).toEqual([]);
+		expect(result.groups).toHaveLength(2);
+		for (const g of result.groups) {
+			expect(g.tenant).toBe("acme-fleet");
+			expect(g.stream).toBe("PROD");
+		}
+		const aadIds = result.groups.map((g) => g.aadTenantId).sort();
+		expect(aadIds).toEqual([TENANT_X, TENANT_Y].sort());
+	});
+
+	it("case-insensitive aadTenantId <-> tenantMap-key matching, both directions (CONTROLLER-PINNED)", async () => {
+		const guidLower = "33333333-3333-3333-3333-333333333333";
+		const guidUpper = guidLower.toUpperCase();
+
+		// (a) tenantMap key uppercase, Azure row aadTenantId lowercase
+		const fetchImplA = (async () =>
+			okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: guidLower, environmentName: "PROD" }),
+				]),
+			)) as typeof fetch;
+		const resultA = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [guidUpper]: "acme" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImplA,
+		);
+		expect(resultA.skippedTenants).toEqual([]);
+		expect(resultA.groups).toHaveLength(1);
+		expect(resultA.groups[0].tenant).toBe("acme");
+
+		// (b) tenantMap key lowercase, Azure row aadTenantId uppercase
+		const fetchImplB = (async () =>
+			okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: guidUpper, environmentName: "PROD" }),
+				]),
+			)) as typeof fetch;
+		const resultB = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [guidLower]: "acme" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImplB,
+		);
+		expect(resultB.skippedTenants).toEqual([]);
+		expect(resultB.groups).toHaveLength(1);
+		expect(resultB.groups[0].tenant).toBe("acme");
+	});
+});
+
+describe("pullTelemetrySplit — empty aadTenantId (behavior 5)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("empty aadTenantId is treated as unmapped under skip policy: no crash, no group, lands in skippedTenants", async () => {
+		const rows = [makeSplitRow({ aadTenantId: "", environmentName: "PROD" })];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [TENANT_X]: "acme" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(0);
+		expect(result.skippedTenants).toEqual([
+			{ aadTenantId: "", signalCount: 1 },
+		]);
+	});
+
+	it("empty aadTenantId is treated as unmapped under fleet policy: never silently attached to a mapped customer", async () => {
+		const rows = [makeSplitRow({ aadTenantId: "", environmentName: "PROD" })];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [TENANT_X]: "acme" },
+				unmappedTenantPolicy: "fleet",
+				fleetTenant: "fleet-bucket",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(1);
+		expect(result.groups[0].tenant).toBe("fleet-bucket");
+		expect(result.groups[0].aadTenantId).toBe("");
+		expect(result.groups[0].stream).toBe("PROD");
+	});
+});
+
+describe("pullTelemetrySplit — round-trip through parseTelemetryBatch (behavior 6)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("every group's batch validates through parseTelemetryBatch", async () => {
+		const rows = [
+			makeSplitRow({
+				aadTenantId: TENANT_X,
+				environmentName: "PROD",
+				clientType: "Background",
+			}),
+			makeSplitRow({
+				aadTenantId: TENANT_Y,
+				environmentName: "",
+				methodName: "OtherMethod",
+			}),
+		];
+		const fetchImpl = (async () =>
+			okResponse(splitPrimaryTableResponse(rows))) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [TENANT_X]: "acme", [TENANT_Y]: "beta" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(2);
+		for (const group of result.groups) {
+			const parsed = parseTelemetryBatch(group.batch, DEFAULT_LIFECYCLE_CONFIG);
+			expect(parsed.signalCount).toBe(group.batch.signals.length);
+			expect(parsed.result.patterns).toHaveLength(group.batch.signals.length);
+			for (const p of parsed.result.patterns) {
+				expect(p.fingerprint).toMatch(/^telemetry:[0-9a-f]{16}$/);
+			}
+		}
+	});
 });

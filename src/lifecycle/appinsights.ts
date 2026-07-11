@@ -70,6 +70,30 @@ export interface PullTelemetryOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Split mode (telemetry-multitenant plan, Task 2): one TelemetryBatchDocument
+// per (aadTenantId, environmentName) group instead of one fleet-wide batch.
+// The wire contract (TelemetryBatchDocument/TelemetrySignal) is untouched —
+// these types live entirely in the puller.
+// ---------------------------------------------------------------------------
+
+export interface PullSplitGroup {
+	/** al-perf tenant the group maps to (post-tenantMap). */
+	tenant: string;
+	/** Run stream — environmentName, or "telemetry" when absent (D2). */
+	stream: string;
+	/** Source dimensions, for logging/filenames. */
+	aadTenantId: string;
+	environmentName: string | null;
+	batch: TelemetryBatchDocument;
+}
+
+export interface PullSplitResult {
+	groups: PullSplitGroup[];
+	/** AAD tenant GUIDs skipped by the "skip" policy, with row counts (loud reporting). */
+	skippedTenants: Array<{ aadTenantId: string; signalCount: number }>;
+}
+
+// ---------------------------------------------------------------------------
 // --since resolution
 // ---------------------------------------------------------------------------
 
@@ -132,22 +156,30 @@ export function parseTimespanMs(value: string): number {
 
 /**
  * Build the per-signal KQL query. Aggregation happens server-side so the
- * batch arrives pre-aggregated (one row per appId/object/method/clientType).
- * `ms` stays a double from `executionTimeInMs` when present; `stackTrace` is
- * carried through (via `any()`, not grouped on) so the TS normalizer — never
- * KQL — can fall back to its first line when `alMethod` is empty.
+ * batch arrives pre-aggregated (one row per appId/object/method/clientType,
+ * or per appId/object/method/clientType/aadTenantId/environmentName in split
+ * mode). `ms` stays a double from `executionTimeInMs` when present;
+ * `stackTrace` is carried through (via `any()`, not grouped on) so the TS
+ * normalizer — never KQL — can fall back to its first line when `alMethod`
+ * is empty.
  *
  * `clientType` (D5) always rides the extend + summarize by-key, independent
  * of `--client-types` — it's carried through to every emitted signal so the
  * severity ladder (telemetry-parser.ts) can key off it downstream even when
  * the pull itself isn't filtered. `clientTypes` only adds the extra `| where`
- * filter clause; each value is validated by the caller (pullTelemetry)
- * BEFORE it reaches this function.
+ * filter clause; each value is validated by the caller (pullTelemetry /
+ * pullTelemetrySplit) BEFORE it reaches this function.
+ *
+ * `split` (telemetry-multitenant plan, Task 2) additionally extends +
+ * groups by `aadTenantId`/`environmentName` — the two dimensions the split
+ * puller groups rows on. `split` defaults to false/omitted so existing
+ * callers produce the exact pre-Task-2 string (pinned by a snapshot test).
  */
 function buildKqlQuery(
 	signalId: string,
 	sinceIso: string,
 	clientTypes?: readonly string[],
+	split = false,
 ): string {
 	const lines = [
 		"traces",
@@ -161,15 +193,25 @@ function buildKqlQuery(
 		"         methodName = tostring(customDimensions.alMethod),",
 		"         stackTrace = tostring(customDimensions.alStackTrace),",
 		"         clientType = tostring(customDimensions.clientType),",
-		"         ms = todouble(customDimensions.executionTimeInMs)",
+		split
+			? "         ms = todouble(customDimensions.executionTimeInMs),"
+			: "         ms = todouble(customDimensions.executionTimeInMs)",
 	];
+	if (split) {
+		lines.push(
+			"         aadTenantId = tostring(customDimensions.aadTenantId),",
+			"         environmentName = tostring(customDimensions.environmentName)",
+		);
+	}
 	if (clientTypes && clientTypes.length > 0) {
 		const list = clientTypes.map((ct) => `"${ct}"`).join(", ");
 		lines.push(`| where clientType in (${list})`);
 	}
 	lines.push(
 		"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace)",
-		"    by appId, appName, objectType, objectId, objectName, methodName, clientType",
+		split
+			? "    by appId, appName, objectType, objectId, objectName, methodName, clientType, aadTenantId, environmentName"
+			: "    by appId, appName, objectType, objectId, objectName, methodName, clientType",
 	);
 	return lines.join("\n");
 }
@@ -224,66 +266,130 @@ interface NormalizedRows {
 	skipped: number;
 }
 
+type CellReader = (row: unknown[], name: string) => unknown;
+
+function makeCellReader(table: AppInsightsTable): CellReader {
+	const colIndex = new Map(table.columns.map((c, i) => [c.name, i] as const));
+	return (row, name) => {
+		const i = colIndex.get(name);
+		return i === undefined ? undefined : row[i];
+	};
+}
+
 /**
- * Row -> TelemetrySignal. Rows whose identity fields end up empty (methodName
- * after the stack-trace fallback, appId, objectType) are SKIPPED rather than
- * emitted — the parser (telemetry-parser.ts) fail-closed rejects empty
- * identity strings, and a single malformed row must not fail the whole pull.
+ * Row -> TelemetrySignal, or null when the row's identity fields end up
+ * empty (methodName after the stack-trace fallback, appId, objectType) —
+ * such rows are SKIPPED by the caller rather than emitted, since the parser
+ * (telemetry-parser.ts) fail-closed rejects empty identity strings and a
+ * single malformed row must not fail the whole pull. Shared by both the
+ * non-split and split-mode normalizers — the signal shape itself never
+ * changes between modes (wire contract untouched).
  */
+function buildSignalFromRow(
+	cell: CellReader,
+	row: unknown[],
+	signalId: string,
+): TelemetrySignal | null {
+	const rawMethodName = asDisplayString(cell(row, "methodName"));
+	const stackTrace = asDisplayString(cell(row, "stackTrace"));
+	const methodName =
+		rawMethodName.trim() !== ""
+			? rawMethodName
+			: (stackTrace.split(/\r?\n/)[0] ?? "").trim();
+
+	const appId = asDisplayString(cell(row, "appId"));
+	const objectType = asDisplayString(cell(row, "objectType"));
+
+	if (methodName === "" || appId === "" || objectType === "") {
+		return null;
+	}
+
+	const appName = asDisplayString(cell(row, "appName"));
+	const objectName = asDisplayString(cell(row, "objectName"));
+	const clientType = asDisplayString(cell(row, "clientType"));
+	const avgRaw = cell(row, "avgDurationMs");
+
+	return {
+		signalId,
+		appId,
+		appName: appName !== "" ? appName : undefined,
+		objectType,
+		objectId: Number(cell(row, "objectId")),
+		objectName: objectName !== "" ? objectName : undefined,
+		methodName,
+		clientType: clientType !== "" ? clientType : undefined,
+		count: Number(cell(row, "count")),
+		maxDurationMs: asDurationMs(
+			cell(row, "maxDurationMs"),
+			`${signalId} maxDurationMs`,
+		),
+		avgDurationMs:
+			avgRaw === undefined || avgRaw === null
+				? undefined
+				: asDurationMs(avgRaw, `${signalId} avgDurationMs`),
+	};
+}
+
 function normalizeTable(
 	table: AppInsightsTable,
 	signalId: string,
 ): NormalizedRows {
-	const colIndex = new Map(table.columns.map((c, i) => [c.name, i] as const));
-	const cell = (row: unknown[], name: string): unknown => {
-		const i = colIndex.get(name);
-		return i === undefined ? undefined : row[i];
-	};
-
+	const cell = makeCellReader(table);
 	const signals: TelemetrySignal[] = [];
 	let skipped = 0;
 	for (const row of table.rows) {
-		const rawMethodName = asDisplayString(cell(row, "methodName"));
-		const stackTrace = asDisplayString(cell(row, "stackTrace"));
-		const methodName =
-			rawMethodName.trim() !== ""
-				? rawMethodName
-				: (stackTrace.split(/\r?\n/)[0] ?? "").trim();
-
-		const appId = asDisplayString(cell(row, "appId"));
-		const objectType = asDisplayString(cell(row, "objectType"));
-
-		if (methodName === "" || appId === "" || objectType === "") {
+		const signal = buildSignalFromRow(cell, row, signalId);
+		if (!signal) {
 			skipped++;
 			continue;
 		}
-
-		const appName = asDisplayString(cell(row, "appName"));
-		const objectName = asDisplayString(cell(row, "objectName"));
-		const clientType = asDisplayString(cell(row, "clientType"));
-		const avgRaw = cell(row, "avgDurationMs");
-
-		signals.push({
-			signalId,
-			appId,
-			appName: appName !== "" ? appName : undefined,
-			objectType,
-			objectId: Number(cell(row, "objectId")),
-			objectName: objectName !== "" ? objectName : undefined,
-			methodName,
-			clientType: clientType !== "" ? clientType : undefined,
-			count: Number(cell(row, "count")),
-			maxDurationMs: asDurationMs(
-				cell(row, "maxDurationMs"),
-				`${signalId} maxDurationMs`,
-			),
-			avgDurationMs:
-				avgRaw === undefined || avgRaw === null
-					? undefined
-					: asDurationMs(avgRaw, `${signalId} avgDurationMs`),
-		});
+		signals.push(signal);
 	}
 	return { signals, skipped };
+}
+
+// ---------------------------------------------------------------------------
+// Split-mode row normalization (telemetry-multitenant plan, Task 2): same
+// identity-skip rule as normalizeTable, plus the two grouping dimensions
+// extracted per row. aadTenantId/environmentName never enter TelemetrySignal
+// itself (wire contract untouched) — they exist only to drive grouping,
+// below.
+// ---------------------------------------------------------------------------
+
+interface NormalizedSplitRow {
+	signal: TelemetrySignal;
+	aadTenantId: string;
+	/** null when absent/empty — see D2 (stream falls back to "telemetry"). */
+	environmentName: string | null;
+}
+
+interface NormalizedSplitRows {
+	rows: NormalizedSplitRow[];
+	skipped: number;
+}
+
+function normalizeSplitTable(
+	table: AppInsightsTable,
+	signalId: string,
+): NormalizedSplitRows {
+	const cell = makeCellReader(table);
+	const rows: NormalizedSplitRow[] = [];
+	let skipped = 0;
+	for (const row of table.rows) {
+		const signal = buildSignalFromRow(cell, row, signalId);
+		if (!signal) {
+			skipped++;
+			continue;
+		}
+		const aadTenantId = asDisplayString(cell(row, "aadTenantId"));
+		const environmentNameRaw = asDisplayString(cell(row, "environmentName"));
+		rows.push({
+			signal,
+			aadTenantId,
+			environmentName: environmentNameRaw !== "" ? environmentNameRaw : null,
+		});
+	}
+	return { rows, skipped };
 }
 
 // ---------------------------------------------------------------------------
@@ -314,13 +420,21 @@ function httpErrorMessage(
 }
 
 // ---------------------------------------------------------------------------
-// pullTelemetry
+// Shared pull setup (pullTelemetry + pullTelemetrySplit): env-var/signal-id/
+// clientType validation and --since resolution are identical in both modes —
+// factored here so pullTelemetry's behavior stays byte-identical (pinned by
+// a snapshot test) while pullTelemetrySplit reuses the exact same rules.
 // ---------------------------------------------------------------------------
 
-export async function pullTelemetry(
-	opts: PullTelemetryOptions,
-	fetchImpl: typeof fetch = fetch,
-): Promise<TelemetryBatchDocument> {
+interface PullContext {
+	apiKey: string;
+	signalIds: readonly string[];
+	clientTypes: readonly string[] | undefined;
+	sinceIso: string;
+	windowEnd: string;
+}
+
+function resolvePullContext(opts: PullTelemetryOptions): PullContext {
 	const apiKeyEnv = opts.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
 	const apiKey = process.env[apiKeyEnv];
 	if (!apiKey) {
@@ -338,7 +452,9 @@ export async function pullTelemetry(
 	}
 
 	const clientTypes =
-		opts.clientTypes && opts.clientTypes.length > 0 ? opts.clientTypes : undefined;
+		opts.clientTypes && opts.clientTypes.length > 0
+			? opts.clientTypes
+			: undefined;
 	if (clientTypes) {
 		for (const clientType of clientTypes) {
 			if (!CLIENT_TYPE_RE.test(clientType)) {
@@ -353,25 +469,60 @@ export async function pullTelemetry(
 	const sinceIso = resolveSince(opts.since ?? DEFAULT_SINCE, now);
 	const windowEnd = now.toISOString();
 
+	return { apiKey, signalIds, clientTypes, sinceIso, windowEnd };
+}
+
+/** Build the URL, fetch, and classify HTTP errors — identical for both modes. */
+async function fetchSignalTable(
+	appId: string,
+	apiKey: string,
+	signalId: string,
+	sinceIso: string,
+	clientTypes: readonly string[] | undefined,
+	split: boolean,
+	fetchImpl: typeof fetch,
+): Promise<AppInsightsTable> {
+	const kql = buildKqlQuery(signalId, sinceIso, clientTypes, split);
+	const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(appId)}/query?query=${encodeURIComponent(kql)}`;
+
+	let res: Response;
+	try {
+		res = await fetchImpl(url, { headers: { "x-api-key": apiKey } });
+	} catch (err) {
+		throw new Error(
+			`pull-telemetry: network error querying App Insights for ${signalId}: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	if (!res.ok) {
+		throw new Error(httpErrorMessage(res.status, res.statusText, signalId));
+	}
+	const json = await res.json();
+	return selectPrimaryTable(json, signalId);
+}
+
+// ---------------------------------------------------------------------------
+// pullTelemetry
+// ---------------------------------------------------------------------------
+
+export async function pullTelemetry(
+	opts: PullTelemetryOptions,
+	fetchImpl: typeof fetch = fetch,
+): Promise<TelemetryBatchDocument> {
+	const { apiKey, signalIds, clientTypes, sinceIso, windowEnd } =
+		resolvePullContext(opts);
+
 	const allSignals: TelemetrySignal[] = [];
 	let skippedTotal = 0;
 	for (const signalId of signalIds) {
-		const kql = buildKqlQuery(signalId, sinceIso, clientTypes);
-		const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(opts.appId)}/query?query=${encodeURIComponent(kql)}`;
-
-		let res: Response;
-		try {
-			res = await fetchImpl(url, { headers: { "x-api-key": apiKey } });
-		} catch (err) {
-			throw new Error(
-				`pull-telemetry: network error querying App Insights for ${signalId}: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-		if (!res.ok) {
-			throw new Error(httpErrorMessage(res.status, res.statusText, signalId));
-		}
-		const json = await res.json();
-		const table = selectPrimaryTable(json, signalId);
+		const table = await fetchSignalTable(
+			opts.appId,
+			apiKey,
+			signalId,
+			sinceIso,
+			clientTypes,
+			false,
+			fetchImpl,
+		);
 		const { signals, skipped } = normalizeTable(table, signalId);
 		allSignals.push(...signals);
 		skippedTotal += skipped;
@@ -391,4 +542,124 @@ export async function pullTelemetry(
 		source: opts.source ?? "appinsights-api",
 		signals: allSignals,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// pullTelemetrySplit (telemetry-multitenant plan, Task 2)
+// ---------------------------------------------------------------------------
+
+interface SplitGroupAccumulator {
+	aadTenantId: string;
+	environmentName: string | null;
+	signals: TelemetrySignal[];
+}
+
+/**
+ * Split-mode pull. Non-split pullTelemetry keeps its exact current signature
+ * and behavior (see the snapshot-pin tests) — this is a separate entry point,
+ * not a mode flag on pullTelemetry, so the two never share mutable state.
+ *
+ * Grouping is by the RAW (aadTenantId, environmentName) pair returned by
+ * Azure — one TelemetryBatchDocument per distinct pair. Tenant mapping is
+ * applied AFTER grouping, per group: an aadTenantId absent from tenantMap
+ * (including an empty string — old-schema/on-prem rows never carry a GUID)
+ * is "unmapped" and the configured policy decides its fate. GUID comparison
+ * against tenantMap keys is case-insensitive — tenantMap keys are stored
+ * as-authored by the config loader while Azure rows can differ in case, so
+ * both sides are lowercased at lookup (CONTROLLER-PINNED, Task 1 review).
+ */
+export async function pullTelemetrySplit(
+	opts: PullTelemetryOptions & {
+		tenantMap: Record<string, string>;
+		unmappedTenantPolicy: "skip" | "fleet";
+		fleetTenant: string;
+	},
+	fetchImpl: typeof fetch = fetch,
+): Promise<PullSplitResult> {
+	const { apiKey, signalIds, clientTypes, sinceIso, windowEnd } =
+		resolvePullContext(opts);
+
+	const allRows: NormalizedSplitRow[] = [];
+	let skippedTotal = 0;
+	for (const signalId of signalIds) {
+		const table = await fetchSignalTable(
+			opts.appId,
+			apiKey,
+			signalId,
+			sinceIso,
+			clientTypes,
+			true,
+			fetchImpl,
+		);
+		const { rows, skipped } = normalizeSplitTable(table, signalId);
+		allRows.push(...rows);
+		skippedTotal += skipped;
+	}
+
+	if (skippedTotal > 0) {
+		console.error(
+			`pull-telemetry: skipped ${skippedTotal} row(s) with empty identity fields (methodName/appId/objectType) after normalization`,
+		);
+	}
+
+	const groupsByKey = new Map<string, SplitGroupAccumulator>();
+	for (const row of allRows) {
+		const key = JSON.stringify([row.aadTenantId, row.environmentName]);
+		let acc = groupsByKey.get(key);
+		if (!acc) {
+			acc = {
+				aadTenantId: row.aadTenantId,
+				environmentName: row.environmentName,
+				signals: [],
+			};
+			groupsByKey.set(key, acc);
+		}
+		acc.signals.push(row.signal);
+	}
+
+	const tenantMapLower = new Map(
+		Object.entries(opts.tenantMap).map(([guid, tenant]) => [
+			guid.toLowerCase(),
+			tenant,
+		]),
+	);
+
+	const groups: PullSplitGroup[] = [];
+	const skippedByAad = new Map<string, number>();
+
+	for (const acc of groupsByKey.values()) {
+		const mappedTenant = tenantMapLower.get(acc.aadTenantId.toLowerCase());
+		let tenant: string;
+		if (mappedTenant !== undefined) {
+			tenant = mappedTenant;
+		} else if (opts.unmappedTenantPolicy === "fleet") {
+			tenant = opts.fleetTenant;
+		} else {
+			skippedByAad.set(
+				acc.aadTenantId,
+				(skippedByAad.get(acc.aadTenantId) ?? 0) + acc.signals.length,
+			);
+			continue;
+		}
+		groups.push({
+			tenant,
+			stream: acc.environmentName ?? "telemetry",
+			aadTenantId: acc.aadTenantId,
+			environmentName: acc.environmentName,
+			batch: {
+				schemaVersion: TELEMETRY_BATCH_SCHEMA_VERSION,
+				payloadType: "telemetry-batch",
+				windowStart: sinceIso,
+				windowEnd,
+				source: "appinsights-api-split",
+				signals: acc.signals,
+			},
+		});
+	}
+
+	const skippedTenants = Array.from(skippedByAad.entries()).map(
+		([aadTenantId, signalCount]) => ({ aadTenantId, signalCount }),
+	);
+
+	return { groups, skippedTenants };
 }
