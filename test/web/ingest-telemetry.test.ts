@@ -449,4 +449,31 @@ describe("POST /api/ingest telemetry-batch with AL_PERF_LIFECYCLE_CONFIG", () =>
 			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
 		}
 	});
+
+	it("lifecycle OFF: a malformed config file is never even read — batch stores normally", async () => {
+		// AL_PERF_LIFECYCLE deliberately left unset/OFF: evaluation never runs,
+		// so a broken AL_PERF_LIFECYCLE_CONFIG file must not fail this ingest —
+		// resolveGatedLifecycleConfig short-circuits to DEFAULT_LIFECYCLE_CONFIG
+		// without ever calling loadLifecycleConfigFile.
+		const configPath = join(TEST_DATA, "malformed-off.config.json");
+		writeFileSync(configPath, "{ not valid json");
+		process.env.AL_PERF_LIFECYCLE_CONFIG = configPath;
+		try {
+			const token = await registerTenant("telcfg3");
+			const doc = batch([signal()]);
+			const key = "550e8400-e29b-41d4-a716-446655440312";
+			const res = await postIngest(
+				token,
+				"telcfg3",
+				key,
+				Buffer.from(JSON.stringify(doc), "utf8"),
+				{ activityId: key, captureKind: "telemetry" },
+			);
+			expect(res.status).toBe(202);
+			const body = (await res.json()) as { status: string };
+			expect(body.status).toBe("stored");
+		} finally {
+			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
+		}
+	});
 });
