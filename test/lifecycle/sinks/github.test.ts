@@ -125,6 +125,27 @@ describe("escaping (injection tests)", () => {
 		expect(out).toContain("&#33;&#91;pixel&#93;");
 	});
 
+	it("escapeInline defangs bare https:// URLs from GFM autolinking", () => {
+		const out = escapeInline("see https://evil.example/x for details");
+		expect(out).not.toContain("://");
+	});
+
+	it("escapeInline defangs bare www. autolinks", () => {
+		const out = escapeInline("visit www.evil.example now");
+		expect(out).not.toContain("www.");
+	});
+
+	it("renderTitle and renderIssueBody carry no autolinkable bare URL from finding text", () => {
+		const hostile = ctx({
+			title: "see https://evil.example/x now",
+			appName: "www.evil.example",
+		});
+		expect(renderTitle(hostile)).not.toContain("://");
+		const body = renderIssueBody(hostile);
+		expect(body).not.toContain("://");
+		expect(body).not.toContain("www.");
+	});
+
 	it("renderTitle and renderIssueBody carry no live markdown link/image syntax from finding text", () => {
 		const hostile = ctx({
 			title: "[Click to verify](https://evil.phish/x)",
@@ -248,6 +269,40 @@ describe("GitHub adapter contract (mocked HTTP)", () => {
 		);
 		expect(close.calls[0].init.method).toBe("PATCH");
 		expect(JSON.parse(String(close.calls[0].init.body)).state).toBe("closed");
+	});
+
+	it("comment-recurred: POSTs to the mapped issue's comments with a body noting recurrence after close; escaping applies", async () => {
+		const map = memoryIssueMap();
+		map.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: "pattern:abc123def4567890",
+			externalId: "42",
+			createdAt: "2026-07-09T00:00:00Z",
+		});
+		const recurred = ctx({
+			title: "[x](y) recurred finding",
+			lastSeenAt: "2026-07-10T00:00:00Z",
+			occurrenceCount: 6,
+		});
+		const { impl, calls } = mockFetch(201, { id: 1 });
+		const sink = createGitHubSink({
+			repo: "o/r",
+			token: "t0k",
+			fetchImpl: impl,
+		});
+		const res = await sink.deliver(delivery("comment-recurred", recurred), map);
+		expect(res.ok).toBe(true);
+		expect(calls[0].url).toBe(
+			"https://api.github.com/repos/o/r/issues/42/comments",
+		);
+		const body = JSON.parse(String(calls[0].init.body)).body as string;
+		expect(body.toLowerCase()).toContain("recurred");
+		expect(body.toLowerCase()).toContain("closed");
+		expect(body).toContain("critical"); // severity
+		expect(body).toContain("6"); // occurrence count
+		expect(body).toContain("2026-07-10"); // lastSeenAt
+		expect(body).not.toContain("[x](y)");
 	});
 
 	it("classifies retryability: 500/429/rate-limited-403 retryable, 422 not, network throw retryable", async () => {

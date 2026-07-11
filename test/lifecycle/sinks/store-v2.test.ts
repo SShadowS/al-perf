@@ -198,6 +198,32 @@ describe("outbox methods", () => {
 		expect(store.listPendingOutbox("github")).toHaveLength(0);
 		store.close();
 	});
+
+	it("listDeadOutbox returns dead rows, filtered by sink when given, excludes pending", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(finding("pattern:a"));
+		enqueue(store, id, "k1");
+		enqueue(store, id, "k2");
+		const [row1, row2] = store.listDueOutbox(
+			"github",
+			"2026-07-01T00:00:00Z",
+			10,
+		);
+		store.markOutboxDead(row1.id, "boom");
+
+		const dead = store.listDeadOutbox("github");
+		expect(dead).toHaveLength(1);
+		expect(dead[0].id).toBe(row1.id);
+		expect(dead[0].status).toBe("dead");
+		expect(dead[0].lastError).toBe("boom");
+
+		// A pending row (row2) is not returned.
+		expect(dead.some((r) => r.id === row2.id)).toBe(false);
+
+		// No-arg call returns dead rows across sinks.
+		expect(store.listDeadOutbox()).toHaveLength(1);
+		store.close();
+	});
 });
 
 describe("event scanning", () => {

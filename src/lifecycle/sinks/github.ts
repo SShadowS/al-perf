@@ -65,7 +65,9 @@ export function escapeInline(text: string): string {
 		.replace(/`/g, "&#96;")
 		.replace(/\[/g, "&#91;")
 		.replace(/\]/g, "&#93;")
-		.replace(/!/g, "&#33;");
+		.replace(/!/g, "&#33;")
+		.replace(/:\/\//g, ":&#47;&#47;")
+		.replace(/www\./gi, "www&#46;");
 }
 
 /** Fence free-form text with a fence longer than any backtick run inside. */
@@ -118,6 +120,16 @@ export function renderRegressedComment(f: SinkFindingContext): string {
 	if (f.metricClass) {
 		lines.push(`Metric classification: ${escapeInline(f.metricClass)}.`);
 	}
+	if (f.evidence) lines.push("", fenceBlock(f.evidence));
+	lines.push("", `Fingerprint: ${escapeInline(f.fingerprint)}`);
+	return lines.join("\n");
+}
+
+export function renderRecurredComment(f: SinkFindingContext): string {
+	const lines = [
+		`Finding recurred after this issue was closed — now seen ${f.occurrenceCount}x (last ${escapeInline(f.lastSeenAt)}).`,
+		`Severity: ${escapeInline(f.severity)}.`,
+	];
 	if (f.evidence) lines.push("", fenceBlock(f.evidence));
 	lines.push("", `Fingerprint: ${escapeInline(f.fingerprint)}`);
 	return lines.join("\n");
@@ -278,12 +290,15 @@ export function createGitHubSink(options: GitHubAdapterOptions): SinkAdapter {
 
 			if (
 				delivery.kind === "comment-regressed" ||
-				delivery.kind === "comment-resolved"
+				delivery.kind === "comment-resolved" ||
+				delivery.kind === "comment-recurred"
 			) {
 				const body =
 					delivery.kind === "comment-regressed"
 						? renderRegressedComment(f)
-						: renderResolvedComment(f);
+						: delivery.kind === "comment-recurred"
+							? renderRecurredComment(f)
+							: renderResolvedComment(f);
 				const res = await call(
 					"POST",
 					`/repos/${options.repo}/issues/${mapping.externalId}/comments`,

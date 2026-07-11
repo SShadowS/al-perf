@@ -153,6 +153,19 @@ export function processEventsForSinks(
 				}
 			}
 
+			if (event.event === "filed-fresh" && mapping) {
+				if (
+					enqueue(
+						row,
+						event,
+						"comment-recurred",
+						`${SINK}:comment-recurred:${event.id}`,
+					)
+				) {
+					enqueued++;
+				}
+			}
+
 			if (event.event === "resolved" && mapping) {
 				if (
 					enqueue(
