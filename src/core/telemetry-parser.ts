@@ -59,6 +59,21 @@ function requireString(
 	return v;
 }
 
+/** Identity-bearing strings (fingerprint inputs): "" and whitespace-only are "missing", not merely empty. */
+function requireNonEmptyString(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): string {
+	const v = requireString(obj, field, context);
+	if (v.trim() === "") {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}'`,
+		);
+	}
+	return v;
+}
+
 function optionalString(
 	obj: Record<string, unknown>,
 	field: string,
@@ -72,13 +87,42 @@ function optionalString(
 	return v;
 }
 
+/** Number.isFinite (not just !isNaN) — Infinity would otherwise flow into impact = maxDurationMs * 1000. */
 function requireNumber(
 	obj: Record<string, unknown>,
 	field: string,
 	context: string,
 ): number {
 	const v = obj[field];
-	if (typeof v !== "number" || Number.isNaN(v)) {
+	if (typeof v !== "number" || !Number.isFinite(v)) {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}'`,
+		);
+	}
+	return v;
+}
+
+function requireNonNegativeNumber(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): number {
+	const v = requireNumber(obj, field, context);
+	if (v < 0) {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}'`,
+		);
+	}
+	return v;
+}
+
+function requireInteger(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): number {
+	const v = requireNumber(obj, field, context);
+	if (!Number.isInteger(v)) {
 		throw new Error(
 			`telemetry-batch ${context}: missing/invalid field '${field}'`,
 		);
@@ -93,7 +137,19 @@ function optionalNumber(
 ): number | undefined {
 	const v = obj[field];
 	if (v === undefined) return undefined;
-	if (typeof v !== "number" || Number.isNaN(v)) {
+	if (typeof v !== "number" || !Number.isFinite(v)) {
+		throw new Error(`telemetry-batch ${context}: invalid field '${field}'`);
+	}
+	return v;
+}
+
+function optionalNonNegativeNumber(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): number | undefined {
+	const v = optionalNumber(obj, field, context);
+	if (v !== undefined && v < 0) {
 		throw new Error(`telemetry-batch ${context}: invalid field '${field}'`);
 	}
 	return v;
@@ -106,16 +162,16 @@ function validateSignal(raw: unknown, index: number): TelemetrySignal {
 	}
 	const obj = raw as Record<string, unknown>;
 	return {
-		signalId: requireString(obj, "signalId", context),
-		appId: requireString(obj, "appId", context),
+		signalId: requireNonEmptyString(obj, "signalId", context),
+		appId: requireNonEmptyString(obj, "appId", context),
 		appName: optionalString(obj, "appName", context),
-		objectType: requireString(obj, "objectType", context),
-		objectId: requireNumber(obj, "objectId", context),
+		objectType: requireNonEmptyString(obj, "objectType", context),
+		objectId: requireInteger(obj, "objectId", context),
 		objectName: optionalString(obj, "objectName", context),
-		methodName: requireString(obj, "methodName", context),
-		count: requireNumber(obj, "count", context),
-		maxDurationMs: requireNumber(obj, "maxDurationMs", context),
-		avgDurationMs: optionalNumber(obj, "avgDurationMs", context),
+		methodName: requireNonEmptyString(obj, "methodName", context),
+		count: requireNonNegativeNumber(obj, "count", context),
+		maxDurationMs: requireNonNegativeNumber(obj, "maxDurationMs", context),
+		avgDurationMs: optionalNonNegativeNumber(obj, "avgDurationMs", context),
 	};
 }
 

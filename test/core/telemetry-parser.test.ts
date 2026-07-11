@@ -324,3 +324,99 @@ describe("fingerprint stability", () => {
 		expect(fpA).not.toBe(fpB);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Hardening: this parser is attacker-facing once exposed at /api/ingest —
+// finite numbers, non-negative counts/durations, integer objectId, and
+// non-empty identity strings, all naming field + signal index.
+// ---------------------------------------------------------------------------
+
+describe("hardening: numeric validation", () => {
+	test("rejects Infinity for maxDurationMs (else impact goes Infinity)", () => {
+		const doc = batch([signal({ maxDurationMs: Number.POSITIVE_INFINITY })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*maxDurationMs/,
+		);
+	});
+
+	test("rejects -Infinity for maxDurationMs", () => {
+		const doc = batch([signal({ maxDurationMs: Number.NEGATIVE_INFINITY })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*maxDurationMs/,
+		);
+	});
+
+	test("rejects a negative count", () => {
+		const doc = batch([signal({ count: -3 })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*count/,
+		);
+	});
+
+	test("rejects a negative maxDurationMs", () => {
+		const doc = batch([signal({ maxDurationMs: -1 })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*maxDurationMs/,
+		);
+	});
+
+	test("rejects a negative avgDurationMs", () => {
+		const doc = batch([signal({ avgDurationMs: -1 })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*avgDurationMs/,
+		);
+	});
+
+	test("rejects a non-integer objectId", () => {
+		const doc = batch([signal({ objectId: 50100.5 })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*objectId/,
+		);
+	});
+
+	test("accepts a zero count/duration (boundary, not rejected)", () => {
+		const doc = batch([
+			signal({ count: 0, maxDurationMs: 0, avgDurationMs: 0 }),
+		]);
+		expect(() =>
+			parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG),
+		).not.toThrow();
+	});
+});
+
+describe("hardening: non-empty identity strings", () => {
+	test("rejects an empty signalId", () => {
+		const doc = batch([signal({ signalId: "" })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*signalId/,
+		);
+	});
+
+	test("rejects a whitespace-only appId", () => {
+		const doc = batch([signal({ appId: "   " })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*appId/,
+		);
+	});
+
+	test("rejects an empty objectType", () => {
+		const doc = batch([signal({ objectType: "" })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*objectType/,
+		);
+	});
+
+	test("rejects an empty methodName (would mint a degenerate fingerprint)", () => {
+		const doc = batch([signal({ methodName: "" })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*methodName/,
+		);
+	});
+
+	test("rejects a whitespace-only methodName", () => {
+		const doc = batch([signal({ methodName: "   " })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*methodName/,
+		);
+	});
+});
