@@ -125,6 +125,27 @@ describe("escaping (injection tests)", () => {
 		expect(out).toContain("&#33;&#91;pixel&#93;");
 	});
 
+	it("escapeInline defangs bare https:// URLs from GFM autolinking", () => {
+		const out = escapeInline("see https://evil.example/x for details");
+		expect(out).not.toContain("://");
+	});
+
+	it("escapeInline defangs bare www. autolinks", () => {
+		const out = escapeInline("visit www.evil.example now");
+		expect(out).not.toContain("www.");
+	});
+
+	it("renderTitle and renderIssueBody carry no autolinkable bare URL from finding text", () => {
+		const hostile = ctx({
+			title: "see https://evil.example/x now",
+			appName: "www.evil.example",
+		});
+		expect(renderTitle(hostile)).not.toContain("://");
+		const body = renderIssueBody(hostile);
+		expect(body).not.toContain("://");
+		expect(body).not.toContain("www.");
+	});
+
 	it("renderTitle and renderIssueBody carry no live markdown link/image syntax from finding text", () => {
 		const hostile = ctx({
 			title: "[Click to verify](https://evil.phish/x)",

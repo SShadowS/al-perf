@@ -65,7 +65,9 @@ export function escapeInline(text: string): string {
 		.replace(/`/g, "&#96;")
 		.replace(/\[/g, "&#91;")
 		.replace(/\]/g, "&#93;")
-		.replace(/!/g, "&#33;");
+		.replace(/!/g, "&#33;")
+		.replace(/:\/\//g, ":&#47;&#47;")
+		.replace(/www\./gi, "www&#46;");
 }
 
 /** Fence free-form text with a fence longer than any backtick run inside. */
