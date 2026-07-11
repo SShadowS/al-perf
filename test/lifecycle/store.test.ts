@@ -262,3 +262,324 @@ describe("LifecycleStore CRUD", () => {
 		store.close();
 	});
 });
+
+function baseCaptureRequest(
+	overrides?: Partial<Parameters<LifecycleStore["createCaptureRequest"]>[0]>,
+): Parameters<LifecycleStore["createCaptureRequest"]>[0] {
+	return {
+		tenant: "t1",
+		fingerprint: "telemetry:deadbeef00000000",
+		findingId: 1,
+		appId: "abc123",
+		appName: "My App",
+		objectType: "codeunit",
+		objectId: 50100,
+		methodName: "postorder",
+		reason: "RT0018 × 5 runs, max 42000ms",
+		requestedAt: "2026-07-11T00:00:00Z",
+		expiresAt: "2026-07-18T00:00:00Z",
+		...overrides,
+	};
+}
+
+describe("LifecycleStore capture requests", () => {
+	it("createCaptureRequest returns true on first insert", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		expect(
+			store.createCaptureRequest(baseCaptureRequest({ findingId })),
+		).toBe(true);
+		expect(store.listCaptureRequests()).toHaveLength(1);
+		store.close();
+	});
+
+	it("createCaptureRequest returns false when an active (pending/claimed) duplicate exists for the same (tenant, fingerprint)", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		expect(
+			store.createCaptureRequest(baseCaptureRequest({ findingId })),
+		).toBe(true);
+		expect(
+			store.createCaptureRequest(baseCaptureRequest({ findingId })),
+		).toBe(false);
+		expect(store.listCaptureRequests()).toHaveLength(1);
+		store.close();
+	});
+
+	it("createCaptureRequest returns true again once the prior active request was fulfilled (dedupe is active-only)", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		store.fulfillMatchingCaptureRequests(
+			"t1",
+			new Set(["abc123|codeunit|50100|postorder"]),
+			"profile-1",
+			"2026-07-12T00:00:00Z",
+		);
+		expect(store.getFinding(findingId)).not.toBeNull(); // sanity: finding untouched
+		expect(
+			store.listCaptureRequests("t1", "fulfilled").map((r) => r.id),
+		).toEqual([row.id]);
+		expect(
+			store.createCaptureRequest(baseCaptureRequest({ findingId })),
+		).toBe(true);
+		expect(store.listCaptureRequests()).toHaveLength(2);
+		store.close();
+	});
+
+	it("listCaptureRequests filters by tenant and status; ordered by id", () => {
+		const store = new LifecycleStore(":memory:");
+		const f1 = store.insertFinding(baseFinding());
+		const f2 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:aaa", tenant: "t2" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "t2",
+				findingId: f2,
+				fingerprint: "telemetry:bbb",
+			}),
+		);
+		expect(store.listCaptureRequests("t1").map((r) => r.tenant)).toEqual([
+			"t1",
+		]);
+		expect(store.listCaptureRequests().map((r) => r.id)).toEqual([1, 2]);
+		expect(store.listCaptureRequests(undefined, "pending")).toHaveLength(2);
+		expect(store.listCaptureRequests("t1", "claimed")).toHaveLength(0);
+		store.close();
+	});
+
+	it("countActiveCaptureRequests counts pending + claimed only, per tenant", () => {
+		const store = new LifecycleStore(":memory:");
+		const f1 = store.insertFinding(baseFinding());
+		const f2 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:aaa" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f2, fingerprint: "telemetry:bbb" }),
+		);
+		const [first, second] = store.listCaptureRequests("t1");
+		store.claimCaptureRequest(first.id, "executor-1", "2026-07-12T00:00:00Z");
+		store.cancelCaptureRequest(second.id, "2026-07-12T00:00:00Z");
+		expect(store.countActiveCaptureRequests("t1")).toBe(1); // claimed counts, cancelled doesn't
+		expect(store.countActiveCaptureRequests("t2")).toBe(0);
+		store.close();
+	});
+
+	it("claimCaptureRequest transitions pending -> claimed only; every other status refuses", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+
+		expect(
+			store.claimCaptureRequest(row.id, "executor-1", "2026-07-12T00:00:00Z"),
+		).toBe(true);
+		const claimed = store.listCaptureRequests()[0];
+		expect(claimed.status).toBe("claimed");
+		expect(claimed.claimedBy).toBe("executor-1");
+		expect(claimed.claimedAt).toBe("2026-07-12T00:00:00Z");
+
+		// already claimed -> refuse
+		expect(
+			store.claimCaptureRequest(row.id, "executor-2", "2026-07-13T00:00:00Z"),
+		).toBe(false);
+
+		store.cancelCaptureRequest(row.id, "2026-07-14T00:00:00Z"); // -> cancelled
+		expect(
+			store.claimCaptureRequest(row.id, "executor-2", "2026-07-15T00:00:00Z"),
+		).toBe(false);
+
+		const findingId2 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:bbb" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: findingId2,
+				fingerprint: "telemetry:bbb",
+			}),
+		);
+		const expiredRow = store.listCaptureRequests().find((r) => r.id !== row.id);
+		if (!expiredRow) throw new Error("expected second row");
+		store.expireCaptureRequests("2027-01-01T00:00:00Z"); // -> expired
+		expect(
+			store.claimCaptureRequest(
+				expiredRow.id,
+				"executor-2",
+				"2027-01-02T00:00:00Z",
+			),
+		).toBe(false);
+
+		const findingId3 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:ccc" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: findingId3,
+				fingerprint: "telemetry:ccc",
+			}),
+		);
+		const fulfilledSourceRow = store
+			.listCaptureRequests()
+			.find((r) => r.id !== row.id && r.id !== expiredRow.id);
+		if (!fulfilledSourceRow) throw new Error("expected third row");
+		store.fulfillMatchingCaptureRequests(
+			"t1",
+			new Set(["abc123|codeunit|50100|postorder"]),
+			"profile-1",
+			"2026-07-16T00:00:00Z",
+		); // -> fulfilled
+		expect(
+			store.claimCaptureRequest(
+				fulfilledSourceRow.id,
+				"executor-2",
+				"2026-07-17T00:00:00Z",
+			),
+		).toBe(false);
+		store.close();
+	});
+
+	it("cancelCaptureRequest transitions pending or claimed -> cancelled", () => {
+		const store = new LifecycleStore(":memory:");
+		const f1 = store.insertFinding(baseFinding());
+		const f2 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:aaa" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f2, fingerprint: "telemetry:bbb" }),
+		);
+		const [pendingRow, toClaimRow] = store.listCaptureRequests();
+		expect(
+			store.cancelCaptureRequest(pendingRow.id, "2026-07-12T00:00:00Z"),
+		).toBe(true);
+		expect(store.listCaptureRequests()[0].status).toBe("cancelled");
+
+		store.claimCaptureRequest(
+			toClaimRow.id,
+			"executor-1",
+			"2026-07-12T00:00:00Z",
+		);
+		expect(
+			store.cancelCaptureRequest(toClaimRow.id, "2026-07-13T00:00:00Z"),
+		).toBe(true);
+		expect(
+			store.listCaptureRequests().find((r) => r.id === toClaimRow.id)?.status,
+		).toBe("cancelled");
+
+		// already cancelled -> refuse
+		expect(
+			store.cancelCaptureRequest(pendingRow.id, "2026-07-14T00:00:00Z"),
+		).toBe(false);
+		store.close();
+	});
+
+	it("expireCaptureRequests sweeps pending/claimed rows with expiresAt <= now, respecting the boundary", () => {
+		const store = new LifecycleStore(":memory:");
+		const f1 = store.insertFinding(baseFinding());
+		const f2 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:aaa" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f1,
+				fingerprint: "telemetry:aaa",
+				expiresAt: "2026-07-18T00:00:00Z",
+			}),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f2,
+				fingerprint: "telemetry:bbb",
+				expiresAt: "2026-07-19T00:00:00Z",
+			}),
+		);
+		// boundary: exactly at expiresAt counts as expired ("<=")
+		expect(store.expireCaptureRequests("2026-07-18T00:00:00Z")).toBe(1);
+		const rows = store.listCaptureRequests();
+		expect(rows.find((r) => r.expiresAt === "2026-07-18T00:00:00Z")?.status).toBe(
+			"expired",
+		);
+		expect(rows.find((r) => r.expiresAt === "2026-07-19T00:00:00Z")?.status).toBe(
+			"pending",
+		);
+		expect(store.expireCaptureRequests("2026-07-19T00:00:00Z")).toBe(1);
+		expect(
+			store.listCaptureRequests().every((r) => r.status === "expired"),
+		).toBe(true);
+		// nothing left to expire
+		expect(store.expireCaptureRequests("2026-07-20T00:00:00Z")).toBe(0);
+		store.close();
+	});
+
+	it("fulfillMatchingCaptureRequests matches the exact appId|objectType|objectId|methodName join key and is tenant-scoped", () => {
+		const store = new LifecycleStore(":memory:");
+		const f1 = store.insertFinding(baseFinding());
+		const f2 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:aaa" }),
+		);
+		const f3 = store.insertFinding(
+			baseFinding({ fingerprint: "pattern:bbb", tenant: "t2" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }), // matches
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f2,
+				fingerprint: "telemetry:bbb",
+				methodName: "postshipment", // does not match
+			}),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "t2",
+				findingId: f3,
+				fingerprint: "telemetry:ccc", // same key, different tenant
+			}),
+		);
+		const count = store.fulfillMatchingCaptureRequests(
+			"t1",
+			new Set(["abc123|codeunit|50100|postorder"]),
+			"profile-42",
+			"2026-07-20T00:00:00Z",
+		);
+		expect(count).toBe(1);
+		const rows = store.listCaptureRequests("t1");
+		const matched = rows.find((r) => r.fingerprint === "telemetry:aaa");
+		expect(matched?.status).toBe("fulfilled");
+		expect(matched?.fulfilledAt).toBe("2026-07-20T00:00:00Z");
+		expect(matched?.fulfilledByProfileId).toBe("profile-42");
+		const nonMatching = rows.find((r) => r.fingerprint === "telemetry:bbb");
+		expect(nonMatching?.status).toBe("pending");
+		const otherTenant = store.listCaptureRequests("t2");
+		expect(otherTenant[0]?.status).toBe("pending"); // untouched despite same key
+		store.close();
+	});
+
+	it("fulfillMatchingCaptureRequests also fulfills claimed (not just pending) requests", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", "2026-07-12T00:00:00Z");
+		const count = store.fulfillMatchingCaptureRequests(
+			"t1",
+			new Set(["abc123|codeunit|50100|postorder"]),
+			"profile-9",
+			"2026-07-13T00:00:00Z",
+		);
+		expect(count).toBe(1);
+		expect(store.listCaptureRequests()[0].status).toBe("fulfilled");
+		store.close();
+	});
+});
