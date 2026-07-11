@@ -459,10 +459,22 @@ describe("applyFingerprintMigration", () => {
  * statements directly against a raw bun:sqlite connection (bypassing
  * LifecycleStore, whose constructor would otherwise upgrade straight past
  * v2 to whatever the ladder's current head is) and inserts one pre-existing
- * `runs` row. Reopening it through LifecycleStore then exercises the real
- * v2 -> v3 migration step on open. Caller must `rmSync(dir, ...)` when done.
+ * `runs` row PLUS an `occurrences` row and a `finding_events` row that hold
+ * live foreign-key references to it (and to a `findings` row, to satisfy
+ * their own `finding_id` FK). This is the exact shape that makes `DROP
+ * TABLE runs` fail under `foreign_keys = ON` — a run row with no
+ * FK-referencing children would rebuild cleanly even if the migrate() FK
+ * toggle were removed, silently passing a migration test that isn't
+ * actually exercising the mechanism it claims to guard.
+ * Reopening the DB through LifecycleStore then exercises the real v2 -> v3
+ * migration step on open. Caller must `rmSync(dir, ...)` when done.
  */
-function openV2FixtureWithOneRun(): { store: LifecycleStore; dir: string } {
+function openV2FixtureWithOneRun(): {
+	store: LifecycleStore;
+	dir: string;
+	runId: number;
+	findingId: number;
+} {
 	const dir = mkdtempSync(join(tmpdir(), "alperf-migrations-v3-"));
 	const dbPath = join(dir, "lifecycle.sqlite");
 	const v2 = new Database(dbPath, { create: true });
@@ -473,14 +485,38 @@ function openV2FixtureWithOneRun(): { store: LifecycleStore; dir: string } {
 		`INSERT INTO runs (tenant, stream, profile_id, capture_kind, capture_time, version_stamp, incomplete, exercised_apps, created_at)
 		 VALUES ('t', 'nightly', 'existing-profile', 'sampling', '2026-07-01T00:00:00.000Z', '', 0, '[]', '2026-07-01T00:00:00.000Z')`,
 	);
+	const runId = v2
+		.query<{ id: number }, []>(
+			"SELECT id FROM runs WHERE profile_id = 'existing-profile'",
+		)
+		.get()?.id as number;
+	v2.run(
+		`INSERT INTO findings (tenant, fingerprint, algo_version, state, source, pattern_id, title, severity, first_seen_at, last_seen_at, last_event_at)
+		 VALUES ('t', 'pattern:existingfinding01', 1, 'open', 'pattern', 'x', 'x', 'warning', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+	);
+	const findingId = v2
+		.query<{ id: number }, []>(
+			"SELECT id FROM findings WHERE fingerprint = 'pattern:existingfinding01'",
+		)
+		.get()?.id as number;
+	v2.run(
+		`INSERT INTO occurrences (finding_id, run_id, capture_time, severity)
+		 VALUES (?, ?, '2026-07-01T00:00:00.000Z', 'warning')`,
+		[findingId, runId],
+	);
+	v2.run(
+		`INSERT INTO finding_events (finding_id, run_id, event, from_state, to_state, at)
+		 VALUES (?, ?, 'first-seen', NULL, 'open', '2026-07-01T00:00:00.000Z')`,
+		[findingId, runId],
+	);
 	v2.close();
 	const store = new LifecycleStore(dbPath); // runs the real ladder from user_version 2 onward
-	return { store, dir };
+	return { store, dir, runId, findingId };
 }
 
 describe("schema v3 (telemetry capture kind)", () => {
-	it("v3 accepts telemetry capture kind; v2 data survives the runs-table rebuild", () => {
-		const { store, dir } = openV2FixtureWithOneRun();
+	it("v3 accepts telemetry capture kind; v2 data (including FK-child rows) survives the runs-table rebuild", () => {
+		const { store, dir, runId, findingId } = openV2FixtureWithOneRun();
 		try {
 			const rec = store.recordRun({
 				tenant: "t",
@@ -499,6 +535,45 @@ describe("schema v3 (telemetry capture kind)", () => {
 			expect(preExisting?.captureKind).toBe("sampling");
 			expect(preExisting?.stream).toBe("nightly");
 			expect(preExisting?.captureTime).toBe("2026-07-01T00:00:00.000Z");
+			// the rebuild preserves ids (explicit id copy + carried-over
+			// AUTOINCREMENT sequence), so the FK-child rows below can still be
+			// found by the same run_id/finding_id captured before migration.
+			expect(preExisting?.id).toBe(runId);
+
+			// The occurrences/finding_events rows that held live FK references
+			// to this run before the rebuild must still resolve to it — this is
+			// the exact mechanism the migrate() foreign_keys toggle protects.
+			// Without that toggle, DROP TABLE runs throws while these rows are
+			// still live, so this assertion fails loudly if the toggle is ever
+			// removed (a fixture with no FK-referencing children would not).
+			const occurrence = store.db
+				.query<{ finding_id: number; run_id: number }, [number, number]>(
+					"SELECT finding_id, run_id FROM occurrences WHERE finding_id = ? AND run_id = ?",
+				)
+				.get(findingId, runId);
+			expect(occurrence).toEqual({ finding_id: findingId, run_id: runId });
+
+			const event = store.db
+				.query<{ event: string; run_id: number | null }, [number]>(
+					"SELECT event, run_id FROM finding_events WHERE finding_id = ?",
+				)
+				.get(findingId);
+			expect(event).toEqual({ event: "first-seen", run_id: runId });
+
+			// Both children's run_id still joins to a live runs row (not
+			// dangling) — the direct DB-level confirmation that the rebuild
+			// didn't orphan them.
+			const joined = store.db
+				.query<{ n: number }, [number]>(
+					`SELECT count(*) AS n FROM occurrences o
+					 JOIN runs r ON r.id = o.run_id
+					 WHERE o.run_id = ?`,
+				)
+				.get(runId);
+			expect(joined?.n).toBe(1);
+
+			// No dangling foreign keys anywhere in the store after the rebuild.
+			expect(store.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 		} finally {
 			store.close();
 			rmSync(dir, { recursive: true, force: true });
