@@ -231,22 +231,57 @@ describe("responsibility 5: stub AnalysisResult", () => {
 		expect(parsed.result.patterns[1]?.id).toBe("telemetry-rt0018");
 	});
 
-	test("one hotspot per distinct app, functionName '<telemetry>', appName set, zero times", () => {
+	// Plan amendment (Task 3, docs/superpowers/plans/2026-07-11-telemetry-ingest.md
+	// Task 2 stub rules): one hotspot PER SIGNAL carrying the signal's REAL
+	// routine identity, not a deduped "<telemetry>" placeholder — the
+	// placeholder never matched a real signal's involvedMethods string in
+	// evaluate.ts's collectFindings method-index lookup, so every telemetry
+	// finding's stored appId ended up "" and absence gating (D3) broke.
+	test("one hotspot per signal, carrying its real routine identity, zero times", () => {
 		const doc = batch([
-			signal({ appId: "app-a", appName: "App A" }),
-			signal({ appId: "app-a", appName: "App A" }),
-			signal({ appId: "app-b", appName: "App B" }),
+			signal({
+				appId: "app-a",
+				appName: "App A",
+				methodName: "Method1",
+				objectType: "Codeunit",
+				objectId: 100,
+			}),
+			signal({
+				appId: "app-a",
+				appName: "App A",
+				methodName: "Method2",
+				objectType: "Codeunit",
+				objectId: 200,
+			}),
+			signal({
+				appId: "app-b",
+				appName: "App B",
+				methodName: "Method3",
+				objectType: "Table",
+				objectId: 300,
+			}),
 		]);
 		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
-		expect(parsed.result.hotspots).toHaveLength(2);
+		expect(parsed.result.hotspots).toHaveLength(3); // one per signal, not deduped by app
 		for (const h of parsed.result.hotspots) {
-			expect(h.functionName).toBe("<telemetry>");
 			expect(h.selfTime).toBe(0);
 			expect(h.totalTime).toBe(0);
 			expect(h.hitCount).toBe(0);
 			expect(h.appName).not.toBe("");
 		}
-		const appNames = parsed.result.hotspots.map((h) => h.appName).sort();
+		expect(parsed.result.hotspots[0]?.functionName).toBe("Method1");
+		expect(parsed.result.hotspots[0]?.objectType).toBe("Codeunit");
+		expect(parsed.result.hotspots[0]?.objectId).toBe(100);
+		expect(parsed.result.hotspots[0]?.appId).toBe("app-a");
+		expect(parsed.result.hotspots[1]?.functionName).toBe("Method2");
+		expect(parsed.result.hotspots[2]?.functionName).toBe("Method3");
+		expect(parsed.result.hotspots[2]?.appId).toBe("app-b");
+
+		// Exercised-apps guarantee (D3) is unaffected: distinct apps still all
+		// appear — exercisedAppsOf (evaluate.ts) dedupes by appId itself.
+		const appNames = [
+			...new Set(parsed.result.hotspots.map((h) => h.appName)),
+		].sort();
 		expect(appNames).toEqual(["App A", "App B"]);
 	});
 

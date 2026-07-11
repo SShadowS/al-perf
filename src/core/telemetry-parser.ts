@@ -13,7 +13,6 @@ import {
 	formatFingerprint,
 } from "../lifecycle/fingerprint.js";
 import type { AnalysisResult } from "../output/types.js";
-import { normalizeAppGuid } from "../semantic/identity.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern, PatternSeverity } from "../types/patterns.js";
 import {
@@ -196,42 +195,45 @@ function severityFor(
 // ---------------------------------------------------------------------------
 
 /**
- * One hotspot per distinct app in the batch, so `exercisedAppsOf`
- * (lifecycle/evaluate.ts) marks every app this telemetry batch touched as
- * "exercised" this run. Deduped by normalized appId — not appName — because
- * `appWasExercised` checks `row.appId` FIRST when a pre-existing finding
- * carries one (the common case for profile-sourced findings): an appId-less
- * stub would leave `exercised.ids` permanently empty for telemetry-only runs,
- * so those findings would count spurious absences even though the batch did
- * cover their app. appName is carried alongside for the appId-less fallback
- * path (`exercised.names`).
+ * One hotspot PER SIGNAL, carrying the signal's REAL routine identity
+ * (functionName = methodName, objectType, objectId) rather than a deduped
+ * placeholder — plan amendment (2026-07-11-telemetry-ingest.md, Task 2 stub
+ * rules), made in Task 3 once the absence-gating tests proved the
+ * placeholder broke D3. `collectFindings` (lifecycle/evaluate.ts) resolves a
+ * finding's appId by matching a pattern's `involvedMethods[0]` — the exact
+ * string `"${methodName} (${objectType} ${objectId})"` built below in the
+ * pattern loop — against the method index built from `result.hotspots`; a
+ * placeholder entry (`"<telemetry>"`/`""`/`0`) never matches a real signal's
+ * involvedMethods string, so every telemetry finding's stored appId ended up
+ * `""` and `appWasExercised`'s "unknown app = exercised" fallback (D7) made
+ * every finding accrue absence on every later batch regardless of which app
+ * it actually covered. Real per-signal identity fixes that lookup.
+ *
+ * This still satisfies the original exercised-apps role: `exercisedAppsOf`
+ * (evaluate.ts) dedupes by normalized appId itself, so the exercised set a
+ * run reports is unchanged whether these hotspots are deduped here or not —
+ * no dedup is done, matching "one hotspot per signal" literally.
  */
 function buildExercisedHotspots(
 	signals: readonly TelemetrySignal[],
 ): MethodBreakdown[] {
-	const seen = new Map<string, MethodBreakdown>();
-	for (const s of signals) {
-		const key = normalizeAppGuid(s.appId);
-		if (seen.has(key)) continue;
-		seen.set(key, {
-			functionName: "<telemetry>",
-			objectType: "",
-			objectName: "",
-			objectId: 0,
-			appName: s.appName ?? "",
-			appId: s.appId,
-			selfTime: 0,
-			selfTimePercent: 0,
-			totalTime: 0,
-			totalTimePercent: 0,
-			hitCount: 0,
-			calledBy: [],
-			calls: [],
-			costPerHit: 0,
-			efficiencyScore: 0,
-		});
-	}
-	return [...seen.values()];
+	return signals.map((s) => ({
+		functionName: s.methodName,
+		objectType: s.objectType,
+		objectName: s.objectName ?? "",
+		objectId: s.objectId,
+		appName: s.appName ?? "",
+		appId: s.appId,
+		selfTime: 0,
+		selfTimePercent: 0,
+		totalTime: 0,
+		totalTimePercent: 0,
+		hitCount: 0,
+		calledBy: [],
+		calls: [],
+		costPerHit: 0,
+		efficiencyScore: 0,
+	}));
 }
 
 // ---------------------------------------------------------------------------
