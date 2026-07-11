@@ -458,6 +458,33 @@ describe("loadLifecycleConfigFile", () => {
 					expect(patch?.telemetry?.tenantMap).toEqual({ [guid]: "acme" });
 				});
 			});
+
+			it("lowercases a mixed-case tenantMap value at load ('Continia-DO' -> 'continia-do')", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "mixed-case-tenant-code.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { tenantMap: { [guid]: "Continia-DO" } } }),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					expect(patch?.telemetry?.tenantMap).toEqual({ [guid]: "continia-do" });
+				});
+			});
+
+			it("preserves the lowercased tenantMap value through mergeLifecycleConfig", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "mixed-case-merge.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { tenantMap: { [guid]: "Continia-DO" } } }),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, patch ?? {});
+					expect(merged.telemetry.tenantMap[guid]).toBe("continia-do");
+				});
+			});
 		});
 
 		describe("unmappedTenantPolicy validation", () => {

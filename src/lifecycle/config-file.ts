@@ -182,7 +182,11 @@ function validateTelemetryBlock(
 					`${path}: telemetry.tenantMap["${key}"] value ${JSON.stringify(value)} is not a valid tenant code (must match ${TENANT_CODE_RE})`,
 				);
 			}
-			tenantMap[key] = value;
+			// Lowercased here — this loader is the sole authoring chokepoint for
+			// tenantMap, and nothing downstream normalizes. Without this, "Acme"
+			// in the file vs "acme" everywhere else silently splits one
+			// customer's history into two case-distinct SQLite tenants.
+			tenantMap[key] = value.toLowerCase();
 		}
 		result.tenantMap = tenantMap;
 	}

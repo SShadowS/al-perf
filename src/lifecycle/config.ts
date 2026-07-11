@@ -27,7 +27,7 @@ export interface LifecycleConfig {
 		maxSignalsPerBatch: number;
 		/** Per-signalId severity thresholds (ms) on maxDurationMs; "default" covers unknown signalIds. */
 		severity: Record<string, { warningMs: number; criticalMs: number }>;
-		/** Multi-tenant split (pull-telemetry --split-by-customer): AAD tenant GUID → al-perf tenant code. */
+		/** Multi-tenant split (pull-telemetry --split-by-customer): AAD tenant GUID → al-perf tenant code. Values are lowercased by the loader (config-file.ts) so a case-varying spelling never splits one customer's history across two SQLite tenants. */
 		tenantMap: Record<string, string>;
 		/** What to do with telemetry from AAD tenants absent from tenantMap: skip (default, loud) or bucket under the --tenant value. */
 		unmappedTenantPolicy: "skip" | "fleet";
