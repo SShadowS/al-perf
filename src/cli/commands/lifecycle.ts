@@ -12,6 +12,10 @@ import {
 } from "../../lifecycle/appinsights.js";
 import { rollupRoutineMetrics } from "../../lifecycle/baselines.js";
 import {
+	type CaptureTriggerReport,
+	processCaptureTriggers,
+} from "../../lifecycle/capture-triggers.js";
+import {
 	DEFAULT_LIFECYCLE_CONFIG,
 	type LifecycleConfig,
 } from "../../lifecycle/config.js";
@@ -302,63 +306,99 @@ export function createLifecycleCommand(): Command {
 
 	cmd
 		.command("sync")
-		.description("Apply sink trigger rules and drain the delivery outbox")
+		.description(
+			"Run the capture-request scan, apply sink trigger rules, and drain the delivery outbox",
+		)
 		.option(
 			"--config <path>",
 			"Sinks config file",
 			".al-perf/lifecycle.config.json",
 		)
-		.option("--dry-run", "Enqueue outbox rows but do not deliver")
+		.option(
+			"--dry-run",
+			"Scan and enqueue locally (capture requests + outbox), but do not deliver to sinks",
+		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action(async (opts: any) => {
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				const now = new Date().toISOString();
+				// Independent of any sink being configured: capture-request filing
+				// is local DB state, not delivery, so it must not depend on — or be
+				// blocked by — a missing/absent sinks config.
+				let captureRequests: CaptureTriggerReport = {
+					scanned: 0,
+					created: 0,
+					expired: 0,
+					skippedMaxPending: 0,
+				};
+				if (DEFAULT_LIFECYCLE_CONFIG.captureRequests.enabled) {
+					captureRequests = processCaptureTriggers(
+						store,
+						DEFAULT_LIFECYCLE_CONFIG,
+						now,
+					);
+				}
+
 				const config = loadSinksConfig(opts.config);
+				let triggers = { processed: 0, enqueued: 0, skippedMigration: 0 };
+				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
+				let deadLetters: Array<{
+					id: number;
+					kind: string;
+					dedupeKey: string;
+					attempts: number;
+					lastError: string | null;
+				}> = [];
+
 				if (!config) {
 					console.error(
-						`No sink config at ${opts.config}. Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
+						`No sink config at ${opts.config} — sink delivery skipped (capture-request scan still ran). Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
 					);
-					process.exitCode = 1;
-					return;
-				}
-				const triggers = processEventsForSinks(store, config);
-				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
-				const gh = config.sinks.github;
-				if (!opts.dryRun && gh?.enabled) {
-					const resolved = resolveGitHubConfig(gh);
-					const token = process.env[resolved.tokenEnv];
-					if (!token) {
-						console.error(
-							`sinks.github is enabled but the ${resolved.tokenEnv} environment variable is not set.`,
+				} else {
+					triggers = processEventsForSinks(store, config);
+					const gh = config.sinks.github;
+					if (!opts.dryRun && gh?.enabled) {
+						const resolved = resolveGitHubConfig(gh);
+						const token = process.env[resolved.tokenEnv];
+						if (!token) {
+							console.error(
+								`sinks.github is enabled but the ${resolved.tokenEnv} environment variable is not set.`,
+							);
+							process.exitCode = 1;
+							return;
+						}
+						drain = await drainOutbox(
+							store,
+							createGitHubSink({ repo: resolved.repo, token }),
+							{
+								minMillisBetweenCalls: resolved.minMillisBetweenCalls,
+								maxPerDrain: resolved.maxPerDrain,
+								collapseThreshold: resolved.collapseThreshold,
+							},
 						);
-						process.exitCode = 1;
-						return;
 					}
-					drain = await drainOutbox(
-						store,
-						createGitHubSink({ repo: resolved.repo, token }),
-						{
-							minMillisBetweenCalls: resolved.minMillisBetweenCalls,
-							maxPerDrain: resolved.maxPerDrain,
-							collapseThreshold: resolved.collapseThreshold,
-						},
-					);
+					// Operator observability for dead-lettered rows: lastError is
+					// operator-trusted local data, printed verbatim, but payload is
+					// NEVER surfaced — it may embed profile-derived (attacker-influenceable) text.
+					deadLetters = store.listDeadOutbox("github").map((row) => ({
+						id: row.id,
+						kind: row.kind,
+						dedupeKey: row.dedupeKey,
+						attempts: row.attempts,
+						lastError: row.lastError,
+					}));
 				}
-				// Operator observability for dead-lettered rows: lastError is
-				// operator-trusted local data, printed verbatim, but payload is
-				// NEVER surfaced — it may embed profile-derived (attacker-influenceable) text.
-				const deadLetters = store.listDeadOutbox("github").map((row) => ({
-					id: row.id,
-					kind: row.kind,
-					dedupeKey: row.dedupeKey,
-					attempts: row.attempts,
-					lastError: row.lastError,
-				}));
 				const summary = {
 					triggers,
 					drain,
 					dryRun: Boolean(opts.dryRun),
 					deadLetters,
+					captureRequests: {
+						created: captureRequests.created,
+						expired: captureRequests.expired,
+						skippedMaxPending: captureRequests.skippedMaxPending,
+					},
 				};
 				if (opts.format === "json") {
 					process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
@@ -370,6 +410,11 @@ export function createLifecycleCommand(): Command {
 						`Drain: ${drain.delivered} delivered, ${drain.retried} retried, ${drain.dead} dead, ` +
 						`${drain.collapsed} collapsed.${opts.dryRun ? " (dry run)" : ""}`,
 				);
+				if (captureRequests.created > 0 || captureRequests.expired > 0) {
+					console.log(
+						`Capture requests: ${captureRequests.created} created, ${captureRequests.expired} expired.`,
+					);
+				}
 				if (deadLetters.length > 0) {
 					console.log("Dead letters:");
 					for (const dl of deadLetters) {

@@ -28,6 +28,19 @@ export interface LifecycleConfig {
 		/** Per-signalId severity thresholds (ms) on maxDurationMs; "default" covers unknown signalIds. */
 		severity: Record<string, { warningMs: number; criticalMs: number }>;
 	};
+	/** Deep-capture request queue trigger thresholds (capture-requests plan). */
+	captureRequests: {
+		/** Master switch — `lifecycle sync` skips the scan entirely when false. */
+		enabled: boolean;
+		/** Minimum recorded occurrences on a candidate finding before it qualifies. */
+		minOccurrences: number;
+		/** Minimum finding severity before it qualifies. */
+		minSeverity: "critical" | "warning" | "info";
+		/** Request lifetime in days before `expireCaptureRequests` reaps it. */
+		ttlDays: number;
+		/** Per-tenant cap on ACTIVE (pending/claimed) requests — further candidates are skipped, not queued. */
+		maxPending: number;
+	};
 }
 
 export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
@@ -46,6 +59,13 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 			RT0005: { warningMs: 10_000, criticalMs: 60_000 },
 			default: { warningMs: 10_000, criticalMs: 60_000 },
 		},
+	},
+	captureRequests: {
+		enabled: true,
+		minOccurrences: 3,
+		minSeverity: "warning" as "critical" | "warning" | "info",
+		ttlDays: 14,
+		maxPending: 20,
 	},
 };
 
