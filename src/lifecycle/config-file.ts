@@ -50,6 +50,13 @@ export function mergeLifecycleConfig(
 /** D3: plain signal IDs, optionally suffixed with `@ClientType`. */
 const SEVERITY_KEY_RE = /^[A-Za-z0-9_]+(@[A-Za-z]+)?$/;
 const MIN_SEVERITY_VALUES = ["critical", "warning", "info"] as const;
+/**
+ * These pass SEVERITY_KEY_RE but a later `severity[key] = ...` bracket
+ * assignment on a plain object literal would hit the special `__proto__`
+ * setter (or shadow Object.prototype members) instead of storing an own
+ * property — the entry silently vanishes rather than failing closed.
+ */
+const RESERVED_SEVERITY_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function isPositiveInteger(v: unknown): v is number {
 	return typeof v === "number" && Number.isInteger(v) && v > 0;
@@ -92,6 +99,9 @@ function validateTelemetryBlock(
 				throw new Error(
 					`${path}: telemetry.severity key "${key}" is invalid (must match ${SEVERITY_KEY_RE})`,
 				);
+			}
+			if (RESERVED_SEVERITY_KEYS.has(key)) {
+				throw new Error(`${path}: telemetry.severity key "${key}" is reserved and not allowed`);
 			}
 			if (typeof value !== "object" || value === null || Array.isArray(value)) {
 				throw new Error(

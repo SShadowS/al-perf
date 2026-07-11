@@ -80,6 +80,32 @@ describe("mergeLifecycleConfig", () => {
 		expect(merged).toEqual(DEFAULT_LIFECYCLE_CONFIG);
 	});
 
+	it("adds a brand-new severity key alongside the existing default keys", () => {
+		const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, {
+			telemetry: {
+				severity: {
+					"RT0018@Background": { warningMs: 20_000, criticalMs: 90_000 },
+				},
+			},
+		});
+		expect(merged.telemetry.severity["RT0018@Background"]).toEqual({
+			warningMs: 20_000,
+			criticalMs: 90_000,
+		});
+		expect(merged.telemetry.severity.RT0018).toEqual(
+			DEFAULT_LIFECYCLE_CONFIG.telemetry.severity.RT0018,
+		);
+		expect(merged.telemetry.severity.RT0005).toEqual(
+			DEFAULT_LIFECYCLE_CONFIG.telemetry.severity.RT0005,
+		);
+		expect(merged.telemetry.severity.default).toEqual(
+			DEFAULT_LIFECYCLE_CONFIG.telemetry.severity.default,
+		);
+		expect(Object.keys(merged.telemetry.severity).sort()).toEqual(
+			["RT0005", "RT0018", "RT0018@Background", "default"].sort(),
+		);
+	});
+
 	it("never mutates the base config", () => {
 		const before = JSON.parse(JSON.stringify(DEFAULT_LIFECYCLE_CONFIG));
 		mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, {
@@ -173,6 +199,25 @@ describe("loadLifecycleConfigFile", () => {
 			});
 		});
 
+		for (const reservedKey of ["__proto__", "constructor", "prototype"]) {
+			it(`rejects the reserved severity key "${reservedKey}", naming it`, () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "reserved-key.json");
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: {
+								severity: { [reservedKey]: { warningMs: 1, criticalMs: 2 } },
+							},
+						}),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(
+						new RegExp(`${reservedKey}.*reserved`),
+					);
+				});
+			});
+		}
+
 		it("accepts the @clientType severity key convention", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "client-type-key.json");
@@ -214,6 +259,33 @@ describe("loadLifecycleConfigFile", () => {
 					JSON.stringify({
 						telemetry: { severity: { RT0018: { warningMs: 1, criticalMs: -5 } } },
 					}),
+				);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(/RT0018/);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(/criticalMs/);
+			});
+		});
+
+		it("rejects an Infinity warningMs (1e400 overflows to Infinity on JSON.parse)", () => {
+			withTmpDir("alperf-lc-cfg-", (dir) => {
+				const file = join(dir, "infinite-warning.json");
+				// JSON.stringify can't produce this literal (Infinity isn't valid
+				// JSON), so the raw text is written directly: 1e400 is syntactically
+				// a valid JSON number but overflows f64 range, parsing to Infinity.
+				writeFileSync(
+					file,
+					'{"telemetry":{"severity":{"RT0018":{"warningMs":1e400,"criticalMs":2}}}}',
+				);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(/RT0018/);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(/warningMs/);
+			});
+		});
+
+		it("rejects an Infinity criticalMs (1e400 overflows to Infinity on JSON.parse)", () => {
+			withTmpDir("alperf-lc-cfg-", (dir) => {
+				const file = join(dir, "infinite-critical.json");
+				writeFileSync(
+					file,
+					'{"telemetry":{"severity":{"RT0018":{"warningMs":1,"criticalMs":1e400}}}}',
 				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/RT0018/);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/criticalMs/);
