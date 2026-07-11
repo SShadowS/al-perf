@@ -297,6 +297,23 @@ export function evaluateRun(
 			};
 		}
 
+		// Deep-capture request fulfillment (capture-requests plan): a
+		// non-telemetry, complete run whose method index covers a
+		// pending/claimed request's routine closes that request out.
+		// Telemetry-kind runs never fulfill — they're the coarse signal a
+		// capture request exists to upgrade FROM, not evidence of a capture.
+		// Incomplete captures can't be trusted as proof the routine ran.
+		if (run.captureKind !== "telemetry" && !incomplete) {
+			const keys = new Set<string>();
+			for (const m of index.values()) keys.add(routineKeyFor(m));
+			store.fulfillMatchingCaptureRequests(
+				run.tenant,
+				keys,
+				run.profileId,
+				run.captureTime,
+			);
+		}
+
 		if (!incomplete) {
 			recordRoutineMetrics(
 				store,
