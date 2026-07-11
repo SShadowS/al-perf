@@ -332,6 +332,39 @@ describe("lifecycle sync — security boundary", () => {
 		store.close();
 	});
 
+	it("telemetry-only config file (no sinks key, per telemetry-recipe §10/§11): capture-request scan still runs, exits 0, delivery gracefully skipped", async () => {
+		seedQualifyingTelemetryFinding(dbPath);
+		// Exactly the file shape telemetry-recipe.md §10/§11 documents as legal
+		// ("every block optional") — a config file that only tunes telemetry
+		// severity, with no `sinks` key at all.
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					severity: {
+						"RT0018@Background": { warningMs: 300000, criticalMs: 1800000 },
+					},
+				},
+			}),
+		);
+
+		await runSync(["sync", "-f", "json"]);
+
+		expect(fetchCalls).toHaveLength(0);
+		expect(process.exitCode ?? 0).toBe(0);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const summary = JSON.parse(output);
+		expect(summary.captureRequests.created).toBe(1);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("sink delivery skipped");
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
+		store.close();
+	});
+
 	it("--dry-run still scans and creates a capture request (local DB state, not delivery)", async () => {
 		seedQualifyingTelemetryFinding(dbPath);
 		writeFileSync(
@@ -363,11 +396,7 @@ describe("lifecycle sync — security boundary", () => {
 		});
 		writeFileSync(
 			configPath,
-			// sinks: {} — loadSinksConfig (a separate reader of this same file,
-			// see config-file.ts's docstring) requires the "sinks" key to exist
-			// at all; an empty block means "no delivery configured", distinct
-			// from the file not existing.
-			JSON.stringify({ captureRequests: { maxPending: 1 }, sinks: {} }),
+			JSON.stringify({ captureRequests: { maxPending: 1 } }),
 		);
 
 		await runSync(["sync", "-f", "json"]);

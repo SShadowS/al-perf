@@ -184,6 +184,13 @@ onto this table by key (§11); a file containing only `{"telemetry":
 {"severity": {...}}}` leaves `maxSignalsPerBatch` and every untouched
 severity key at its default.
 
+Web ingest caveat: with `AL_PERF_LIFECYCLE` unset or not `"1"`, the ingest
+gate deliberately never reads `AL_PERF_LIFECYCLE_CONFIG` at all — a broken
+config file must not fail an ingest that never evaluates anything — so file
+overrides (including `maxSignalsPerBatch`) don't reach web-side batch
+validation in that mode; the code defaults above apply regardless of what
+the file says.
+
 ## 6. The batch JSON contract — for hand-rolled exporters
 
 `pull-telemetry` is one adapter. Anything that can produce this shape can
@@ -212,7 +219,8 @@ are ignored, so additive fields never require a version bump, but
 			"methodName": "PostSalesLine",
 			"count": 3,
 			"maxDurationMs": 15234,
-			"avgDurationMs": 9871.5
+			"avgDurationMs": 9871.5,
+			"clientType": "Background"
 		}
 	]
 }
@@ -228,6 +236,16 @@ not just the bad row):
   `methodName`. `objectId` must be an integer. `count` and `maxDurationMs`
   must be non-negative finite numbers.
 - `appName`, `objectName`, `avgDurationMs` are optional.
+- `clientType` is optional; when present it must match `^[A-Za-z]+$`
+  (letters only — no spaces, digits, or punctuation). Like every other rule
+  here, a single invalid value rejects the WHOLE batch, not just that row —
+  an exporter that emits `"Web Service"` (a space) gets the entire batch
+  bounced, not one silently dropped signal. See §9 for what `clientType`
+  does once accepted: pre-aggregating per (app, object, method, clientType)
+  on your side is legal — the parser merges rows for the SAME routine across
+  different client types into one finding server-side (max severity, summed
+  counts, one evidence line per client type), so you don't need to pre-merge
+  them yourself.
 - Each signal is one aggregated row — pre-aggregate per (app, object,
   method) on your side; there is no call tree here, only routine-level
   counts and durations.
