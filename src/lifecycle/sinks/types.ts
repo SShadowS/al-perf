@@ -37,6 +37,7 @@ export type SinkDeliveryKind =
 	| "create-epic"
 	| "comment-regressed"
 	| "comment-resolved"
+	| "comment-recurred"
 	| "close-issue";
 
 export interface SinkDeliveryPayload {

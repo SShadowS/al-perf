@@ -270,6 +270,28 @@ describe("processEventsForSinks — comments and close", () => {
 		store.close();
 	});
 
+	it("filed-fresh with an existing mapping enqueues comment-recurred (recurrence after human close)", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		withMapping(store);
+		seedEvent(store, id, "filed-fresh");
+		const [event] = store.listUnprocessedEvents();
+		expect(processEventsForSinks(store, config(), NOW).enqueued).toBe(1);
+		const rows = store.listPendingOutbox("github", "comment-recurred");
+		expect(rows).toHaveLength(1);
+		expect(rows[0].dedupeKey).toBe(`github:comment-recurred:${event.id}`);
+		store.close();
+	});
+
+	it("filed-fresh WITHOUT a mapping enqueues nothing when autoFile is off", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedEvent(store, id, "filed-fresh");
+		const report = processEventsForSinks(store, config(), NOW);
+		expect(report.enqueued).toBe(0);
+		store.close();
+	});
+
 	it("viaMigration events are skipped (mass-transition guard)", () => {
 		const store = new LifecycleStore(":memory:");
 		const id = seedFinding(store);

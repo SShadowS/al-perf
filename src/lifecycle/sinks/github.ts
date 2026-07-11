@@ -123,6 +123,16 @@ export function renderRegressedComment(f: SinkFindingContext): string {
 	return lines.join("\n");
 }
 
+export function renderRecurredComment(f: SinkFindingContext): string {
+	const lines = [
+		`Finding recurred after this issue was closed — now seen ${f.occurrenceCount}x (last ${escapeInline(f.lastSeenAt)}).`,
+		`Severity: ${escapeInline(f.severity)}.`,
+	];
+	if (f.evidence) lines.push("", fenceBlock(f.evidence));
+	lines.push("", `Fingerprint: ${escapeInline(f.fingerprint)}`);
+	return lines.join("\n");
+}
+
 export function renderResolvedComment(f: SinkFindingContext): string {
 	return [
 		`Not observed since ${escapeInline(f.resolvedAt ?? f.lastSeenAt)} (absent for the configured number of compatible runs).`,
@@ -278,12 +288,15 @@ export function createGitHubSink(options: GitHubAdapterOptions): SinkAdapter {
 
 			if (
 				delivery.kind === "comment-regressed" ||
-				delivery.kind === "comment-resolved"
+				delivery.kind === "comment-resolved" ||
+				delivery.kind === "comment-recurred"
 			) {
 				const body =
 					delivery.kind === "comment-regressed"
 						? renderRegressedComment(f)
-						: renderResolvedComment(f);
+						: delivery.kind === "comment-recurred"
+							? renderRecurredComment(f)
+							: renderResolvedComment(f);
 				const res = await call(
 					"POST",
 					`/repos/${options.repo}/issues/${mapping.externalId}/comments`,

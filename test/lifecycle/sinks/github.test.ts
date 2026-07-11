@@ -250,6 +250,40 @@ describe("GitHub adapter contract (mocked HTTP)", () => {
 		expect(JSON.parse(String(close.calls[0].init.body)).state).toBe("closed");
 	});
 
+	it("comment-recurred: POSTs to the mapped issue's comments with a body noting recurrence after close; escaping applies", async () => {
+		const map = memoryIssueMap();
+		map.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: "pattern:abc123def4567890",
+			externalId: "42",
+			createdAt: "2026-07-09T00:00:00Z",
+		});
+		const recurred = ctx({
+			title: "[x](y) recurred finding",
+			lastSeenAt: "2026-07-10T00:00:00Z",
+			occurrenceCount: 6,
+		});
+		const { impl, calls } = mockFetch(201, { id: 1 });
+		const sink = createGitHubSink({
+			repo: "o/r",
+			token: "t0k",
+			fetchImpl: impl,
+		});
+		const res = await sink.deliver(delivery("comment-recurred", recurred), map);
+		expect(res.ok).toBe(true);
+		expect(calls[0].url).toBe(
+			"https://api.github.com/repos/o/r/issues/42/comments",
+		);
+		const body = JSON.parse(String(calls[0].init.body)).body as string;
+		expect(body.toLowerCase()).toContain("recurred");
+		expect(body.toLowerCase()).toContain("closed");
+		expect(body).toContain("critical"); // severity
+		expect(body).toContain("6"); // occurrence count
+		expect(body).toContain("2026-07-10"); // lastSeenAt
+		expect(body).not.toContain("[x](y)");
+	});
+
 	it("classifies retryability: 500/429/rate-limited-403 retryable, 422 not, network throw retryable", async () => {
 		const map = memoryIssueMap();
 		const attempt = async (
