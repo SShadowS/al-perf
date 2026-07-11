@@ -444,6 +444,210 @@ describe("hardening: numeric validation", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// Responsibility 7: clientType severity ladder (D3) and same-fingerprint
+// merge (D4). Task 3.
+// ---------------------------------------------------------------------------
+
+describe("responsibility 7: clientType validation", () => {
+	test("accepts a valid clientType", () => {
+		const doc = batch([signal({ clientType: "Background" })]);
+		expect(() =>
+			parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG),
+		).not.toThrow();
+	});
+
+	test("rejects an empty clientType, naming the field and index", () => {
+		const doc = batch([signal({ clientType: "" })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*clientType/,
+		);
+	});
+
+	test("rejects a clientType containing digits/punctuation", () => {
+		const doc = batch([signal({ clientType: "Web Client-2" })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*clientType/,
+		);
+	});
+
+	// clientType enters severity-key composition (`${signalId}@${clientType}`)
+	// — same injection posture as signalId. "__proto__" fails the letters-only
+	// regex outright (it contains underscores), so it never reaches the
+	// composition step.
+	test("rejects clientType '__proto__' (fails the regex, same injection posture as signalId)", () => {
+		const doc = batch([signal({ clientType: "__proto__" })]);
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signal\[0\].*clientType/,
+		);
+	});
+
+	test("a batch without clientType on any signal is unaffected (optional field)", () => {
+		const doc = batch([signal()]);
+		expect(() =>
+			parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG),
+		).not.toThrow();
+	});
+});
+
+describe("responsibility 7: clientType severity ladder (D3)", () => {
+	test("the signalId@clientType composite rung is used when present, else the plain signalId rung", () => {
+		const cfg: LifecycleConfig = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			telemetry: {
+				...DEFAULT_LIFECYCLE_CONFIG.telemetry,
+				severity: {
+					...DEFAULT_LIFECYCLE_CONFIG.telemetry.severity,
+					// Tighter than the plain RT0018 rung (warningMs:10000, criticalMs:30000).
+					"RT0018@Background": { warningMs: 5_000, criticalMs: 15_000 },
+				},
+			},
+		};
+		// Different objectId => different fingerprint => no merge, so each
+		// pattern's severity reflects only its own signal's rung.
+		const doc = batch([
+			signal({
+				signalId: "RT0018",
+				clientType: "Background",
+				objectId: 1,
+				maxDurationMs: 20_000,
+			}),
+			signal({
+				signalId: "RT0018",
+				clientType: "WebClient",
+				objectId: 2,
+				maxDurationMs: 20_000,
+			}),
+		]);
+		const parsed = parseTelemetryBatch(doc, cfg);
+		expect(parsed.result.patterns).toHaveLength(2);
+		const bg = parsed.result.patterns.find((p) =>
+			p.involvedMethods[0]?.includes("Codeunit 1"),
+		);
+		const web = parsed.result.patterns.find((p) =>
+			p.involvedMethods[0]?.includes("Codeunit 2"),
+		);
+		// Background: 20000 >= composite criticalMs (15000) => critical.
+		expect(bg?.severity).toBe("critical");
+		// WebClient: no composite key exists for it => falls to plain RT0018
+		// rung; 20000 < criticalMs (30000) but >= warningMs (10000) => warning.
+		expect(web?.severity).toBe("warning");
+	});
+
+	test("an unrecognized clientType simply falls through to the signalId rung", () => {
+		const doc = batch([
+			signal({
+				signalId: "RT0018",
+				clientType: "SomeUnknownClientType",
+				maxDurationMs: 10_000,
+			}),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		// Plain RT0018 rung: warningMs=10000 => warning.
+		expect(parsed.result.patterns[0]?.severity).toBe("warning");
+	});
+});
+
+describe("responsibility 7: same-fingerprint merge (D4)", () => {
+	test("two signals for the same routine, different clientType, merge into ONE pattern", () => {
+		const doc = batch([
+			signal({
+				signalId: "RT0018",
+				clientType: "Background",
+				count: 233,
+				maxDurationMs: 76_934,
+				avgDurationMs: 50_000,
+			}),
+			signal({
+				signalId: "RT0018",
+				clientType: "WebClient",
+				count: 12,
+				maxDurationMs: 15_200,
+				avgDurationMs: 10_000,
+			}),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1);
+		const p = parsed.result.patterns[0];
+		// max severity: Background (76934ms) is critical (>=30000), WebClient
+		// (15200ms) is warning (>=10000) => merged severity is critical.
+		expect(p?.severity).toBe("critical");
+		// summed count
+		expect(p?.title).toContain("× 245");
+		expect(p?.evidence).toContain("245 occurrence(s)");
+		// max maxDurationMs across constituents
+		expect(p?.title).toContain("max 76934ms");
+		expect(p?.impact).toBe(76_934_000);
+		// evidence: one line per constituent, clientType-labeled
+		expect(p?.evidence).toContain("Background: 233 × max 76934ms");
+		expect(p?.evidence).toContain("WebClient: 12 × max 15200ms");
+		// weighted-mean avgDurationMs: (50000*233 + 10000*12) / 245
+		const expectedAvg = (50_000 * 233 + 10_000 * 12) / 245;
+		expect(p?.evidence).toContain(`avg ${expectedAvg}ms`);
+		// window unchanged
+		expect(p?.evidence).toContain(
+			"in window 2026-07-11T00:00:00.000Z..2026-07-11T01:00:00.000Z",
+		);
+		// title/involvedMethods from the merged (shared-by-construction) identity
+		expect(p?.involvedMethods).toEqual(["ProcessLine (Codeunit 50100)"]);
+	});
+
+	test("evidence uses 'unspecified' for a constituent with no clientType", () => {
+		const doc = batch([
+			signal({ clientType: "Background", count: 5, maxDurationMs: 20_000 }),
+			signal({ clientType: undefined, count: 2, maxDurationMs: 8_000 }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1);
+		expect(parsed.result.patterns[0]?.evidence).toContain(
+			"unspecified: 2 × max 8000ms",
+		);
+	});
+
+	test("weighted-mean avgDurationMs is omitted (n/a) when any constituent lacks avgDurationMs", () => {
+		const doc = batch([
+			signal({ clientType: "Background", avgDurationMs: 5_000 }),
+			signal({ clientType: "WebClient", avgDurationMs: undefined }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1);
+		expect(parsed.result.patterns[0]?.evidence).toContain("avg n/ams");
+	});
+
+	test("fingerprint of the merged pattern never depends on clientType", () => {
+		const withBg = signal({ clientType: "Background" });
+		const noClientType = signal({ clientType: undefined });
+		const fpBg = parseTelemetryBatch(batch([withBg]), DEFAULT_LIFECYCLE_CONFIG)
+			.result.patterns[0]?.fingerprint;
+		const fpNone = parseTelemetryBatch(
+			batch([noClientType]),
+			DEFAULT_LIFECYCLE_CONFIG,
+		).result.patterns[0]?.fingerprint;
+		expect(fpBg).toBe(fpNone);
+	});
+
+	test("hotspots still carry one entry per constituent signal after merge (harmless duplicates)", () => {
+		const doc = batch([
+			signal({ clientType: "Background" }),
+			signal({ clientType: "WebClient" }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1); // merged
+		expect(parsed.result.hotspots).toHaveLength(2); // NOT deduped
+	});
+
+	test("three signals for the same routine with distinct clientTypes still merge into ONE pattern", () => {
+		const doc = batch([
+			signal({ clientType: "Background", count: 1 }),
+			signal({ clientType: "WebClient", count: 2 }),
+			signal({ clientType: "WebServiceAPI", count: 3 }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1);
+		expect(parsed.result.patterns[0]?.title).toContain("× 6");
+	});
+});
+
 describe("hardening: non-empty identity strings", () => {
 	test("rejects an empty signalId", () => {
 		const doc = batch([signal({ signalId: "" })]);

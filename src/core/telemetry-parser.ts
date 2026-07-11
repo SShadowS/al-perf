@@ -154,6 +154,27 @@ function optionalNonNegativeNumber(
 	return v;
 }
 
+/**
+ * clientType enters severity-key composition (`${signalId}@${clientType}`,
+ * config-file.ts D3) — same injection posture as signalId. Letters-only by
+ * construction: rejects "", whitespace, digits/punctuation, and "__proto__"
+ * (underscores are not letters) without a separate reserved-key check.
+ */
+const CLIENT_TYPE_RE = /^[A-Za-z]+$/;
+
+function optionalClientType(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): string | undefined {
+	const v = obj[field];
+	if (v === undefined) return undefined;
+	if (typeof v !== "string" || !CLIENT_TYPE_RE.test(v)) {
+		throw new Error(`telemetry-batch ${context}: invalid field '${field}'`);
+	}
+	return v;
+}
+
 function validateSignal(raw: unknown, index: number): TelemetrySignal {
 	const context = `signal[${index}]`;
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -171,6 +192,7 @@ function validateSignal(raw: unknown, index: number): TelemetrySignal {
 		count: requireNonNegativeNumber(obj, "count", context),
 		maxDurationMs: requireNonNegativeNumber(obj, "maxDurationMs", context),
 		avgDurationMs: optionalNonNegativeNumber(obj, "avgDurationMs", context),
+		clientType: optionalClientType(obj, "clientType", context),
 	};
 }
 
@@ -178,18 +200,32 @@ function validateSignal(raw: unknown, index: number): TelemetrySignal {
 // Severity
 // ---------------------------------------------------------------------------
 
+/**
+ * D3 severity ladder: `${signalId}@${clientType}` → signalId → default.
+ * Object.hasOwn at every rung — guards against signalId/clientType values
+ * like "__proto__" or "constructor" resolving through the prototype chain to
+ * an inherited object (thresholds.criticalMs/warningMs then undefined, every
+ * comparison false, severity silently "info" instead of falling through to
+ * the next rung). An unrecognized clientType simply has no composite-key
+ * entry and falls through to the plain signalId rung.
+ */
 function severityFor(
 	signalId: string,
+	clientType: string | undefined,
 	maxDurationMs: number,
 	config: LifecycleConfig,
 ): PatternSeverity {
-	// Object.hasOwn guards against signalId values like "__proto__" or
-	// "constructor" resolving through the prototype chain to an inherited
-	// object (thresholds.criticalMs/warningMs then undefined, every comparison
-	// false, severity silently "info" instead of the "default" thresholds).
-	const thresholds = Object.hasOwn(config.telemetry.severity, signalId)
-		? config.telemetry.severity[signalId]
-		: config.telemetry.severity.default;
+	const severity = config.telemetry.severity;
+	let thresholds = severity.default;
+	if (Object.hasOwn(severity, signalId)) {
+		thresholds = severity[signalId];
+	}
+	if (clientType !== undefined) {
+		const compositeKey = `${signalId}@${clientType}`;
+		if (Object.hasOwn(severity, compositeKey)) {
+			thresholds = severity[compositeKey];
+		}
+	}
 	if (maxDurationMs >= thresholds.criticalMs) return "critical";
 	if (maxDurationMs >= thresholds.warningMs) return "warning";
 	return "info";
@@ -239,6 +275,109 @@ function buildExercisedHotspots(
 		costPerHit: 0,
 		efficiencyScore: 0,
 	}));
+}
+
+// ---------------------------------------------------------------------------
+// Pattern construction + same-fingerprint merge (D4)
+//
+// Two signals mint the SAME `telemetry:` fingerprint exactly when they share
+// the same (signalId, appId, objectType, objectId, methodName) routine
+// identity — computeTelemetryFingerprint never takes clientType as an input,
+// so clientType can never split or collide an identity. That is what makes
+// "group signals by fingerprint" the correct operationalization of "same
+// routine, different clientType" (D4): a group of size 1 is the untouched
+// pre-Task-3 shape (see the pinned contract test), a group of size >1 is a
+// same-fingerprint merge.
+// ---------------------------------------------------------------------------
+
+const SEVERITY_RANK: Record<PatternSeverity, number> = {
+	info: 0,
+	warning: 1,
+	critical: 2,
+};
+
+interface SignalSeverity {
+	signal: TelemetrySignal;
+	severity: PatternSeverity;
+	fingerprint: string;
+}
+
+/** Group size 1 — byte-identical to the pre-clientType pattern shape. */
+function buildSinglePattern(
+	item: SignalSeverity,
+	windowStart: string,
+	windowEnd: string,
+): DetectedPattern {
+	const { signal: s, severity, fingerprint } = item;
+	const title = `${s.signalId}: ${s.methodName} (${s.objectType} ${s.objectId}) slow — max ${s.maxDurationMs}ms × ${s.count}`;
+	return {
+		id: `telemetry-${s.signalId.toLowerCase()}`,
+		severity,
+		title,
+		description: `Telemetry signal ${s.signalId} recorded ${s.count} occurrence(s) of ${s.methodName} (${s.objectType} ${s.objectId}) at or above the ${severity} threshold, up to ${s.maxDurationMs}ms.`,
+		impact: s.maxDurationMs * 1000,
+		involvedMethods: [`${s.methodName} (${s.objectType} ${s.objectId})`],
+		evidence: `${s.count} occurrence(s) in window ${windowStart}..${windowEnd}, max ${s.maxDurationMs}ms, avg ${s.avgDurationMs ?? "n/a"}ms`,
+		fingerprint,
+	};
+}
+
+/**
+ * Group size >1 — D4 merge. `involvedMethods`/title use the group's shared
+ * identity (identical by construction: same fingerprint requires the same
+ * normalized routine identity) with the SAME title/description formula as
+ * the single-signal case, substituting the merged aggregates (max severity,
+ * summed count, max maxDurationMs, count-weighted mean avgDurationMs — absent
+ * on any constituent omits the average). Evidence keeps the original
+ * "N occurrence(s) in window A..B, max Xms, avg Yms" shape (window
+ * unchanged) and appends one clientType-labeled line per constituent
+ * ("unspecified" when a constituent has no clientType).
+ */
+function buildMergedPattern(
+	group: readonly SignalSeverity[],
+	windowStart: string,
+	windowEnd: string,
+): DetectedPattern {
+	const first = group[0].signal;
+	const fingerprint = group[0].fingerprint;
+
+	let severity: PatternSeverity = "info";
+	let totalCount = 0;
+	let maxDurationMs = 0;
+	let weightedAvgSum = 0;
+	let avgMissing = false;
+
+	for (const { signal: s, severity: sev } of group) {
+		if (SEVERITY_RANK[sev] > SEVERITY_RANK[severity]) severity = sev;
+		totalCount += s.count;
+		if (s.maxDurationMs > maxDurationMs) maxDurationMs = s.maxDurationMs;
+		if (s.avgDurationMs === undefined) {
+			avgMissing = true;
+		} else {
+			weightedAvgSum += s.avgDurationMs * s.count;
+		}
+	}
+	const avgDurationMs =
+		!avgMissing && totalCount > 0 ? weightedAvgSum / totalCount : undefined;
+
+	const constituentLines = group.map(
+		({ signal: s }) =>
+			`${s.clientType ?? "unspecified"}: ${s.count} × max ${s.maxDurationMs}ms`,
+	);
+
+	const title = `${first.signalId}: ${first.methodName} (${first.objectType} ${first.objectId}) slow — max ${maxDurationMs}ms × ${totalCount}`;
+	return {
+		id: `telemetry-${first.signalId.toLowerCase()}`,
+		severity,
+		title,
+		description: `Telemetry signal ${first.signalId} recorded ${totalCount} occurrence(s) of ${first.methodName} (${first.objectType} ${first.objectId}) at or above the ${severity} threshold, up to ${maxDurationMs}ms.`,
+		impact: maxDurationMs * 1000,
+		involvedMethods: [
+			`${first.methodName} (${first.objectType} ${first.objectId})`,
+		],
+		evidence: `${totalCount} occurrence(s) in window ${windowStart}..${windowEnd}, max ${maxDurationMs}ms, avg ${avgDurationMs ?? "n/a"}ms — ${constituentLines.join("; ")}`,
+		fingerprint,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -294,9 +433,12 @@ export function parseTelemetryBatch(
 		validateSignal(s, i),
 	);
 
-	const patterns: DetectedPattern[] = signals.map((s) => {
-		const severity = severityFor(s.signalId, s.maxDurationMs, config);
-		const fingerprint = formatFingerprint(
+	// Severity assignment (D3) happens per-signal, BEFORE the D4 merge below —
+	// each constituent's severity is resolved against its own clientType.
+	const withSeverity: SignalSeverity[] = signals.map((s) => ({
+		signal: s,
+		severity: severityFor(s.signalId, s.clientType, s.maxDurationMs, config),
+		fingerprint: formatFingerprint(
 			computeTelemetryFingerprint({
 				signalId: s.signalId,
 				appId: s.appId,
@@ -304,19 +446,28 @@ export function parseTelemetryBatch(
 				objectNumber: s.objectId,
 				routineName: s.methodName,
 			}),
-		);
-		const title = `${s.signalId}: ${s.methodName} (${s.objectType} ${s.objectId}) slow — max ${s.maxDurationMs}ms × ${s.count}`;
-		return {
-			id: `telemetry-${s.signalId.toLowerCase()}`,
-			severity,
-			title,
-			description: `Telemetry signal ${s.signalId} recorded ${s.count} occurrence(s) of ${s.methodName} (${s.objectType} ${s.objectId}) at or above the ${severity} threshold, up to ${s.maxDurationMs}ms.`,
-			impact: s.maxDurationMs * 1000,
-			involvedMethods: [`${s.methodName} (${s.objectType} ${s.objectId})`],
-			evidence: `${s.count} occurrence(s) in window ${windowStart}..${windowEnd}, max ${s.maxDurationMs}ms, avg ${s.avgDurationMs ?? "n/a"}ms`,
-			fingerprint,
-		};
-	});
+		),
+	}));
+
+	// D4: group by fingerprint (insertion order = first-occurrence order, so a
+	// batch with no duplicate routines produces patterns in the original
+	// signal order, unchanged from pre-Task-3 behavior).
+	const groups = new Map<string, SignalSeverity[]>();
+	for (const item of withSeverity) {
+		const existing = groups.get(item.fingerprint);
+		if (existing) {
+			existing.push(item);
+		} else {
+			groups.set(item.fingerprint, [item]);
+		}
+	}
+
+	const patterns: DetectedPattern[] = Array.from(groups.values()).map(
+		(group) =>
+			group.length === 1
+				? buildSinglePattern(group[0], windowStart, windowEnd)
+				: buildMergedPattern(group, windowStart, windowEnd),
+	);
 
 	const patternCount = { critical: 0, warning: 0, info: 0 };
 	for (const p of patterns) patternCount[p.severity]++;
