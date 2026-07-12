@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
 	mkdtempSync,
 	readFileSync,
@@ -14,7 +15,7 @@ import {
 	writeFileSync,
 } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import {
 	applyClose,
 	createLifecycleCommand,
@@ -22,6 +23,52 @@ import {
 } from "../../src/cli/commands/lifecycle.js";
 import { DEFAULT_API_KEY_ENV } from "../../src/lifecycle/appinsights.js";
 import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
+
+/**
+ * Fusion-branch fixtures (mirrors test/lifecycle/wire-fuse.integration.test.ts
+ * — not imported from there since bun test files aren't modules other tests
+ * should reach into). Drives `lifecycle evaluate --source`'s al-sem fusion
+ * branch via the stub `alsem` binary in "findings" mode, which is purpose-built
+ * to correlate with test/fixtures/sampling-minimal.alcpuprofile's hot frames
+ * (ProcessLine / OnRun on Codeunit 50000).
+ */
+const FIXTURE_DIR = resolve(import.meta.dir, "../fixtures/fusion");
+const WS_MIN = resolve(FIXTURE_DIR, "ws-min");
+const STUB_TS = resolve(FIXTURE_DIR, "alsem-stub.ts");
+const BUN_EXE = process.execPath;
+
+let fusionCleanups: Array<() => void> = [];
+afterEach(() => {
+	for (const fn of fusionCleanups) {
+		try {
+			fn();
+		} catch {
+			// ignore
+		}
+	}
+	fusionCleanups = [];
+});
+
+/** Platform-appropriate launcher for alsem-stub.ts in "findings" mode. */
+function makeStubBinary(mode: "ok" | "findings" = "findings"): string {
+	const tmpDir = mkdtempSync(join(tmpdir(), "al-perf-cli-fuse-stub-"));
+	fusionCleanups.push(() => rmSync(tmpDir, { recursive: true, force: true }));
+	if (process.platform === "win32") {
+		const cmdPath = join(tmpDir, "alsem-stub.cmd");
+		writeFileSync(
+			cmdPath,
+			`@echo off\r\nset "ALSEM_STUB_MODE=${mode}"\r\n"${BUN_EXE}" "${STUB_TS}" %*\r\n`,
+		);
+		return cmdPath;
+	}
+	const shPath = join(tmpDir, "alsem-stub.sh");
+	writeFileSync(
+		shPath,
+		`#!/bin/sh\nexport ALSEM_STUB_MODE='${mode}'\nexec "${BUN_EXE}" "${STUB_TS}" "$@"\n`,
+	);
+	chmodSync(shPath, 0o755);
+	return shPath;
+}
 
 /**
  * Windows-only flake guard (same as sync-cli.test.ts): a WAL-mode sqlite
@@ -310,6 +357,146 @@ describe("lifecycle --tenant normalization", () => {
 		await run(["status", "--tenant", "   "]);
 		expect(process.exitCode).toBe(2);
 		expect(errorSpy).toHaveBeenCalled();
+	});
+
+	it("evaluate: two --tenant casings land on one finding, not two", async () => {
+		await run([
+			"evaluate",
+			"test/fixtures/sampling-minimal.alcpuprofile",
+			"--tenant",
+			"ACME",
+			"--profile-id",
+			"p1",
+			"--capture-time",
+			"2026-07-01T00:00:00Z",
+		]);
+		await run([
+			"evaluate",
+			"test/fixtures/sampling-minimal.alcpuprofile",
+			"--tenant",
+			"acme",
+			"--profile-id",
+			"p2",
+			"--capture-time",
+			"2026-07-02T00:00:00Z",
+		]);
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "acme" });
+		expect(findings.length).toBeGreaterThan(0);
+		// Every finding was seen twice — one row per problem, not two.
+		for (const f of findings) {
+			expect(store.countOccurrences(f.id)).toBe(2);
+		}
+		expect(store.listFindings({ tenant: "ACME" }).length).toBe(0);
+		store.close();
+	});
+
+	it("evaluate --source: identity upgrades land in the normalized tenant", async () => {
+		const stubBin = makeStubBinary("findings");
+		const prevBin = process.env.AL_SEM_BIN;
+		process.env.AL_SEM_BIN = stubBin;
+		const migrateSpy = spyOn(
+			LifecycleStore.prototype,
+			"applyFingerprintMigration",
+		);
+		try {
+			await run([
+				"evaluate",
+				"test/fixtures/sampling-minimal.alcpuprofile",
+				"--tenant",
+				"ACME",
+				"--source",
+				WS_MIN,
+				"--profile-id",
+				"p1",
+				"--capture-time",
+				"2026-07-01T00:00:00Z",
+			]);
+
+			// Whatever fingerprint migrations the fusion branch applied, every one
+			// of them must have been written under the NORMALIZED tenant. A raw
+			// "ACME" here means applyIdentityUpgrades got the un-normalized value
+			// and the finding will fork on the next run.
+			expect(migrateSpy.mock.calls.length).toBeGreaterThan(0);
+			for (const call of migrateSpy.mock.calls) {
+				expect(call[0]).toBe("acme");
+			}
+		} finally {
+			migrateSpy.mockRestore();
+			if (prevBin === undefined) delete process.env.AL_SEM_BIN;
+			else process.env.AL_SEM_BIN = prevBin;
+		}
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listFindings({ tenant: "ACME" }).length).toBe(0);
+		expect(store.listFindings({ tenant: "acme" }).length).toBeGreaterThan(0);
+		store.close();
+	});
+
+	it("digest/status/close/triage resolve mixed-case --tenant to one bucket", async () => {
+		const store = new LifecycleStore(dbPath);
+		const fp = "pattern:0123456789abcdef";
+		store.insertFinding({
+			tenant: "acme",
+			fingerprint: fp,
+			algoVersion: 1,
+			state: "resolved",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Seeded finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+		store.close();
+
+		// `close` is only legal from `resolved` — the seed above is resolved, so
+		// an uppercase --tenant that resolves correctly will find and close it.
+		await run(["close", fp, "--tenant", "ACME"]);
+
+		const after = new LifecycleStore(dbPath);
+		const row = after.listFindings({ tenant: "acme" })[0];
+		expect(row.state).toBe("closed");
+		after.close();
+	});
+
+	it("status with mixed-case --tenant reads the lowercase bucket", async () => {
+		const store = new LifecycleStore(dbPath);
+		store.insertFinding({
+			tenant: "acme",
+			fingerprint: "pattern:fedcba9876543210",
+			algoVersion: 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Seeded open finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+		store.close();
+
+		// `-f json` writes via process.stdout.write, not console.log — it would
+		// never reach logSpy, so this asserts on the plain-text (table) format,
+		// which does route through console.log.
+		logSpy.mockClear();
+		await run(["status", "--tenant", "ACME"]);
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).toContain("Seeded open finding");
 	});
 });
 
