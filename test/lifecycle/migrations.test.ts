@@ -9,6 +9,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { LIFECYCLE_SCHEMA_VERSION } from "../../src/lifecycle/config.js";
 import { linkFingerprints } from "../../src/lifecycle/fingerprint.js";
 import {
 	LIFECYCLE_MIGRATIONS,
@@ -549,15 +550,93 @@ function openV3FixtureWithOneFinding(): {
 	return { store, dir, findingId };
 }
 
-describe("schema v4 (capture request queue)", () => {
-	it("v4 adds capture_requests; v3 data survives, no dangling FKs, user_version 4", () => {
-		const { store, dir, findingId } = openV3FixtureWithOneFinding();
+/**
+ * Builds a genuine v4 database on disk: runs the real v1..v4 migration
+ * statements directly against a raw bun:sqlite connection (bypassing
+ * LifecycleStore, whose constructor would otherwise upgrade straight past
+ * v4 to whatever the ladder's current head is) and inserts one pre-existing,
+ * already needs-triage `findings` row. Reopening the DB through
+ * LifecycleStore then exercises the real v4 -> v5 migration step on open.
+ * Caller must `rmSync(dir, ...)` when done.
+ */
+function openV4FixtureWithOneFinding(): {
+	store: LifecycleStore;
+	dir: string;
+	findingId: number;
+} {
+	const dir = mkdtempSync(join(tmpdir(), "alperf-migrations-v5-"));
+	const dbPath = join(dir, "lifecycle.sqlite");
+	const v4 = new Database(dbPath, { create: true });
+	for (const stmts of LIFECYCLE_MIGRATIONS.slice(0, 4)) {
+		for (const stmt of stmts) v4.run(stmt);
+	}
+	v4.run("PRAGMA user_version = 4");
+	v4.run(
+		`INSERT INTO findings (tenant, fingerprint, algo_version, state, needs_triage, source, pattern_id, title, severity, first_seen_at, last_seen_at, last_event_at)
+		 VALUES ('t', 'pattern:existingfinding02', 1, 'open', 1, 'pattern', 'x', 'x', 'warning', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+	);
+	const findingId = v4
+		.query<{ id: number }, []>(
+			"SELECT id FROM findings WHERE fingerprint = 'pattern:existingfinding02'",
+		)
+		.get()?.id as number;
+	v4.close();
+	const store = new LifecycleStore(dbPath); // runs the real ladder from user_version 4 onward
+	return { store, dir, findingId };
+}
+
+describe("schema v5 (triage notes)", () => {
+	it("v5 adds triage_note/triaged_at/triaged_by; v4 data survives, no dangling FKs, DB lands on the current schema head", () => {
+		const { store, dir, findingId } = openV4FixtureWithOneFinding();
 		try {
 			expect(
 				store.db
 					.query<{ user_version: number }, []>("PRAGMA user_version")
 					.get()?.user_version,
-			).toBe(4);
+			).toBe(LIFECYCLE_SCHEMA_VERSION);
+			// Pre-migration finding row survived untouched; the new columns
+			// default to NULL (additive ALTER TABLE, no backfill).
+			const before = store.getFinding(findingId);
+			expect(before?.fingerprint).toBe("pattern:existingfinding02");
+			expect(before?.needsTriage).toBe(true);
+			expect(before?.triageNote).toBeNull();
+			expect(before?.triagedAt).toBeNull();
+			expect(before?.triagedBy).toBeNull();
+			expect(store.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+			// The new columns are actually usable post-migration.
+			expect(
+				store.recordTriage(
+					findingId,
+					"benign — expected fan-out",
+					"agent-triage",
+					"2026-07-12T00:00:00.000Z",
+				),
+			).toBe(true);
+			const after = store.getFinding(findingId);
+			expect(after?.needsTriage).toBe(false);
+			expect(after?.triageNote).toBe("benign — expected fan-out");
+			expect(after?.triagedBy).toBe("agent-triage");
+			expect(after?.triagedAt).toBe("2026-07-12T00:00:00.000Z");
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("schema v4 (capture request queue)", () => {
+	it("v4 adds capture_requests; v3 data survives, no dangling FKs, DB lands on the current schema head", () => {
+		const { store, dir, findingId } = openV3FixtureWithOneFinding();
+		try {
+			// Reopening through LifecycleStore always migrates to the ladder's
+			// current head, not just one step — this DB started at v3 and (as
+			// of schema v5) passes through v4 on its way to v5.
+			expect(
+				store.db
+					.query<{ user_version: number }, []>("PRAGMA user_version")
+					.get()?.user_version,
+			).toBe(LIFECYCLE_SCHEMA_VERSION);
 			const tables = store.db
 				.query<{ name: string }, []>(
 					"SELECT name FROM sqlite_master WHERE type='table'",

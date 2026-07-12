@@ -535,7 +535,19 @@ export function createLifecycleCommand(): Command {
 					limit: parseInt(opts.limit, 10),
 				});
 				if (opts.format === "json") {
-					process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+					// Only surface triageNote/triagedAt/triagedBy once a finding has
+					// actually been triaged — an untriaged row shows none of the
+					// three keys (not even null), keeping the common case terse.
+					const withTriage = rows.map((r) => {
+						const { triageNote, triagedAt, triagedBy, ...rest } = r;
+						return {
+							...rest,
+							...(triageNote !== null ? { triageNote } : {}),
+							...(triagedAt !== null ? { triagedAt } : {}),
+							...(triagedBy !== null ? { triagedBy } : {}),
+						};
+					});
+					process.stdout.write(JSON.stringify(withTriage, null, 2) + "\n");
 					return;
 				}
 				if (rows.length === 0) {

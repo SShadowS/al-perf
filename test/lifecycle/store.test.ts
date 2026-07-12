@@ -263,6 +263,77 @@ describe("LifecycleStore CRUD", () => {
 	});
 });
 
+describe("LifecycleStore.recordTriage", () => {
+	it("sets note/at/by and clears needs_triage in one UPDATE, returning true", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(baseFinding({ needsTriage: true }));
+		const changed = store.recordTriage(
+			id,
+			"looks like an intentional batch job",
+			"agent-triage v1",
+			"2026-07-12T09:00:00Z",
+		);
+		expect(changed).toBe(true);
+		const row = store.getFinding(id);
+		expect(row?.needsTriage).toBe(false);
+		expect(row?.triageNote).toBe("looks like an intentional batch job");
+		expect(row?.triagedBy).toBe("agent-triage v1");
+		expect(row?.triagedAt).toBe("2026-07-12T09:00:00Z");
+		store.close();
+	});
+
+	it("no-ops (race guard) once needs_triage is already 0 — never overwrites a prior triage", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(baseFinding({ needsTriage: true }));
+		expect(
+			store.recordTriage(
+				id,
+				"first note",
+				"agent-triage",
+				"2026-07-12T09:00:00Z",
+			),
+		).toBe(true);
+		// A second run (or a human, or the agent racing itself) touching the
+		// same finding after the flag cleared must be a no-op, not an
+		// overwrite of the recorded assessment.
+		expect(
+			store.recordTriage(
+				id,
+				"second note",
+				"agent-triage",
+				"2026-07-12T10:00:00Z",
+			),
+		).toBe(false);
+		const row = store.getFinding(id);
+		expect(row?.triageNote).toBe("first note");
+		expect(row?.triagedAt).toBe("2026-07-12T09:00:00Z");
+		store.close();
+	});
+
+	it("no-ops on a finding that never needed triage", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(baseFinding({ needsTriage: false }));
+		expect(
+			store.recordTriage(id, "note", "agent-triage", "2026-07-12T09:00:00Z"),
+		).toBe(false);
+		expect(store.getFinding(id)?.triageNote).toBeNull();
+		store.close();
+	});
+
+	it("no-ops on an unknown finding id without throwing", () => {
+		const store = new LifecycleStore(":memory:");
+		expect(
+			store.recordTriage(
+				999999,
+				"note",
+				"agent-triage",
+				"2026-07-12T09:00:00Z",
+			),
+		).toBe(false);
+		store.close();
+	});
+});
+
 function baseCaptureRequest(
 	overrides?: Partial<Parameters<LifecycleStore["createCaptureRequest"]>[0]>,
 ): Parameters<LifecycleStore["createCaptureRequest"]>[0] {
