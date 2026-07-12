@@ -8,7 +8,9 @@
  * so a pattern anchored there must upgrade fallback → stable identity.
  *
  * Also covers graceful degradation: a missing engine leaves the
- * analyzeProfile-minted fallback fingerprint untouched.
+ * analyzeProfile-minted fallback fingerprint untouched, and that
+ * FusedModel.identityUpgrades is surfaced only when a re-mint actually
+ * changed a fingerprint (Task 2 of the fpwire identity-upgrade plan).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -18,6 +20,7 @@ import { join, resolve } from "path";
 import {
 	computePatternFingerprint,
 	formatFingerprint,
+	parseFingerprint,
 } from "../../src/lifecycle/fingerprint.js";
 import { fingerprintPatterns } from "../../src/lifecycle/wire.js";
 import { clearEngineCache } from "../../src/semantic/engine-runner.js";
@@ -157,6 +160,16 @@ describe("fuseProfile fingerprint identity upgrade", () => {
 			),
 		);
 		expect(pattern.fingerprint).toBe(expected);
+
+		// The identity upgrade is surfaced on the FusedModel for the lifecycle
+		// apply path to rekey (Task 3) instead of duplicating.
+		expect(result.identityUpgrades).toEqual([
+			{
+				patternId: "repeated-siblings",
+				from: parseFingerprint(fallbackFp as string),
+				to: parseFingerprint(pattern.fingerprint as string),
+			},
+		]);
 	}, 30_000);
 
 	test("a disabled engine leaves the fallback fingerprint untouched (graceful degradation)", async () => {
@@ -172,5 +185,50 @@ describe("fuseProfile fingerprint identity upgrade", () => {
 
 		expect("disabled" in result).toBe(true);
 		expect(pattern.fingerprint).toBe(fallbackFp);
+	}, 30_000);
+
+	test("no opts.patterns → identityUpgrades is absent, even though the anchor would confidently match", async () => {
+		const stubBin = makeStubBinary("findings");
+		const methods = makeMethodBreakdowns();
+
+		const result = await fuseProfile(methods, WS_MIN, {
+			engine: stubBin,
+			// No `patterns` option — fingerprintPatterns is never called.
+		});
+		expect(isFusedModel(result)).toBe(true);
+		if (!isFusedModel(result)) return;
+
+		expect(result.identityUpgrades).toBeUndefined();
+	}, 30_000);
+
+	test("a re-mint that lands on the SAME fingerprint does not surface an identityUpgrade", async () => {
+		const stubBin = makeStubBinary("findings");
+		const methods = makeMethodBreakdowns();
+		const pattern = makePattern();
+
+		// Pre-fingerprint with a fallback key (as analyzeProfile would), so the
+		// FIRST fuseProfile call is a genuine identity upgrade (fallback →
+		// stable) — then the SECOND call's re-mint is a no-op value-wise.
+		fingerprintPatterns([pattern], methods);
+
+		const first = await fuseProfile(methods, WS_MIN, {
+			engine: stubBin,
+			patterns: [pattern],
+		});
+		expect(isFusedModel(first)).toBe(true);
+		if (!isFusedModel(first)) return;
+		expect(first.identityUpgrades?.length).toBe(1);
+
+		clearEngineCache();
+		const second = await fuseProfile(methods, WS_MIN, {
+			engine: stubBin,
+			patterns: [pattern],
+		});
+		expect(isFusedModel(second)).toBe(true);
+		if (!isFusedModel(second)) return;
+
+		// Same stable identity both times — the second fusion re-mints to an
+		// IDENTICAL value, so nothing is collected.
+		expect(second.identityUpgrades).toBeUndefined();
 	}, 30_000);
 });

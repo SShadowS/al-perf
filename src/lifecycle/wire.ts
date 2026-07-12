@@ -54,6 +54,8 @@ import {
 	computePatternFingerprint,
 	type FingerprintRoutineIdentity,
 	formatFingerprint,
+	type IdentityUpgrade,
+	parseFingerprint,
 	routineIdentityFromCorrelation,
 } from "./fingerprint.js";
 
@@ -159,15 +161,27 @@ export function resolvePatternAnchor(
  *    confidently-matched anchors to stable identities. Overwriting the
  *    analyzeProfile value is the ONE sanctioned overwrite (identity-upgrade
  *    semantics — see routineIdentityFromCorrelation).
+ *
+ * `collector`, when provided, records each pattern whose fingerprint STRING
+ * actually changed as an `IdentityUpgrade` {patternId, from, to} — the
+ * before→after pair fuseProfile surfaces on `FusedModel.identityUpgrades`
+ * for the lifecycle apply path (rekey, don't duplicate). A pattern with NO
+ * prior fingerprint (first mint — e.g. analyzeProfile hasn't run first in
+ * this process) yields no entry: there is nothing stored to rekey, so it
+ * isn't an upgrade. A re-mint that lands on the SAME value likewise yields
+ * no entry. Omitting `collector` (or passing `undefined`) leaves the
+ * re-minting behavior byte-identical to before this parameter existed.
  */
 export function fingerprintPatterns(
 	patterns: DetectedPattern[],
 	methods: MethodBreakdown[],
 	attributions?: Map<string, SemanticAttribution>,
+	collector?: IdentityUpgrade[],
 ): void {
 	if (patterns.length === 0) return;
 	const byLabel = buildMethodLabelMap(methods);
 	for (const p of patterns) {
+		const oldFingerprint = p.fingerprint;
 		const anchor = resolvePatternAnchor(p, byLabel, attributions);
 		p.fingerprint = formatFingerprint(
 			computePatternFingerprint(
@@ -176,5 +190,16 @@ export function fingerprintPatterns(
 				anchor.appId,
 			),
 		);
+		if (
+			collector &&
+			oldFingerprint !== undefined &&
+			oldFingerprint !== p.fingerprint
+		) {
+			collector.push({
+				patternId: p.id,
+				from: parseFingerprint(oldFingerprint),
+				to: parseFingerprint(p.fingerprint),
+			});
+		}
 	}
 }

@@ -13,6 +13,7 @@
  *  - routineIdentityFromCorrelation: matched→stable, ambiguous NEVER stable,
  *    fallback normalization
  *  - linkFingerprints: migration records + guards
+ *  - parseFingerprint: formatFingerprint's inverse, colon-in-value handling
  */
 
 import { describe, expect, it } from "bun:test";
@@ -25,6 +26,7 @@ import {
 	formatFingerprint,
 	linkFingerprints,
 	normalizeSalientLocation,
+	parseFingerprint,
 	routineIdentityFromCorrelation,
 	wrapAlsemFingerprint,
 } from "../../src/lifecycle/fingerprint.js";
@@ -603,6 +605,62 @@ describe("linkFingerprints", () => {
 
 	it("refuses to link an identity to itself (reason 'manual-merge')", () => {
 		expect(() => linkFingerprints(v1Fp, { ...v1Fp }, "manual-merge")).toThrow();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// parseFingerprint
+// ---------------------------------------------------------------------------
+
+describe("parseFingerprint", () => {
+	it("round-trips a pattern fingerprint through formatFingerprint losslessly", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		expect(parseFingerprint(formatFingerprint(fp))).toEqual(fp);
+	});
+
+	it("round-trips a telemetry fingerprint losslessly", () => {
+		const fp = computeTelemetryFingerprint({
+			signalId: "RT0018",
+			appId: APP_ID,
+			objectType: "Codeunit",
+			objectNumber: 50100,
+			routineName: "ProcessRecords",
+		});
+		expect(parseFingerprint(formatFingerprint(fp))).toEqual(fp);
+	});
+
+	it("round-trips an alsem fingerprint whose native value has no colons", () => {
+		const fp = wrapAlsemFingerprint("alsem-native-fp-xyz");
+		expect(parseFingerprint(formatFingerprint(fp))).toEqual(fp);
+	});
+
+	it("splits on the FIRST colon only — an alsem native value containing colons survives", () => {
+		const fp = wrapAlsemFingerprint("native:with:colons");
+		const parsed = parseFingerprint(formatFingerprint(fp));
+		expect(parsed.namespace).toBe("alsem");
+		expect(parsed.value).toBe("native:with:colons");
+	});
+
+	it("stamps the CURRENT FINGERPRINT_ALGO_VERSION — the string form carries no version", () => {
+		const fp = computePatternFingerprint(
+			{ patternId: "calcfields-in-loop" },
+			FALLBACK_ID,
+			APP_ID,
+		);
+		const parsed = parseFingerprint(formatFingerprint(fp));
+		expect(parsed.algoVersion).toBe(FINGERPRINT_ALGO_VERSION);
+	});
+
+	it("throws on a string with no namespace separator", () => {
+		expect(() => parseFingerprint("no-colon-here")).toThrow();
+	});
+
+	it("throws on an unknown namespace prefix", () => {
+		expect(() => parseFingerprint("bogus:deadbeef")).toThrow();
 	});
 });
 

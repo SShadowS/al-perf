@@ -9,12 +9,15 @@
  *    ambiguous NEVER stable)
  *  - fingerprintPatterns: canonical string form, determinism,
  *    fallback-vs-attributed divergence, member-trigger normalization
+ *  - fingerprintPatterns collector: identity-upgrade migration capture
  */
 
 import { describe, expect, it } from "bun:test";
 import {
 	computePatternFingerprint,
 	formatFingerprint,
+	type IdentityUpgrade,
+	parseFingerprint,
 } from "../../src/lifecycle/fingerprint.js";
 import {
 	buildMethodLabelMap,
@@ -280,5 +283,121 @@ describe("fingerprintPatterns", () => {
 		expect(fallbackP.fingerprint).toMatch(/^pattern:[0-9a-f]{16}$/);
 		expect(attributedP.fingerprint).toMatch(/^pattern:[0-9a-f]{16}$/);
 		expect(fallbackP.fingerprint).not.toBe(attributedP.fingerprint);
+	});
+});
+
+describe("fingerprintPatterns collector (identity-upgrade migrations)", () => {
+	const methods = [
+		makeMethod("ProcessRecords", "Codeunit", 50100, { appId: APP_ID }),
+	];
+	const attributions = new Map<string, SemanticAttribution>([
+		[
+			"ProcessRecords_Codeunit_50100",
+			{
+				status: "matched",
+				findings: [],
+				attributionConfidence: "exact",
+				stableRoutineId: SID,
+			},
+		],
+	]);
+
+	it("captures {patternId, from, to} when a re-mint changes an already-fingerprinted pattern", () => {
+		const p = makePattern("calcfields-in-loop", [
+			"ProcessRecords (Codeunit 50100)",
+		]);
+		// First mint: fallback key (no attributions).
+		fingerprintPatterns([p], methods);
+		const fallbackFp = p.fingerprint as string;
+
+		// Re-mint: attributions now confidently match → stable identity.
+		const collector: IdentityUpgrade[] = [];
+		fingerprintPatterns([p], methods, attributions, collector);
+
+		expect(p.fingerprint).not.toBe(fallbackFp);
+		expect(collector).toEqual([
+			{
+				patternId: "calcfields-in-loop",
+				from: parseFingerprint(fallbackFp),
+				to: parseFingerprint(p.fingerprint as string),
+			},
+		]);
+	});
+
+	it("does NOT push a migration when the old fingerprint was absent (first mint)", () => {
+		const p = makePattern("calcfields-in-loop", [
+			"ProcessRecords (Codeunit 50100)",
+		]);
+		expect(p.fingerprint).toBeUndefined();
+
+		const collector: IdentityUpgrade[] = [];
+		fingerprintPatterns([p], methods, attributions, collector);
+
+		expect(p.fingerprint).toMatch(/^pattern:[0-9a-f]{16}$/);
+		expect(collector).toEqual([]);
+	});
+
+	it("does NOT push a migration when the re-mint yields the SAME value", () => {
+		const p = makePattern("calcfields-in-loop", [
+			"ProcessRecords (Codeunit 50100)",
+		]);
+		fingerprintPatterns([p], methods);
+		const first = p.fingerprint;
+
+		const collector: IdentityUpgrade[] = [];
+		// Re-mint with the exact same inputs (no attributions) — identical output.
+		fingerprintPatterns([p], methods, undefined, collector);
+
+		expect(p.fingerprint).toBe(first);
+		expect(collector).toEqual([]);
+	});
+
+	it("collects independently per pattern across a mixed batch", () => {
+		// Two anchor methods: only ProcessRecords has an attribution. OtherMethod
+		// does not, so its pattern must stay on its fallback identity untouched.
+		const mixedMethods = [
+			...methods,
+			makeMethod("OtherMethod", "Codeunit", 50200, { appId: APP_ID }),
+		];
+		const upgraded = makePattern("calcfields-in-loop", [
+			"ProcessRecords (Codeunit 50100)",
+		]);
+		const untouched = makePattern("modify-in-loop", [
+			"OtherMethod (Codeunit 50200)",
+		]);
+		fingerprintPatterns([upgraded, untouched], mixedMethods);
+		const upgradedFallback = upgraded.fingerprint as string;
+		const untouchedFallback = untouched.fingerprint as string;
+
+		const collector: IdentityUpgrade[] = [];
+		// Only `upgraded` gets a confident attribution keyed by its anchor;
+		// `untouched`'s anchor has no attribution entry, so it re-mints to the
+		// identical fallback value.
+		fingerprintPatterns(
+			[upgraded, untouched],
+			mixedMethods,
+			attributions,
+			collector,
+		);
+
+		expect(untouched.fingerprint).toBe(untouchedFallback);
+		expect(collector).toEqual([
+			{
+				patternId: "calcfields-in-loop",
+				from: parseFingerprint(upgradedFallback),
+				to: parseFingerprint(upgraded.fingerprint as string),
+			},
+		]);
+	});
+
+	it("3-arg call (no collector) behaves exactly as before — upgrade still applies, nothing to collect into", () => {
+		const p = makePattern("calcfields-in-loop", [
+			"ProcessRecords (Codeunit 50100)",
+		]);
+		fingerprintPatterns([p], methods);
+		const fallbackFp = p.fingerprint;
+
+		expect(() => fingerprintPatterns([p], methods, attributions)).not.toThrow();
+		expect(p.fingerprint).not.toBe(fallbackFp);
 	});
 });

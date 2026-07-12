@@ -11,6 +11,7 @@
  * Defined here for P1b; consumed by P1c (fuseProfile), P2 (UX), P3 (call-graph).
  */
 
+import type { IdentityUpgrade } from "../lifecycle/fingerprint.js";
 import type {
 	AppIdentity,
 	CoverageEntry,
@@ -235,4 +236,17 @@ export interface FusedModel {
 
 	/** Engine metadata (version, primary app, diagnostics). */
 	engine: EngineMetadata;
+
+	/**
+	 * Fingerprint identity upgrades produced when `fuseProfile` re-minted
+	 * `opts.patterns`' fingerprints with correlation attributions (lifecycle
+	 * phase-2 identity upgrade — see `fingerprintPatterns` in
+	 * src/lifecycle/wire.ts). Set ONLY when at least one pattern's fingerprint
+	 * actually changed; absent when `opts.patterns` was omitted/empty, or
+	 * every re-mint landed on its prior value. Consumed by the lifecycle
+	 * apply path (Task 3) to rekey existing findings via
+	 * `applyFingerprintMigration` BEFORE `evaluateRun` sees the upgraded
+	 * fingerprints, so history continues instead of forking.
+	 */
+	identityUpgrades?: IdentityUpgrade[];
 }
