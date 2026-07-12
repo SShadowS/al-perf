@@ -7,6 +7,7 @@
 import { describe, expect, it } from "bun:test";
 import { processEventsForSinks } from "../../../src/lifecycle/sinks/triggers.js";
 import type {
+	AzureDevOpsSinkConfig,
 	GitHubSinkConfig,
 	LifecycleSinksConfig,
 	SinkDeliveryPayload,
@@ -21,6 +22,28 @@ const FP = "pattern:trig000000000001";
 
 function config(gh?: Partial<GitHubSinkConfig>): LifecycleSinksConfig {
 	return { sinks: { github: { enabled: true, repo: "owner/repo", ...gh } } };
+}
+
+function adoConfig(
+	ado?: Partial<AzureDevOpsSinkConfig>,
+): LifecycleSinksConfig {
+	return {
+		sinks: {
+			azureDevOps: { enabled: true, org: "myorg", project: "myproj", ...ado },
+		},
+	};
+}
+
+function multiConfig(
+	gh?: Partial<GitHubSinkConfig>,
+	ado?: Partial<AzureDevOpsSinkConfig>,
+): LifecycleSinksConfig {
+	return {
+		sinks: {
+			github: { enabled: true, repo: "owner/repo", ...gh },
+			azureDevOps: { enabled: true, org: "myorg", project: "myproj", ...ado },
+		},
+	};
 }
 
 function seedFinding(
@@ -397,6 +420,424 @@ describe("processEventsForSinks — comments and close", () => {
 		);
 		expect(report.processed).toBe(0);
 		expect(store.listUnprocessedEvents()).toHaveLength(1);
+		store.close();
+	});
+});
+
+/**
+ * D5 — the backward-compat golden snapshot (plan §multi-sink-ado, Task 2
+ * step 1). Captured BEFORE the multi-sink fan-out refactor and asserted
+ * byte-identical after it: a github-only config must produce the exact same
+ * outbox rows (sink, kind, dedupeKey, findingId, payload) it does today.
+ * Covers every delivery kind the trigger scan can produce in one pass:
+ * create-issue, comment-regressed, comment-resolved, close-issue,
+ * comment-recurred, reopen-issue.
+ */
+describe("processEventsForSinks — golden snapshot (D5, github backward-compat)", () => {
+	it("produces byte-identical outbox rows for a github-only config", () => {
+		const store = new LifecycleStore(":memory:");
+
+		// CREATE: fresh finding, hysteresis satisfied (2 qualifying occurrences), no mapping.
+		const createId = seedFinding(store, {
+			fingerprint: `${FP}-create`,
+			title: "CalcFields inside loop (create)",
+		});
+		seedOccurrences(store, createId, 2);
+		seedEvent(store, createId, "seen-normal");
+
+		// REGRESSED: mapped finding, seen-regressed -> comment-regressed only.
+		const regressedId = seedFinding(store, {
+			fingerprint: `${FP}-regressed`,
+			title: "CalcFields inside loop (regressed)",
+		});
+		store.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: `${FP}-regressed`,
+			externalId: "101",
+			createdAt: NOW,
+		});
+		seedEvent(store, regressedId, "seen-regressed");
+
+		// RESOLVED: mapped finding, resolved -> comment-resolved + close-issue (autoClose).
+		const resolvedId = seedFinding(store, {
+			fingerprint: `${FP}-resolved`,
+			title: "CalcFields inside loop (resolved)",
+			state: "resolved",
+		});
+		store.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: `${FP}-resolved`,
+			externalId: "102",
+			createdAt: NOW,
+		});
+		seedEvent(store, resolvedId, "resolved");
+
+		// RECURRED: mapped finding, filed-fresh -> comment-recurred + reopen-issue (reopenOnRecurrence).
+		const recurredId = seedFinding(store, {
+			fingerprint: `${FP}-recurred`,
+			title: "CalcFields inside loop (recurred)",
+		});
+		store.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: `${FP}-recurred`,
+			externalId: "103",
+			createdAt: NOW,
+		});
+		seedEvent(store, recurredId, "filed-fresh");
+
+		const eventByFinding = new Map(
+			store.listUnprocessedEvents().map((e) => [e.findingId, e]),
+		);
+		const createEvent = eventByFinding.get(createId);
+		const regressedEvent = eventByFinding.get(regressedId);
+		const resolvedEvent = eventByFinding.get(resolvedId);
+		const recurredEvent = eventByFinding.get(recurredId);
+		if (!createEvent || !regressedEvent || !resolvedEvent || !recurredEvent) {
+			throw new Error("fixture setup failed: expected 4 unprocessed events");
+		}
+
+		const cfg = config({
+			autoFile: true,
+			autoFileAfterRuns: 2,
+			autoClose: true,
+			reopenOnRecurrence: true,
+			labels: ["al-perf", "evil-label"],
+			labelsAllowList: ["al-perf"],
+		});
+
+		const report = processEventsForSinks(store, cfg, NOW);
+		expect(report.processed).toBe(4);
+		expect(report.enqueued).toBe(6);
+		expect(report.skippedMigration).toBe(0);
+
+		const rows = store.listPendingOutbox("github").map((r) => ({
+			sink: r.sink,
+			kind: r.kind,
+			dedupeKey: r.dedupeKey,
+			findingId: r.findingId,
+			payload: JSON.parse(r.payload) as SinkDeliveryPayload,
+		}));
+
+		expect(rows).toEqual([
+			{
+				sink: "github",
+				kind: "create-issue",
+				dedupeKey: `github:create:t1:${FP}-create`,
+				findingId: createId,
+				payload: {
+					labels: ["al-perf"],
+					finding: {
+						fingerprint: `${FP}-create`,
+						title: "CalcFields inside loop (create)",
+						severity: "critical",
+						state: "open",
+						patternId: "calcfields-in-loop",
+						appName: "My App",
+						firstSeenAt: "2026-07-01T00:00:00Z",
+						lastSeenAt: "2026-07-05T00:00:00Z",
+						occurrenceCount: 2,
+						event: "seen-normal",
+						metricClass: null,
+						resolvedAt: null,
+						evidence: "SELECT * repeated 500x",
+					},
+				},
+			},
+			{
+				sink: "github",
+				kind: "comment-regressed",
+				dedupeKey: `github:comment-regressed:${regressedEvent.id}`,
+				findingId: regressedId,
+				payload: {
+					labels: ["al-perf"],
+					finding: {
+						fingerprint: `${FP}-regressed`,
+						title: "CalcFields inside loop (regressed)",
+						severity: "critical",
+						state: "open",
+						patternId: "calcfields-in-loop",
+						appName: "My App",
+						firstSeenAt: "2026-07-01T00:00:00Z",
+						lastSeenAt: "2026-07-05T00:00:00Z",
+						occurrenceCount: 0,
+						event: "seen-regressed",
+						metricClass: null,
+						resolvedAt: null,
+						evidence: null,
+					},
+				},
+			},
+			{
+				sink: "github",
+				kind: "comment-resolved",
+				dedupeKey: `github:comment-resolved:${resolvedEvent.id}`,
+				findingId: resolvedId,
+				payload: {
+					labels: ["al-perf"],
+					finding: {
+						fingerprint: `${FP}-resolved`,
+						title: "CalcFields inside loop (resolved)",
+						severity: "critical",
+						state: "resolved",
+						patternId: "calcfields-in-loop",
+						appName: "My App",
+						firstSeenAt: "2026-07-01T00:00:00Z",
+						lastSeenAt: "2026-07-05T00:00:00Z",
+						occurrenceCount: 0,
+						event: "resolved",
+						metricClass: null,
+						resolvedAt: null,
+						evidence: null,
+					},
+				},
+			},
+			{
+				sink: "github",
+				kind: "close-issue",
+				dedupeKey: `github:close:${resolvedEvent.id}`,
+				findingId: resolvedId,
+				payload: {
+					labels: ["al-perf"],
+					finding: {
+						fingerprint: `${FP}-resolved`,
+						title: "CalcFields inside loop (resolved)",
+						severity: "critical",
+						state: "resolved",
+						patternId: "calcfields-in-loop",
+						appName: "My App",
+						firstSeenAt: "2026-07-01T00:00:00Z",
+						lastSeenAt: "2026-07-05T00:00:00Z",
+						occurrenceCount: 0,
+						event: "resolved",
+						metricClass: null,
+						resolvedAt: null,
+						evidence: null,
+					},
+				},
+			},
+			{
+				sink: "github",
+				kind: "comment-recurred",
+				dedupeKey: `github:comment-recurred:${recurredEvent.id}`,
+				findingId: recurredId,
+				payload: {
+					labels: ["al-perf"],
+					finding: {
+						fingerprint: `${FP}-recurred`,
+						title: "CalcFields inside loop (recurred)",
+						severity: "critical",
+						state: "open",
+						patternId: "calcfields-in-loop",
+						appName: "My App",
+						firstSeenAt: "2026-07-01T00:00:00Z",
+						lastSeenAt: "2026-07-05T00:00:00Z",
+						occurrenceCount: 0,
+						event: "filed-fresh",
+						metricClass: null,
+						resolvedAt: null,
+						evidence: null,
+					},
+				},
+			},
+			{
+				sink: "github",
+				kind: "reopen-issue",
+				dedupeKey: `github:reopen:${recurredEvent.id}`,
+				findingId: recurredId,
+				payload: {
+					labels: ["al-perf"],
+					finding: {
+						fingerprint: `${FP}-recurred`,
+						title: "CalcFields inside loop (recurred)",
+						severity: "critical",
+						state: "open",
+						patternId: "calcfields-in-loop",
+						appName: "My App",
+						firstSeenAt: "2026-07-01T00:00:00Z",
+						lastSeenAt: "2026-07-05T00:00:00Z",
+						occurrenceCount: 0,
+						event: "filed-fresh",
+						metricClass: null,
+						resolvedAt: null,
+						evidence: null,
+					},
+				},
+			},
+		]);
+
+		store.close();
+	});
+});
+
+/**
+ * Task 2 step 3 — new multi-sink behavior: both sink blocks enabled, each
+ * evaluated with its OWN SinkTriggerConfig, fanned out from a single scan
+ * that stays one transaction (markEventsProcessed fires once regardless of
+ * how many sinks are enabled).
+ */
+describe("processEventsForSinks — multi-sink fan-out", () => {
+	function withMapping(
+		store: LifecycleStore,
+		sink: string,
+		externalId: string,
+	): void {
+		store.putIssueMapping({
+			tenant: "t1",
+			sink,
+			fingerprint: FP,
+			externalId,
+			createdAt: NOW,
+		});
+	}
+
+	it("both sinks enabled: a qualifying finding enqueues one create-issue row per sink", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedOccurrences(store, id, 2);
+		seedEvent(store, id, "seen-normal");
+
+		const cfg = multiConfig(
+			{ autoFile: true, autoFileAfterRuns: 2 },
+			{ autoFile: true, autoFileAfterRuns: 2 },
+		);
+		const report = processEventsForSinks(store, cfg, NOW);
+		expect(report.processed).toBe(1);
+		expect(report.enqueued).toBe(2);
+
+		const ghRows = store.listPendingOutbox("github", "create-issue");
+		const adoRows = store.listPendingOutbox("azureDevOps", "create-issue");
+		expect(ghRows).toHaveLength(1);
+		expect(adoRows).toHaveLength(1);
+		expect(ghRows[0].dedupeKey).toBe(`github:create:t1:${FP}`);
+		expect(adoRows[0].dedupeKey).toBe(`azureDevOps:create:t1:${FP}`);
+		store.close();
+	});
+
+	it("a sink with autoFile off enqueues no create for it while the other sink does", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedOccurrences(store, id, 2);
+		seedEvent(store, id, "seen-normal");
+
+		const cfg = multiConfig(
+			{ autoFile: true, autoFileAfterRuns: 2 },
+			{ autoFile: false },
+		);
+		const report = processEventsForSinks(store, cfg, NOW);
+		expect(report.enqueued).toBe(1);
+		expect(store.listPendingOutbox("github", "create-issue")).toHaveLength(1);
+		expect(
+			store.listPendingOutbox("azureDevOps", "create-issue"),
+		).toHaveLength(0);
+		store.close();
+	});
+
+	it("comment-recurred/reopen-issue fan out per sink independently using each sink's own reopenOnRecurrence", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		withMapping(store, "github", "7");
+		withMapping(store, "azureDevOps", "42");
+		seedEvent(store, id, "filed-fresh");
+
+		const cfg = multiConfig(
+			{ reopenOnRecurrence: true },
+			{ reopenOnRecurrence: false },
+		);
+		const report = processEventsForSinks(store, cfg, NOW);
+		// github: comment-recurred + reopen-issue; azureDevOps: comment-recurred only.
+		expect(report.enqueued).toBe(3);
+		expect(
+			store.listPendingOutbox("github", "comment-recurred"),
+		).toHaveLength(1);
+		expect(store.listPendingOutbox("github", "reopen-issue")).toHaveLength(1);
+		expect(
+			store.listPendingOutbox("azureDevOps", "comment-recurred"),
+		).toHaveLength(1);
+		expect(
+			store.listPendingOutbox("azureDevOps", "reopen-issue"),
+		).toHaveLength(0);
+		store.close();
+	});
+
+	it("close-issue fans out per sink independently using each sink's own autoClose", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store, { state: "resolved" });
+		withMapping(store, "github", "7");
+		withMapping(store, "azureDevOps", "42");
+		seedEvent(store, id, "resolved");
+
+		const cfg = multiConfig({ autoClose: true }, { autoClose: false });
+		const report = processEventsForSinks(store, cfg, NOW);
+		// github: comment-resolved + close-issue; azureDevOps: comment-resolved only.
+		expect(report.enqueued).toBe(3);
+		expect(store.listPendingOutbox("github", "close-issue")).toHaveLength(1);
+		expect(
+			store.listPendingOutbox("azureDevOps", "close-issue"),
+		).toHaveLength(0);
+		expect(
+			store.listPendingOutbox("github", "comment-resolved"),
+		).toHaveLength(1);
+		expect(
+			store.listPendingOutbox("azureDevOps", "comment-resolved"),
+		).toHaveLength(1);
+		store.close();
+	});
+
+	it("the whole scan stays one transaction: markEventsProcessed counts events, not event-sink pairs", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedEvent(store, id, "seen-normal");
+
+		const cfg = multiConfig({}, {}); // digest-first: autoFile off on both, no mapping
+		const report = processEventsForSinks(store, cfg, NOW);
+		expect(report.processed).toBe(1); // one event, not one per enabled sink
+		expect(report.enqueued).toBe(0);
+		expect(store.listUnprocessedEvents()).toHaveLength(0);
+		store.close();
+	});
+
+	it("azureDevOps-only config works standalone (digest-first default, same as github)", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedOccurrences(store, id, 3);
+		seedEvent(store, id, "seen-normal");
+		const report = processEventsForSinks(store, adoConfig(), NOW);
+		expect(report.enqueued).toBe(0); // autoFile off by default
+		expect(report.processed).toBe(1);
+		store.close();
+	});
+
+	it("azureDevOps tags are filtered against its own allow-list, independent of github's labels", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		seedOccurrences(store, id, 2);
+		seedEvent(store, id, "seen-normal");
+		const cfg = multiConfig(
+			{
+				autoFile: true,
+				autoFileAfterRuns: 2,
+				labels: ["al-perf", "evil-label"],
+				labelsAllowList: ["al-perf"],
+			},
+			{
+				autoFile: true,
+				autoFileAfterRuns: 2,
+				tags: ["al-perf", "evil-tag"],
+				tagsAllowList: ["al-perf"],
+			},
+		);
+		processEventsForSinks(store, cfg, NOW);
+		const ghPayload = JSON.parse(
+			store.listPendingOutbox("github", "create-issue")[0].payload,
+		) as SinkDeliveryPayload;
+		const adoPayload = JSON.parse(
+			store.listPendingOutbox("azureDevOps", "create-issue")[0].payload,
+		) as SinkDeliveryPayload;
+		expect(ghPayload.labels).toEqual(["al-perf"]);
+		expect(adoPayload.labels).toEqual(["al-perf"]);
 		store.close();
 	});
 });
