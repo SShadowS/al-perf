@@ -775,7 +775,7 @@ export function createLifecycleCommand(): Command {
 						// the duplicate-finding bug this wiring exists to prevent.
 						applyIdentityUpgrades(
 							store,
-							opts.tenant,
+							tenant,
 							fuseResult.identityUpgrades,
 							new Date().toISOString(),
 						);
