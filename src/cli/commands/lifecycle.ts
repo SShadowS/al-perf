@@ -237,15 +237,11 @@ function printEvaluationOutcome(
  * D4: `<out-without-ext>.<tenant>.<sanitized-stream>.json` — stream
  * characters outside `[A-Za-z0-9-]` become `_` (a raw `environmentName` is
  * untrusted and would otherwise land in a path segment, e.g. `"Prod/EU"`).
- * `tenant` is lowercased for the filename only (mapped `tenantMap` values
- * are already lowercased at config-load time; the raw `--tenant` flag used
- * as the fleet bucket isn't — without this, a fleet-bucketed "Acme" group
- * and a mapped "acme" group on the same stream produce case-distinct paths
- * that collide and silently overwrite on a case-insensitive filesystem like
- * NTFS). This is scoped to the filename only — the `tenant` field in the
- * written-files summary, and every non-`--out` code path, still carry the
- * value as-authored; broader `--tenant` case normalization is a tracked
- * follow-up, not this fix's scope).
+ * `--tenant` is now normalized (lowercased+trimmed) at the CLI boundary
+ * before it reaches this function, so the `.toLowerCase()` on `tenant`
+ * below is redundant defense-in-depth, not the primary safeguard — kept
+ * because it's harmless and guards any future caller that passes a raw,
+ * unnormalized tenant string directly.
  */
 function splitOutPath(outPath: string, tenant: string, stream: string): string {
 	const ext = extname(outPath);
