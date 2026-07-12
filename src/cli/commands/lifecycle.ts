@@ -9,9 +9,11 @@ import {
 	DEFAULT_API_KEY_ENV,
 	DEFAULT_SIGNALS,
 	DEFAULT_SINCE,
+	listTenants,
 	type PullSplitResult,
 	pullTelemetry,
 	pullTelemetrySplit,
+	type TenantDiscovery,
 } from "../../lifecycle/appinsights.js";
 import { rollupRoutineMetrics } from "../../lifecycle/baselines.js";
 import {
@@ -233,6 +235,178 @@ function warnIgnoredSplitFlags(splitCommand: Command): void {
 				"gets its own content-hash profileId instead (docs/telemetry-recipe.md §10).",
 		);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// pull-telemetry --list-tenants (list-tenants plan, Task 1): discovery mode
+// for --split-by-customer onboarding — prints the AAD tenants emitting the
+// requested signals plus a paste-ready tenantMap stub, instead of
+// evaluating or writing anything.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors TENANT_GUID_RE in src/lifecycle/config-file.ts, duplicated per
+ * that module's own precedent (cross-module tenant-shape checks are copied,
+ * not imported). Used to decide which discovered aadTenantId values are
+ * even candidates for a tenantMap entry — a non-GUID id (e.g. "common", an
+ * on-prem placeholder) can never pass the config loader's own GUID
+ * validation, so it's never proposed in the stub even though it still shows
+ * up in the table for operator awareness.
+ */
+const AAD_TENANT_GUID_RE =
+	/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * `--list-tenants` is a discovery-only mode: it never evaluates a run or
+ * writes a file, so every flag that implies one of those is meaningless
+ * alongside it. Unlike warnIgnoredSplitFlags this is a hard guard (exit 2,
+ * zero fetches) rather than a warning — discovery's contract is "nothing
+ * but the report", so silently ignoring a conflicting flag would surprise
+ * an operator who thought it took effect.
+ */
+function listTenantsConflict(opts: any, pullCommand: Command): string | null {
+	if (opts.splitByCustomer) {
+		return "pull-telemetry --list-tenants cannot be combined with --split-by-customer — run one mode at a time.";
+	}
+	if (opts.out) {
+		return "pull-telemetry --list-tenants cannot be combined with --out — discovery only prints to stdout.";
+	}
+	if (pullCommand.getOptionValueSource("stream") === "cli") {
+		return "pull-telemetry --list-tenants cannot be combined with --stream — discovery does not evaluate a run.";
+	}
+	if (pullCommand.getOptionValueSource("profileId") === "cli") {
+		return "pull-telemetry --list-tenants cannot be combined with --profile-id — discovery does not evaluate a run.";
+	}
+	return null;
+}
+
+/**
+ * Paste-ready `tenantMap` stub: only aadTenantId values that (a) are GUID-
+ * shaped, so the config loader's own TENANT_GUID_RE would accept them as a
+ * key, and (b) aren't already in the merged tenantMap (D4: lowercase
+ * lookup, same as pullTelemetrySplit's tenantMapLower). Values are left ""
+ * for the operator to fill in — never guessed.
+ */
+function buildTenantMapStub(
+	discoveries: TenantDiscovery[],
+	tenantMap: Record<string, string>,
+): { telemetry: { tenantMap: Record<string, string> } } {
+	const mappedLower = new Set(
+		Object.keys(tenantMap).map((guid) => guid.toLowerCase()),
+	);
+	const stub: Record<string, string> = {};
+	for (const d of discoveries) {
+		if (!AAD_TENANT_GUID_RE.test(d.aadTenantId)) continue;
+		if (mappedLower.has(d.aadTenantId.toLowerCase())) continue;
+		stub[d.aadTenantId] = "";
+	}
+	return { telemetry: { tenantMap: stub } };
+}
+
+/**
+ * D4: lowercased-GUID → tenant-code lookup, shared by the text table's
+ * "Mapped to" column and the JSON `tenants[].mappedTo` field so both
+ * formats resolve the exact same mapping (same lookup as
+ * pullTelemetrySplit's tenantMapLower).
+ */
+function buildTenantMapLookup(
+	tenantMap: Record<string, string>,
+): Map<string, string> {
+	return new Map(
+		Object.entries(tenantMap).map(([guid, tenant]) => [
+			guid.toLowerCase(),
+			tenant,
+		]),
+	);
+}
+
+/**
+ * Text rendering: table first, stub JSON last (docs §10 onboarding flow —
+ * scan the table, then copy the stub straight off the bottom of the
+ * output). "(none)" for an empty aadTenantId mirrors
+ * formatSkippedTenantsSummary's placeholder; "(unmapped)" marks a
+ * GUID-shaped or non-GUID id with no tenantMap entry.
+ */
+function renderListTenantsText(
+	discoveries: TenantDiscovery[],
+	tenantMap: Record<string, string>,
+): void {
+	const tenantMapLower = buildTenantMapLookup(tenantMap);
+	if (discoveries.length === 0) {
+		console.log("No tenants observed in the requested window.");
+	} else {
+		const table = new Table({
+			head: [
+				chalk.gray("AAD Tenant"),
+				chalk.gray("Rows"),
+				chalk.gray("Environments"),
+				chalk.gray("Mapped to"),
+			],
+			style: { head: [], border: [] },
+		});
+		for (const d of discoveries) {
+			const mapped = tenantMapLower.get(d.aadTenantId.toLowerCase());
+			table.push([
+				d.aadTenantId === "" ? "(none)" : d.aadTenantId,
+				String(d.rows),
+				d.environments.length > 0 ? d.environments.join(", ") : "(none)",
+				mapped ?? "(unmapped)",
+			]);
+		}
+		console.log(table.toString());
+	}
+	console.log(
+		JSON.stringify(buildTenantMapStub(discoveries, tenantMap), null, 2),
+	);
+}
+
+async function runListTenants(cmd: Command, opts: any): Promise<void> {
+	let discoveries: TenantDiscovery[];
+	try {
+		const signals = String(opts.signals)
+			.split(",")
+			.map((s: string) => s.trim())
+			.filter((s: string) => s.length > 0);
+		discoveries = await listTenants({
+			appId: opts.appId,
+			apiKeyEnv: opts.apiKeyEnv,
+			since: opts.since,
+			signals,
+		});
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err));
+		process.exitCode = 1;
+		return;
+	}
+
+	const config = resolveLifecycleConfig(cmd.opts().config);
+
+	if (opts.format === "json") {
+		// mappedTo is carried per row (D4 lowercase lookup) so a JSON consumer
+		// can tell "mapped" from "unmapped" directly — the stub alone is
+		// ambiguous (a non-GUID id is also absent from it, but isn't mapped).
+		const tenantMapLower = buildTenantMapLookup(config.telemetry.tenantMap);
+		const tenants = discoveries.map((d) => ({
+			...d,
+			mappedTo: tenantMapLower.get(d.aadTenantId.toLowerCase()) ?? null,
+		}));
+		process.stdout.write(
+			JSON.stringify(
+				{
+					tenants,
+					tenantMapStub: buildTenantMapStub(
+						discoveries,
+						config.telemetry.tenantMap,
+					),
+				},
+				null,
+				2,
+			) + "\n",
+		);
+		return;
+	}
+
+	renderListTenantsText(discoveries, config.telemetry.tenantMap);
 }
 
 /**
@@ -835,6 +1009,10 @@ export function createLifecycleCommand(): Command {
 			'Fan out into one batch per (customer AAD tenant, environment) via the --config file\'s telemetry.tenantMap; requires a non-empty tenantMap or unmappedTenantPolicy: "fleet" (see docs/telemetry-recipe.md)',
 		)
 		.option(
+			"--list-tenants",
+			"Discovery mode: print the AAD tenants emitting the requested signals since the window start, plus a paste-ready tenantMap stub, instead of evaluating or writing anything; conflicts with --split-by-customer, --out, --stream, --profile-id (see docs/telemetry-recipe.md §10)",
+		)
+		.option(
 			"--tenant <tenant>",
 			'Tenant key (also the fleet bucket for --split-by-customer\'s unmapped-tenant "fleet" policy)',
 			"local",
@@ -849,9 +1027,20 @@ export function createLifecycleCommand(): Command {
 			"Idempotency key, default: sha256 of the normalized batch (ignored under --split-by-customer, which derives one content-hash profileId per group)",
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
-		.action(async (opts: any, splitCommand: Command) => {
+		.action(async (opts: any, pullCommand: Command) => {
+			if (opts.listTenants) {
+				const conflict = listTenantsConflict(opts, pullCommand);
+				if (conflict) {
+					console.error(conflict);
+					process.exitCode = 2;
+					return;
+				}
+				await runListTenants(cmd, opts);
+				return;
+			}
+
 			if (opts.splitByCustomer) {
-				await runSplitByCustomer(cmd, opts, splitCommand);
+				await runSplitByCustomer(cmd, opts, pullCommand);
 				return;
 			}
 

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { parseTelemetryBatch } from "../../src/core/telemetry-parser.js";
 import {
 	DEFAULT_API_KEY_ENV,
+	listTenants,
 	parseTimespanMs,
 	pullTelemetry,
 	pullTelemetrySplit,
@@ -1044,5 +1045,177 @@ describe("pullTelemetrySplit — round-trip through parseTelemetryBatch (behavio
 				expect(p.fingerprint).toMatch(/^telemetry:[0-9a-f]{16}$/);
 			}
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// listTenants (list-tenants plan, Task 1): tenant-discovery query for
+// --split-by-customer onboarding — one KQL query grouped by aadTenantId
+// (not by routine), reusing the same env-var/signal-id validation and
+// --since canonicalization as pullTelemetry.
+// ---------------------------------------------------------------------------
+
+const LIST_TENANTS_COLUMNS = [
+	{ name: "aadTenantId", type: "string" },
+	{ name: "rows", type: "long" },
+	{ name: "environments", type: "dynamic" },
+];
+
+function listTenantsResponse(rows: unknown[][]) {
+	return { tables: [{ name: "PrimaryTable", columns: LIST_TENANTS_COLUMNS, rows }] };
+}
+
+describe("listTenants — KQL shape and request pinning", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("summarizes by aadTenantId with make_set(environmentName), splices validated signal ids, canonicalizes --since, x-api-key header only", async () => {
+		const calls: Array<[string, RequestInit | undefined]> = [];
+		const fetchImpl = (async (url: string, init?: RequestInit) => {
+			calls.push([url, init]);
+			return okResponse(listTenantsResponse([]));
+		}) as typeof fetch;
+
+		await listTenants(
+			{
+				appId: APP_ID,
+				since: "2026-01-01T08:00:00.000Z",
+				signals: ["RT0018", "RT0005"],
+			},
+			fetchImpl,
+		);
+
+		expect(calls).toHaveLength(1);
+		const [url, init] = calls[0];
+		expect(url).not.toContain(DECOY_KEY);
+		const decoded = decodeURIComponent(url);
+		expect(decoded).toContain(
+			"| where timestamp > datetime(2026-01-01T08:00:00.000Z)",
+		);
+		expect(decoded).toContain(
+			'customDimensions.eventId in ("RT0018", "RT0005")',
+		);
+		expect(decoded).toContain("make_set(environmentName)");
+		expect(decoded).toMatch(/\bby\b[^\n]*aadTenantId/);
+
+		const headers = init?.headers as Record<string, string>;
+		expect(Object.keys(headers)).toEqual(["x-api-key"]);
+		expect(headers["x-api-key"]).toBe(DECOY_KEY);
+	});
+
+	it("rejects an invalid signal id before any fetch call (same SIGNAL_ID_RE as pullTelemetry)", async () => {
+		let fetchCalled = false;
+		const fetchImpl = (async () => {
+			fetchCalled = true;
+			throw new Error("fetch should not be called");
+		}) as typeof fetch;
+
+		await expect(
+			listTenants({ appId: APP_ID, signals: ["bad;signal"] }, fetchImpl),
+		).rejects.toThrow(/invalid signal id/i);
+		expect(fetchCalled).toBe(false);
+	});
+});
+
+describe("listTenants — missing API key env var", () => {
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("names the env var and makes zero fetch calls", async () => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+		let fetchCalled = false;
+		const fetchImpl = (async () => {
+			fetchCalled = true;
+			throw new Error("fetch should not be called");
+		}) as typeof fetch;
+
+		await expect(listTenants({ appId: APP_ID }, fetchImpl)).rejects.toThrow(
+			/APPINSIGHTS_API_KEY/,
+		);
+		expect(fetchCalled).toBe(false);
+	});
+});
+
+describe("listTenants — row normalization", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("maps columns by NAME; aadTenantId carried verbatim including empty and non-GUID values", async () => {
+		const rows = [
+			[
+				"11111111-1111-1111-1111-111111111111",
+				5,
+				JSON.stringify(["PROD", "SANDBOX"]),
+			],
+			["", 2, JSON.stringify([""])],
+			["common", 1, JSON.stringify(["Sandbox"])],
+		];
+		const fetchImpl = (async () =>
+			okResponse(listTenantsResponse(rows))) as typeof fetch;
+
+		const result = await listTenants(
+			{ appId: APP_ID, signals: ["RT0018"] },
+			fetchImpl,
+		);
+
+		expect(result).toHaveLength(3);
+		expect(result[0]).toEqual({
+			aadTenantId: "11111111-1111-1111-1111-111111111111",
+			rows: 5,
+			environments: ["PROD", "SANDBOX"],
+		});
+		expect(result[1].aadTenantId).toBe("");
+		expect(result[1].rows).toBe(2);
+		expect(result[2].aadTenantId).toBe("common");
+	});
+
+	it("parses a make_set cell arriving as a JSON-array string", async () => {
+		const rows = [
+			["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 3, '["A","B"]'],
+		];
+		const fetchImpl = (async () =>
+			okResponse(listTenantsResponse(rows))) as typeof fetch;
+
+		const result = await listTenants(
+			{ appId: APP_ID, signals: ["RT0018"] },
+			fetchImpl,
+		);
+
+		expect(result[0].environments).toEqual(["A", "B"]);
+	});
+
+	it("falls back to [String(cell)] when a string cell isn't valid JSON", async () => {
+		const rows = [["bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", 1, "not-json"]];
+		const fetchImpl = (async () =>
+			okResponse(listTenantsResponse(rows))) as typeof fetch;
+
+		const result = await listTenants(
+			{ appId: APP_ID, signals: ["RT0018"] },
+			fetchImpl,
+		);
+
+		expect(result[0].environments).toEqual(["not-json"]);
+	});
+
+	it("accepts an already-parsed array cell for environments (defensive)", async () => {
+		const rows = [["cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee", 4, ["X", "Y"]]];
+		const fetchImpl = (async () =>
+			okResponse(listTenantsResponse(rows))) as typeof fetch;
+
+		const result = await listTenants(
+			{ appId: APP_ID, signals: ["RT0018"] },
+			fetchImpl,
+		);
+
+		expect(result[0].environments).toEqual(["X", "Y"]);
 	});
 });

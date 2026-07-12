@@ -432,13 +432,47 @@ without an AAD tenant id normalizes to:
 
 ### Onboarding a new customer
 
-1. Register the customer under an al-perf tenant code (whatever convention
-   you already use for `--tenant`/`--config`-scoped tenants).
-2. Add their AAD tenant GUID to `telemetry.tenantMap` in the config file,
-   mapped to that tenant code.
-3. The next `pull-telemetry --split-by-customer` run (cron tick or manual)
-   starts filing their findings under the new tenant — no backfill, no
-   restart, no code change.
+Rather than hand-authoring `tenantMap` entries against the raw App Insights
+resource, discover which AAD tenants are already emitting telemetry and get
+a paste-ready stub with `--list-tenants`:
+
+```
+$ al-profile lifecycle pull-telemetry --app-id <guid> --list-tenants
+AAD Tenant                             Rows  Environments         Mapped to
+aaaaaaaa-1111-2222-3333-444444444444   42    Production           acme-inc
+bbbbbbbb-5555-6666-7777-888888888888   7     Sandbox, Production  (unmapped)
+(none)                                 3     (none)               (unmapped)
+{
+  "telemetry": {
+    "tenantMap": {
+      "bbbbbbbb-5555-6666-7777-888888888888": ""
+    }
+  }
+}
+```
+
+1. Run `pull-telemetry --list-tenants` (same `--app-id`/`--since`/`--signals`
+   as an ordinary pull — it queries the same window, just grouped by
+   `aadTenantId` instead of by routine). The table lists every AAD tenant
+   observed, its row count and environments, and whether it's already
+   mapped (`--config`'s merged `telemetry.tenantMap`, matched
+   case-insensitively — same lookup `--split-by-customer` itself uses). An
+   empty `aadTenantId` (on-prem/old-schema rows) renders as `(none)`.
+2. Paste the stub JSON printed below the table into your `--config` file
+   (merge into the existing `telemetry.tenantMap`, don't overwrite it), then
+   fill in each empty `""` value with the al-perf tenant code for that
+   customer. The stub only ever lists *unmapped, GUID-shaped* ids — a
+   non-GUID id (e.g. an old-schema placeholder) stays visible in the table
+   for awareness but is never proposed as a `tenantMap` key, since the
+   config loader's own GUID validation (§10 above) would reject it anyway.
+3. Re-run `pull-telemetry --split-by-customer` — the newly-mapped customer's
+   findings start filing under their tenant on the very next pull, no
+   backfill, no restart, no code change.
+
+`--list-tenants` never evaluates a run or writes a file — it only queries
+and prints. It's mutually exclusive with `--split-by-customer`, `--out`,
+`--stream`, and `--profile-id`; combining any of them exits 2 before making
+an HTTP call.
 
 ### CLI shapes
 
@@ -470,6 +504,7 @@ non-split `--out`.
 | `--split-by-customer` | `pull-telemetry` | Opt in to the per-`(aadTenantId, environmentName)` fan-out described above; requires a non-empty `telemetry.tenantMap` or `unmappedTenantPolicy: "fleet"` in `--config`. `--tenant` doubles as the fleet bucket. |
 | `--stream` | `pull-telemetry --split-by-customer` | Ignored — each group's stream is derived from `environmentName` instead. Passing it anyway prints a one-line stderr warning rather than silently doing nothing. |
 | `--profile-id` | `pull-telemetry --split-by-customer` | Ignored — each group gets its own content-hash `profileId` instead (D5). Passing it anyway prints a one-line stderr warning. |
+| `--list-tenants` | `pull-telemetry` | Discovery mode for onboarding (above): prints the AAD tenants emitting the requested signals plus a paste-ready `tenantMap` stub, instead of evaluating or writing anything. Mutually exclusive with `--split-by-customer`, `--out`, `--stream`, `--profile-id` (exit 2 if combined). |
 
 ### Confidentiality note
 
