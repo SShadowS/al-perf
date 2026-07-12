@@ -17,6 +17,10 @@ export interface LifecycleConfigFilePatch {
 	telemetry?: {
 		maxSignalsPerBatch?: number;
 		severity?: Record<string, { warningMs: number; criticalMs: number }>;
+		/** Multi-tenant split (pull-telemetry --split-by-customer): AAD tenant GUID → al-perf tenant code. */
+		tenantMap?: Record<string, string>;
+		/** What to do with telemetry from AAD tenants absent from tenantMap: skip (default, loud) or bucket under the --tenant value. */
+		unmappedTenantPolicy?: "skip" | "fleet";
 	};
 	captureRequests?: Partial<LifecycleConfig["captureRequests"]>;
 }
@@ -35,6 +39,12 @@ export function mergeLifecycleConfig(
 				...base.telemetry.severity,
 				...patch.telemetry?.severity,
 			},
+			tenantMap: {
+				...base.telemetry.tenantMap,
+				...patch.telemetry?.tenantMap,
+			},
+			unmappedTenantPolicy:
+				patch.telemetry?.unmappedTenantPolicy ?? base.telemetry.unmappedTenantPolicy,
 		},
 		captureRequests: {
 			...base.captureRequests,
@@ -57,6 +67,24 @@ const MIN_SEVERITY_VALUES = ["critical", "warning", "info"] as const;
  * property — the entry silently vanishes rather than failing closed.
  */
 const RESERVED_SEVERITY_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * AAD tenant GUID shape (mirrors web/storage.ts ACTIVITY_ID_RE). Duplicated
+ * here rather than imported — src/lifecycle/ must not depend on web/.
+ * Reserved keys like `__proto__` never match this shape, so no separate
+ * reserved-key set is needed here (unlike RESERVED_SEVERITY_KEYS above).
+ */
+const TENANT_GUID_RE =
+	/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * al-perf tenant code shape (mirrors web/storage.ts TENANT_CODE_RE).
+ * Duplicated here rather than imported — src/lifecycle/ must not depend on
+ * web/.
+ */
+const TENANT_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,39}$/;
+
+const UNMAPPED_TENANT_POLICY_VALUES = ["skip", "fleet"] as const;
 
 function isPositiveInteger(v: unknown): v is number {
 	return typeof v === "number" && Number.isInteger(v) && v > 0;
@@ -129,6 +157,61 @@ function validateTelemetryBlock(
 			severity[key] = { warningMs, criticalMs };
 		}
 		result.severity = severity;
+	}
+
+	if (telemetry.tenantMap !== undefined) {
+		const tenantMapInput = telemetry.tenantMap;
+		if (
+			typeof tenantMapInput !== "object" ||
+			tenantMapInput === null ||
+			Array.isArray(tenantMapInput)
+		) {
+			throw new Error(
+				`${path}: telemetry.tenantMap must be an object (got ${JSON.stringify(tenantMapInput)})`,
+			);
+		}
+		const tenantMap: Record<string, string> = {};
+		// Lowercased GUID -> the first original-case key seen for it, so a
+		// case-variant duplicate (e.g. "ABC..." and "abc...") is caught here
+		// rather than silently colliding downstream, where lookups are done
+		// against the lowercased GUID and would otherwise last-write-win.
+		const seenGuidKeys = new Map<string, string>();
+		for (const [key, value] of Object.entries(tenantMapInput as Record<string, unknown>)) {
+			if (!TENANT_GUID_RE.test(key)) {
+				throw new Error(
+					`${path}: telemetry.tenantMap key "${key}" is not a valid AAD tenant GUID (must match ${TENANT_GUID_RE})`,
+				);
+			}
+			const lowerKey = key.toLowerCase();
+			const priorKey = seenGuidKeys.get(lowerKey);
+			if (priorKey !== undefined) {
+				throw new Error(
+					`${path}: telemetry.tenantMap keys "${priorKey}" and "${key}" are case-variant duplicates of the same AAD tenant GUID`,
+				);
+			}
+			seenGuidKeys.set(lowerKey, key);
+			if (typeof value !== "string" || !TENANT_CODE_RE.test(value)) {
+				throw new Error(
+					`${path}: telemetry.tenantMap["${key}"] value ${JSON.stringify(value)} is not a valid tenant code (must match ${TENANT_CODE_RE})`,
+				);
+			}
+			// Lowercased here — this loader is the sole authoring chokepoint for
+			// tenantMap, and nothing downstream normalizes. Without this, "Acme"
+			// in the file vs "acme" everywhere else silently splits one
+			// customer's history into two case-distinct SQLite tenants.
+			tenantMap[key] = value.toLowerCase();
+		}
+		result.tenantMap = tenantMap;
+	}
+
+	if (telemetry.unmappedTenantPolicy !== undefined) {
+		const v = telemetry.unmappedTenantPolicy;
+		if (!(UNMAPPED_TENANT_POLICY_VALUES as readonly unknown[]).includes(v)) {
+			throw new Error(
+				`${path}: telemetry.unmappedTenantPolicy must be one of ${UNMAPPED_TENANT_POLICY_VALUES.map((p) => `"${p}"`).join(", ")} (got ${JSON.stringify(v)})`,
+			);
+		}
+		result.unmappedTenantPolicy = v as "skip" | "fleet";
 	}
 
 	return result;

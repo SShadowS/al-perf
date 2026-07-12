@@ -117,6 +117,59 @@ describe("mergeLifecycleConfig", () => {
 		});
 		expect(DEFAULT_LIFECYCLE_CONFIG).toEqual(before);
 	});
+
+	it("KILL-SWITCH: a tenantMap-only patch never resets maxSignalsPerBatch, severity, or unmappedTenantPolicy", () => {
+		const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, {
+			telemetry: {
+				tenantMap: {
+					"11111111-1111-1111-1111-111111111111": "acme",
+				},
+			},
+		});
+
+		expect(merged.telemetry.maxSignalsPerBatch).toBe(10_000);
+		expect(merged.telemetry.severity).toEqual(DEFAULT_LIFECYCLE_CONFIG.telemetry.severity);
+		expect(merged.telemetry.unmappedTenantPolicy).toBe("skip");
+		expect(merged.telemetry.tenantMap).toEqual({
+			"11111111-1111-1111-1111-111111111111": "acme",
+		});
+	});
+
+	it("merges tenantMap PER-KEY: adding one customer doesn't drop a sibling added by an earlier merge", () => {
+		const afterFirst = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, {
+			telemetry: {
+				tenantMap: {
+					"11111111-1111-1111-1111-111111111111": "acme",
+				},
+			},
+		});
+		const afterSecond = mergeLifecycleConfig(afterFirst, {
+			telemetry: {
+				tenantMap: {
+					"22222222-2222-2222-2222-222222222222": "contoso",
+				},
+			},
+		});
+
+		expect(afterSecond.telemetry.tenantMap).toEqual({
+			"11111111-1111-1111-1111-111111111111": "acme",
+			"22222222-2222-2222-2222-222222222222": "contoso",
+		});
+	});
+
+	it("replaces unmappedTenantPolicy as a scalar", () => {
+		const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, {
+			telemetry: { unmappedTenantPolicy: "fleet" },
+		});
+		expect(merged.telemetry.unmappedTenantPolicy).toBe("fleet");
+		expect(merged.telemetry.tenantMap).toEqual(DEFAULT_LIFECYCLE_CONFIG.telemetry.tenantMap);
+	});
+
+	it("defaults tenantMap to {} and unmappedTenantPolicy to 'skip' for an empty patch", () => {
+		const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, {});
+		expect(merged.telemetry.tenantMap).toEqual({});
+		expect(merged.telemetry.unmappedTenantPolicy).toBe("skip");
+	});
 });
 
 describe("loadLifecycleConfigFile", () => {
@@ -337,6 +390,175 @@ describe("loadLifecycleConfigFile", () => {
 				expect(patch).toEqual({ telemetry: { maxSignalsPerBatch: 500 } });
 			});
 		});
+
+		describe("tenantMap validation", () => {
+			it("rejects a tenantMap key that isn't a GUID, naming the key", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "bad-guid-key.json");
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { "not-a-guid": "acme" } },
+						}),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(/not-a-guid/);
+				});
+			});
+
+			it("rejects the __proto__ key (fails the GUID shape, naming the key)", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "proto-tenant-key.json");
+					const reservedKey = "__proto__";
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { [reservedKey]: "acme" } },
+						}),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(/__proto__/);
+				});
+			});
+
+			it("rejects a tenantMap value that fails the tenant-code shape, naming key and value", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "bad-tenant-code.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { [guid]: "-leading-dash-not-allowed" } },
+						}),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(guid));
+					expect(() => loadLifecycleConfigFile(file)).toThrow(/-leading-dash-not-allowed/);
+				});
+			});
+
+			it("rejects a non-string tenantMap value", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "numeric-tenant-code.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { tenantMap: { [guid]: 12345 } } }),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(guid));
+				});
+			});
+
+			it("accepts a valid tenantMap entry", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "good-tenant-map.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { tenantMap: { [guid]: "acme" } } }),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					expect(patch?.telemetry?.tenantMap).toEqual({ [guid]: "acme" });
+				});
+			});
+
+			it("lowercases a mixed-case tenantMap value at load ('Continia-DO' -> 'continia-do')", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "mixed-case-tenant-code.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { tenantMap: { [guid]: "Continia-DO" } } }),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					expect(patch?.telemetry?.tenantMap).toEqual({ [guid]: "continia-do" });
+				});
+			});
+
+			it("preserves the lowercased tenantMap value through mergeLifecycleConfig", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "mixed-case-merge.json");
+					const guid = "11111111-1111-1111-1111-111111111111";
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { tenantMap: { [guid]: "Continia-DO" } } }),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, patch ?? {});
+					expect(merged.telemetry.tenantMap[guid]).toBe("continia-do");
+				});
+			});
+
+			it("rejects case-variant duplicate GUID keys, naming both", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "dup-case-guid.json");
+					const upper = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+					const lower = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { [upper]: "acme", [lower]: "contoso" } },
+						}),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(upper));
+					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(lower));
+				});
+			});
+
+			it("accepts two genuinely distinct GUIDs", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "distinct-guids.json");
+					const guidA = "11111111-1111-1111-1111-111111111111";
+					const guidB = "22222222-2222-2222-2222-222222222222";
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { [guidA]: "acme", [guidB]: "contoso" } },
+						}),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					expect(patch?.telemetry?.tenantMap).toEqual({
+						[guidA]: "acme",
+						[guidB]: "contoso",
+					});
+				});
+			});
+		});
+
+		describe("unmappedTenantPolicy validation", () => {
+			it("rejects an invalid unmappedTenantPolicy enum value", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "bad-policy.json");
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { unmappedTenantPolicy: "explode" } }),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(/unmappedTenantPolicy/);
+				});
+			});
+
+			it("rejects a double-quoted policy string (the quoted-string trap)", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "quoted-policy.json");
+					// The value is the 6-character string `"skip"` (embedded quote
+					// characters), not the 4-character enum member `skip`.
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { unmappedTenantPolicy: '"skip"' } }),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(/unmappedTenantPolicy/);
+				});
+			});
+
+			it("accepts 'fleet'", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "fleet-policy.json");
+					writeFileSync(
+						file,
+						JSON.stringify({ telemetry: { unmappedTenantPolicy: "fleet" } }),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					expect(patch?.telemetry?.unmappedTenantPolicy).toBe("fleet");
+				});
+			});
+		});
 	});
 
 	describe("captureRequests block validation", () => {
@@ -408,6 +630,10 @@ describe("loadLifecycleConfigFile", () => {
 							RT0018: { warningMs: 5_000, criticalMs: 15_000 },
 							"RT0018@Web": { warningMs: 8_000, criticalMs: 20_000 },
 						},
+						tenantMap: {
+							"11111111-1111-1111-1111-111111111111": "acme",
+						},
+						unmappedTenantPolicy: "fleet",
 					},
 					captureRequests: {
 						enabled: false,
@@ -427,6 +653,10 @@ describe("loadLifecycleConfigFile", () => {
 						RT0018: { warningMs: 5_000, criticalMs: 15_000 },
 						"RT0018@Web": { warningMs: 8_000, criticalMs: 20_000 },
 					},
+					tenantMap: {
+						"11111111-1111-1111-1111-111111111111": "acme",
+					},
+					unmappedTenantPolicy: "fleet",
 				},
 				captureRequests: {
 					enabled: false,

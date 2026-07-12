@@ -3,12 +3,15 @@ import Table from "cli-table3";
 import { Command } from "commander";
 import { createHash } from "crypto";
 import { readFileSync, statSync, writeFileSync } from "fs";
+import { extname } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import {
 	DEFAULT_API_KEY_ENV,
 	DEFAULT_SIGNALS,
 	DEFAULT_SINCE,
+	type PullSplitResult,
 	pullTelemetry,
+	pullTelemetrySplit,
 } from "../../lifecycle/appinsights.js";
 import { rollupRoutineMetrics } from "../../lifecycle/baselines.js";
 import {
@@ -124,6 +127,302 @@ function printEvaluationOutcome(
 	);
 	for (const t of outcome.transitions) {
 		console.log(`  ${t.fingerprint}: ${t.from ?? "-"} -> ${t.to} (${t.event})`);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pull-telemetry --split-by-customer (telemetry-multitenant plan, Task 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * D4: `<out-without-ext>.<tenant>.<sanitized-stream>.json` — stream
+ * characters outside `[A-Za-z0-9-]` become `_` (a raw `environmentName` is
+ * untrusted and would otherwise land in a path segment, e.g. `"Prod/EU"`).
+ * `tenant` is lowercased for the filename only (mapped `tenantMap` values
+ * are already lowercased at config-load time; the raw `--tenant` flag used
+ * as the fleet bucket isn't — without this, a fleet-bucketed "Acme" group
+ * and a mapped "acme" group on the same stream produce case-distinct paths
+ * that collide and silently overwrite on a case-insensitive filesystem like
+ * NTFS). This is scoped to the filename only — the `tenant` field in the
+ * written-files summary, and every non-`--out` code path, still carry the
+ * value as-authored; broader `--tenant` case normalization is a tracked
+ * follow-up, not this fix's scope).
+ */
+function splitOutPath(outPath: string, tenant: string, stream: string): string {
+	const ext = extname(outPath);
+	const base = ext ? outPath.slice(0, -ext.length) : outPath;
+	const sanitizedStream = stream.replace(/[^A-Za-z0-9-]/g, "_");
+	return `${base}.${tenant.toLowerCase()}.${sanitizedStream}${ext}`;
+}
+
+/**
+ * Mirrors `TENANT_CODE_RE` in src/lifecycle/config-file.ts, duplicated per
+ * that module's own precedent (cross-module tenant-shape checks are copied,
+ * not imported, so each boundary stays self-contained). Mapped `tenantMap`
+ * values are already validated at config-load time; only the raw `--tenant`
+ * flag value is unchecked, and it only needs checking here — where it can
+ * land in a written filename as the fleet-policy bucket (D3/D4).
+ */
+const TENANT_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,39}$/;
+
+/**
+ * Two distinct groups can sanitize to the same `<tenant>.<stream>` filename
+ * (e.g. streams `"Prod/EU"` and `"Prod_EU"` both become `Prod_EU`) — assign
+ * each colliding group after the first a `-2`, `-3`, ... suffix rather than
+ * silently overwriting an earlier group's file.
+ */
+function assignUniqueOutPaths(
+	outPath: string,
+	groups: PullSplitResult["groups"],
+): Array<{ group: PullSplitResult["groups"][number]; path: string }> {
+	const assigned = new Set<string>();
+	return groups.map((group) => {
+		const basePath = splitOutPath(outPath, group.tenant, group.stream);
+		const ext = extname(basePath);
+		const stem = ext ? basePath.slice(0, -ext.length) : basePath;
+		let path = basePath;
+		let suffix = 2;
+		while (assigned.has(path)) {
+			path = `${stem}-${suffix}${ext}`;
+			suffix++;
+		}
+		assigned.add(path);
+		return { group, path };
+	});
+}
+
+/**
+ * One summary line for tenants skipped by the "skip" unmapped-tenant policy.
+ * CONTROLLER-PINNED (Task 2 review): an empty `aadTenantId` (on-prem/
+ * old-schema rows that never carried an AAD tenant id) must render visibly
+ * as "(none)" here — never an invisible empty string. JSON output (the
+ * `skippedTenants` array itself) keeps the raw `""`; only this text summary
+ * substitutes the placeholder.
+ */
+function formatSkippedTenantsSummary(
+	skipped: PullSplitResult["skippedTenants"],
+): string | null {
+	if (skipped.length === 0) return null;
+	const totalSignals = skipped.reduce((sum, s) => sum + s.signalCount, 0);
+	const detail = skipped
+		.map(
+			(s) =>
+				`${s.aadTenantId === "" ? "(none)" : s.aadTenantId} (${s.signalCount})`,
+		)
+		.join(", ");
+	return `Skipped ${skipped.length} tenant(s) not in tenantMap (${totalSignals} signal(s) total): ${detail}`;
+}
+
+/**
+ * `--stream`/`--profile-id` are meaningless once split derives both per
+ * group (D2 stream=environmentName, D5 profileId=content hash) — commander
+ * still applies their defaults, so `opts.stream`/`opts.profileId` are
+ * truthy either way; `getOptionValueSource` is the only way to tell "the
+ * operator typed this flag" apart from "this is just the default value".
+ */
+function warnIgnoredSplitFlags(splitCommand: Command): void {
+	if (splitCommand.getOptionValueSource("stream") === "cli") {
+		console.error(
+			"pull-telemetry --split-by-customer: --stream is ignored — each group's " +
+				"stream is derived from environmentName instead (docs/telemetry-recipe.md §10).",
+		);
+	}
+	if (splitCommand.getOptionValueSource("profileId") === "cli") {
+		console.error(
+			"pull-telemetry --split-by-customer: --profile-id is ignored — each group " +
+				"gets its own content-hash profileId instead (docs/telemetry-recipe.md §10).",
+		);
+	}
+}
+
+/**
+ * `pull-telemetry --split-by-customer`: fans one App Insights pull into one
+ * batch per (customer AAD tenant, environment) via `pullTelemetrySplit`,
+ * then either evaluates N batches into the lifecycle DB or writes N `--out`
+ * files. Kept as a standalone function (not inlined into the main
+ * `pull-telemetry` action) so the non-split path stays byte-identical to
+ * before this flag existed.
+ */
+async function runSplitByCustomer(
+	cmd: Command,
+	opts: any,
+	splitCommand: Command,
+): Promise<void> {
+	warnIgnoredSplitFlags(splitCommand);
+
+	const config = resolveLifecycleConfig(cmd.opts().config);
+	const tenantMapNonEmpty = Object.keys(config.telemetry.tenantMap).length > 0;
+	const fleetPolicy = config.telemetry.unmappedTenantPolicy === "fleet";
+	if (!tenantMapNonEmpty && !fleetPolicy) {
+		console.error(
+			"pull-telemetry --split-by-customer requires the --config file's " +
+				"telemetry.tenantMap to contain at least one AAD-tenant-GUID entry, " +
+				'or telemetry.unmappedTenantPolicy to be "fleet" — with an empty ' +
+				'tenantMap and the default "skip" policy every tenant would be ' +
+				"skipped (100% of the pull lost). Add customers to " +
+				'telemetry.tenantMap, or set unmappedTenantPolicy: "fleet" to bucket ' +
+				"everything unmapped under --tenant.",
+		);
+		process.exitCode = 2;
+		return;
+	}
+
+	// The fleet-policy bucket is --tenant verbatim; in --out mode that value
+	// lands in a written filename (splitOutPath), so it needs the same shape
+	// check tenantMap VALUES already get at config-load time. Only checked in
+	// --out mode (evaluate mode passes it through to the store as an ordinary
+	// tenant key, same as every other subcommand's unchecked --tenant).
+	if (opts.out && !TENANT_CODE_RE.test(opts.tenant)) {
+		console.error(
+			`pull-telemetry --split-by-customer --out: --tenant value ${JSON.stringify(opts.tenant)} ` +
+				`is not a valid tenant code (must match ${TENANT_CODE_RE}) — it can end up ` +
+				"in a written filename as the fleet-policy bucket.",
+		);
+		process.exitCode = 2;
+		return;
+	}
+
+	let splitResult: PullSplitResult;
+	try {
+		const signals = String(opts.signals)
+			.split(",")
+			.map((s: string) => s.trim())
+			.filter((s: string) => s.length > 0);
+		const clientTypes = opts.clientTypes
+			? String(opts.clientTypes)
+					.split(",")
+					.map((s: string) => s.trim())
+					.filter((s: string) => s.length > 0)
+			: undefined;
+		splitResult = await pullTelemetrySplit({
+			appId: opts.appId,
+			apiKeyEnv: opts.apiKeyEnv,
+			since: opts.since,
+			signals,
+			clientTypes,
+			tenantMap: config.telemetry.tenantMap,
+			unmappedTenantPolicy: config.telemetry.unmappedTenantPolicy,
+			fleetTenant: opts.tenant,
+		});
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err));
+		process.exitCode = 1;
+		return;
+	}
+
+	const skippedSummary = formatSkippedTenantsSummary(
+		splitResult.skippedTenants,
+	);
+
+	if (opts.out) {
+		const written = assignUniqueOutPaths(opts.out, splitResult.groups).map(
+			({ group, path }) => {
+				writeFileSync(path, JSON.stringify(group.batch, null, 2) + "\n");
+				return {
+					tenant: group.tenant,
+					stream: group.stream,
+					path,
+					signalCount: group.batch.signals.length,
+				};
+			},
+		);
+		if (opts.format === "json") {
+			process.stdout.write(
+				JSON.stringify(
+					{ written, skippedTenants: splitResult.skippedTenants },
+					null,
+					2,
+				) + "\n",
+			);
+		} else {
+			for (const w of written) {
+				console.log(
+					`Wrote telemetry batch (${w.signalCount} signal(s)) for ${w.tenant}/${w.stream} to ${w.path}`,
+				);
+			}
+			if (skippedSummary) console.log(skippedSummary);
+		}
+		return;
+	}
+
+	const store = new LifecycleStore(cmd.opts().db);
+	try {
+		// Per-group isolation: one customer's poison batch (e.g. a bad row that
+		// fails telemetry-batch validation) must not block every OTHER
+		// customer's evaluation in the same pull — that's exactly the
+		// cross-tenant coupling this plan exists to remove. A failing group is
+		// recorded and the loop continues; the run still exits nonzero so the
+		// failure isn't silently swallowed.
+		const groups: Array<{
+			tenant: string;
+			stream: string;
+			aadTenantId: string;
+			environmentName: string | null;
+			outcome: EvaluationOutcome;
+		}> = [];
+		const failedGroups: Array<{
+			tenant: string;
+			stream: string;
+			error: string;
+		}> = [];
+		for (const group of splitResult.groups) {
+			// The store's duplicate-run guard keys off (tenant, profileId) alone
+			// — stream isn't part of that uniqueness constraint (store.ts) — so
+			// hashing the batch alone lets two same-tenant streams with
+			// byte-identical signal sets (e.g. Production/Sandbox both quiet
+			// this window) collide and the second silently skips as
+			// duplicate-run. Folding tenant+stream into the hash input keeps
+			// each group's idempotency key distinct even when their content is
+			// identical.
+			const profileId = createHash("sha256")
+				.update(JSON.stringify([group.tenant, group.stream, group.batch]))
+				.digest("hex")
+				.slice(0, 32);
+			try {
+				const outcome = evaluateTelemetryBatch(
+					store,
+					group.batch,
+					{ tenant: group.tenant, stream: group.stream, profileId },
+					config,
+				);
+				groups.push({
+					tenant: group.tenant,
+					stream: group.stream,
+					aadTenantId: group.aadTenantId,
+					environmentName: group.environmentName,
+					outcome,
+				});
+				if (opts.format !== "json") {
+					console.log(
+						`${group.tenant}/${group.stream}: ${outcome.findingsSeen} findings seen`,
+					);
+				}
+			} catch (err) {
+				const error = err instanceof Error ? err.message : String(err);
+				failedGroups.push({
+					tenant: group.tenant,
+					stream: group.stream,
+					error,
+				});
+				if (opts.format !== "json") {
+					console.log(`${group.tenant}/${group.stream}: failed — ${error}`);
+				}
+			}
+		}
+		if (opts.format === "json") {
+			process.stdout.write(
+				JSON.stringify(
+					{ groups, skippedTenants: splitResult.skippedTenants, failedGroups },
+					null,
+					2,
+				) + "\n",
+			);
+		} else if (skippedSummary) {
+			console.log(skippedSummary);
+		}
+		if (failedGroups.length > 0) process.exitCode = 1;
+	} finally {
+		store.close();
 	}
 }
 
@@ -371,11 +670,7 @@ export function createLifecycleCommand(): Command {
 					skippedMaxPending: 0,
 				};
 				if (lifecycleConfig.captureRequests.enabled) {
-					captureRequests = processCaptureTriggers(
-						store,
-						lifecycleConfig,
-						now,
-					);
+					captureRequests = processCaptureTriggers(store, lifecycleConfig, now);
 				}
 
 				// Sinks live under the same config file's `sinks` block, but
@@ -535,14 +830,31 @@ export function createLifecycleCommand(): Command {
 			"--out <path>",
 			"Write the normalized batch JSON here instead of evaluating (does not touch the DB)",
 		)
-		.option("--tenant <tenant>", "Tenant key", "local")
-		.option("--stream <stream>", "Capture stream", "telemetry")
+		.option(
+			"--split-by-customer",
+			'Fan out into one batch per (customer AAD tenant, environment) via the --config file\'s telemetry.tenantMap; requires a non-empty tenantMap or unmappedTenantPolicy: "fleet" (see docs/telemetry-recipe.md)',
+		)
+		.option(
+			"--tenant <tenant>",
+			'Tenant key (also the fleet bucket for --split-by-customer\'s unmapped-tenant "fleet" policy)',
+			"local",
+		)
+		.option(
+			"--stream <stream>",
+			"Capture stream (ignored under --split-by-customer, which derives one stream per group from environmentName)",
+			"telemetry",
+		)
 		.option(
 			"--profile-id <id>",
-			"Idempotency key (default: sha256 of the normalized batch)",
+			"Idempotency key, default: sha256 of the normalized batch (ignored under --split-by-customer, which derives one content-hash profileId per group)",
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
-		.action(async (opts: any) => {
+		.action(async (opts: any, splitCommand: Command) => {
+			if (opts.splitByCustomer) {
+				await runSplitByCustomer(cmd, opts, splitCommand);
+				return;
+			}
+
 			// The API key check inside pullTelemetry happens before any fetch —
 			// deliberately caught here (not rethrown) so a missing key never
 			// opens the lifecycle store either, matching --out's "no side effects
