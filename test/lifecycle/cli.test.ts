@@ -2378,6 +2378,6 @@ describe("lifecycle maintain --purge-stale-fingerprints", () => {
 		after.close();
 
 		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
-		expect(printed).toContain("1");
+		expect(printed).toContain("Purged 1 finding(s)");
 	});
 });

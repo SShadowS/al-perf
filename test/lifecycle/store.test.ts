@@ -730,12 +730,58 @@ describe("stale algo-version findings", () => {
 			requestedAt: "2026-07-01T00:00:00Z",
 			expiresAt: "2026-07-15T00:00:00Z",
 		});
+		// The FK-constrained relations the purge's DELETEs actually protect
+		// against: occurrences and finding_events both need a live row here or
+		// removing their DELETE never trips PRAGMA foreign_keys (it stays a
+		// vacuous check on empty tables). occurrences needs a run row first.
+		const { runId } = store.recordRun({
+			tenant: "acme",
+			stream: "nightly",
+			profileId: "profile-ccc",
+			captureKind: "sampling",
+			captureTime: "2026-07-01T00:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		store.recordOccurrence({
+			findingId: id,
+			runId,
+			captureTime: "2026-07-01T00:00:00Z",
+			severity: "critical",
+		});
+		store.logEvent({
+			findingId: id,
+			event: "first-seen",
+			fromState: null,
+			toState: "new",
+			at: "2026-07-01T00:00:00Z",
+		});
+		store.enqueueOutbox({
+			tenant: "acme",
+			sink: "github",
+			kind: "file",
+			findingId: id,
+			payload: "{}",
+			dedupeKey: "acme:github:pattern:ccccccccccccccc1",
+			nextAttemptAt: "2026-07-01T00:00:00Z",
+			createdAt: "2026-07-01T00:00:00Z",
+		});
+		// A finding at the CURRENT algo version that supersedes the doomed one —
+		// this is the one dependency the FK constraint can't catch (supersedes
+		// has no REFERENCES clause), so it needs its own assertion below.
+		const survivorId = seed(store, "acme", "pattern:ccccccccccccccc2", 2);
+		store.db.run("UPDATE findings SET supersedes = ? WHERE id = ?", [
+			id,
+			survivorId,
+		]);
 
 		store.purgeStaleAlgoFindings("acme", 2);
 
 		expect(
 			store.getIssueMapping("acme", "github", "pattern:ccccccccccccccc1"),
 		).toBeNull();
+		expect(store.getFinding(survivorId)?.supersedes).toBeNull();
 		const violations = store.db.query("PRAGMA foreign_key_check").all();
 		expect(violations).toEqual([]);
 		store.close();
