@@ -638,7 +638,10 @@ export class LifecycleStore {
 			tenant: row.tenant as string,
 			stream: row.stream as string,
 			profileId: row.profile_id as string,
-			captureKind: row.capture_kind as "sampling" | "instrumentation" | "telemetry",
+			captureKind: row.capture_kind as
+				| "sampling"
+				| "instrumentation"
+				| "telemetry",
 			captureTime: row.capture_time as string,
 			versionStamp: row.version_stamp as string,
 			incomplete: (row.incomplete as number) === 1,
@@ -1280,7 +1283,12 @@ export class LifecycleStore {
 	createCaptureRequest(
 		input: Omit<
 			CaptureRequestRow,
-			"id" | "status" | "claimedAt" | "claimedBy" | "fulfilledAt" | "fulfilledByProfileId"
+			| "id"
+			| "status"
+			| "claimedAt"
+			| "claimedBy"
+			| "fulfilledAt"
+			| "fulfilledByProfileId"
 		>,
 	): boolean {
 		const res = this.db.run(

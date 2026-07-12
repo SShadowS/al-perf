@@ -18,15 +18,15 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
-	computePatternFingerprint,
-	formatFingerprint,
-	parseFingerprint,
-} from "../../src/lifecycle/fingerprint.js";
-import {
 	applyIdentityUpgrades,
 	evaluateRun,
 	type RunMetadata,
 } from "../../src/lifecycle/evaluate.js";
+import {
+	computePatternFingerprint,
+	formatFingerprint,
+	parseFingerprint,
+} from "../../src/lifecycle/fingerprint.js";
 import { LifecycleStore } from "../../src/lifecycle/store.js";
 import { fingerprintPatterns } from "../../src/lifecycle/wire.js";
 import type { AnalysisResult } from "../../src/output/types.js";
@@ -180,7 +180,10 @@ function makeAnalysisResult(
 	};
 }
 
-function makeRun(overrides: Partial<RunMetadata> & Pick<RunMetadata, "profileId" | "captureTime">): RunMetadata {
+function makeRun(
+	overrides: Partial<RunMetadata> &
+		Pick<RunMetadata, "profileId" | "captureTime">,
+): RunMetadata {
 	return {
 		tenant: "wf-payoff",
 		stream: "nightly",
@@ -322,7 +325,11 @@ describe("apply identity upgrades before evaluateRun (Task 3 payoff)", () => {
 			const outcome1 = evaluateRun(
 				store,
 				makeAnalysisResult(pattern1, methods),
-				makeRun({ tenant, profileId: "run-1", captureTime: "2026-07-01T00:00:00Z" }),
+				makeRun({
+					tenant,
+					profileId: "run-1",
+					captureTime: "2026-07-01T00:00:00Z",
+				}),
 			);
 			expect(outcome1.transitions).toHaveLength(1);
 			expect(outcome1.transitions[0]?.event).toBe("first-seen");
@@ -383,7 +390,11 @@ describe("apply identity upgrades before evaluateRun (Task 3 payoff)", () => {
 			const outcome2 = evaluateRun(
 				store,
 				makeAnalysisResult(pattern2, methods),
-				makeRun({ tenant, profileId: "run-2", captureTime: "2026-07-02T00:00:00Z" }),
+				makeRun({
+					tenant,
+					profileId: "run-2",
+					captureTime: "2026-07-02T00:00:00Z",
+				}),
 			);
 			// A CONTINUATION (state advances new -> open), never a fresh "first-seen".
 			expect(outcome2.transitions).toHaveLength(1);
@@ -440,7 +451,11 @@ describe("apply identity upgrades before evaluateRun (Task 3 payoff)", () => {
 			const outcome3 = evaluateRun(
 				store,
 				makeAnalysisResult(pattern3, methods),
-				makeRun({ tenant, profileId: "run-3", captureTime: "2026-07-03T00:00:00Z" }),
+				makeRun({
+					tenant,
+					profileId: "run-3",
+					captureTime: "2026-07-03T00:00:00Z",
+				}),
 			);
 			expect(outcome3.skipped).toBeUndefined();
 			expect(store.countOccurrences(findingId as number)).toBe(3);

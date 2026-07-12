@@ -54,9 +54,12 @@ function signalIdFromPatternId(patternId: string): string {
  * defensive guard against a finding whose method never resolved at
  * collection time, which leaves routineKey "").
  */
-function parseRoutineKey(
-	routineKey: string,
-): { appId: string; objectType: string; objectId: number; methodName: string } | null {
+function parseRoutineKey(routineKey: string): {
+	appId: string;
+	objectType: string;
+	objectId: number;
+	methodName: string;
+} | null {
 	const parts = routineKey.split("|");
 	if (parts.length !== 4) return null;
 	const [appId, objectType, objectIdStr, methodName] = parts;
@@ -66,7 +69,9 @@ function parseRoutineKey(
 }
 
 function isCandidate(f: FindingRow): boolean {
-	return f.fingerprint.startsWith("telemetry:") && CANDIDATE_STATES.has(f.state);
+	return (
+		f.fingerprint.startsWith("telemetry:") && CANDIDATE_STATES.has(f.state)
+	);
 }
 
 /**

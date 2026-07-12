@@ -1062,7 +1062,9 @@ const LIST_TENANTS_COLUMNS = [
 ];
 
 function listTenantsResponse(rows: unknown[][]) {
-	return { tables: [{ name: "PrimaryTable", columns: LIST_TENANTS_COLUMNS, rows }] };
+	return {
+		tables: [{ name: "PrimaryTable", columns: LIST_TENANTS_COLUMNS, rows }],
+	};
 }
 
 describe("listTenants — KQL shape and request pinning", () => {
@@ -1179,9 +1181,7 @@ describe("listTenants — row normalization", () => {
 	});
 
 	it("parses a make_set cell arriving as a JSON-array string", async () => {
-		const rows = [
-			["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 3, '["A","B"]'],
-		];
+		const rows = [["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 3, '["A","B"]']];
 		const fetchImpl = (async () =>
 			okResponse(listTenantsResponse(rows))) as typeof fetch;
 

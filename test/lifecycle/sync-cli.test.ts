@@ -499,11 +499,19 @@ describe("lifecycle sync — security boundary", () => {
 			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
 			const summary = JSON.parse(output);
 			expect(summary.drains).toHaveLength(2);
-			const gh = summary.drains.find((d: { sink: string }) => d.sink === "github");
+			const gh = summary.drains.find(
+				(d: { sink: string }) => d.sink === "github",
+			);
 			const ado = summary.drains.find(
 				(d: { sink: string }) => d.sink === "azureDevOps",
 			);
-			expect(gh).toEqual({ sink: "github", delivered: 1, retried: 0, dead: 0, collapsed: 0 });
+			expect(gh).toEqual({
+				sink: "github",
+				delivered: 1,
+				retried: 0,
+				dead: 0,
+				collapsed: 0,
+			});
 			expect(ado).toEqual({
 				sink: "azureDevOps",
 				delivered: 1,
@@ -515,8 +523,12 @@ describe("lifecycle sync — security boundary", () => {
 			expect(output).not.toContain("gh-token");
 
 			const store = new LifecycleStore(dbPath);
-			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(0);
-			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(0);
+			expect(
+				store.listPendingOutbox("github", "comment-regressed"),
+			).toHaveLength(0);
+			expect(
+				store.listPendingOutbox("azureDevOps", "comment-regressed"),
+			).toHaveLength(0);
 			store.close();
 		});
 
@@ -571,8 +583,12 @@ describe("lifecycle sync — security boundary", () => {
 
 			// The ADO row is still pending — never drained.
 			const store = new LifecycleStore(dbPath);
-			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(1);
-			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(0);
+			expect(
+				store.listPendingOutbox("azureDevOps", "comment-regressed"),
+			).toHaveLength(1);
+			expect(
+				store.listPendingOutbox("github", "comment-regressed"),
+			).toHaveLength(0);
 			store.close();
 		});
 
@@ -629,8 +645,12 @@ describe("lifecycle sync — security boundary", () => {
 
 			// The github row is still pending — never drained.
 			const store = new LifecycleStore(dbPath);
-			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(1);
-			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(0);
+			expect(
+				store.listPendingOutbox("github", "comment-regressed"),
+			).toHaveLength(1);
+			expect(
+				store.listPendingOutbox("azureDevOps", "comment-regressed"),
+			).toHaveLength(0);
 			store.close();
 		});
 
@@ -690,8 +710,12 @@ describe("lifecycle sync — security boundary", () => {
 			expect(summary.dryRun).toBe(true);
 
 			const store = new LifecycleStore(dbPath);
-			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(1);
-			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(1);
+			expect(
+				store.listPendingOutbox("github", "comment-regressed"),
+			).toHaveLength(1);
+			expect(
+				store.listPendingOutbox("azureDevOps", "comment-regressed"),
+			).toHaveLength(1);
 			store.close();
 		});
 	});

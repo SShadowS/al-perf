@@ -628,7 +628,9 @@ describe("applyFingerprintMigration", () => {
 		const fromFindingId = store.insertFinding(
 			finding("pattern:fallbackhash00001"),
 		);
-		const toFindingId = store.insertFinding(finding("pattern:stablehash000001"));
+		const toFindingId = store.insertFinding(
+			finding("pattern:stablehash000001"),
+		);
 		store.createCaptureRequest(
 			captureRequest({
 				fingerprint: "pattern:fallbackhash00001",

@@ -357,9 +357,9 @@ describe("LifecycleStore capture requests", () => {
 	it("createCaptureRequest returns true on first insert", () => {
 		const store = new LifecycleStore(":memory:");
 		const findingId = store.insertFinding(baseFinding());
-		expect(
-			store.createCaptureRequest(baseCaptureRequest({ findingId })),
-		).toBe(true);
+		expect(store.createCaptureRequest(baseCaptureRequest({ findingId }))).toBe(
+			true,
+		);
 		expect(store.listCaptureRequests()).toHaveLength(1);
 		store.close();
 	});
@@ -367,12 +367,12 @@ describe("LifecycleStore capture requests", () => {
 	it("createCaptureRequest returns false when an active (pending/claimed) duplicate exists for the same (tenant, fingerprint)", () => {
 		const store = new LifecycleStore(":memory:");
 		const findingId = store.insertFinding(baseFinding());
-		expect(
-			store.createCaptureRequest(baseCaptureRequest({ findingId })),
-		).toBe(true);
-		expect(
-			store.createCaptureRequest(baseCaptureRequest({ findingId })),
-		).toBe(false);
+		expect(store.createCaptureRequest(baseCaptureRequest({ findingId }))).toBe(
+			true,
+		);
+		expect(store.createCaptureRequest(baseCaptureRequest({ findingId }))).toBe(
+			false,
+		);
 		expect(store.listCaptureRequests()).toHaveLength(1);
 		store.close();
 	});
@@ -380,16 +380,16 @@ describe("LifecycleStore capture requests", () => {
 	it("createCaptureRequest returns false when a claimed duplicate exists for the same (tenant, fingerprint) — the partial-unique index covers claimed, not just pending", () => {
 		const store = new LifecycleStore(":memory:");
 		const findingId = store.insertFinding(baseFinding());
-		expect(
-			store.createCaptureRequest(baseCaptureRequest({ findingId })),
-		).toBe(true);
+		expect(store.createCaptureRequest(baseCaptureRequest({ findingId }))).toBe(
+			true,
+		);
 		const [row] = store.listCaptureRequests();
 		expect(
 			store.claimCaptureRequest(row.id, "executor-1", "2026-07-12T00:00:00Z"),
 		).toBe(true);
-		expect(
-			store.createCaptureRequest(baseCaptureRequest({ findingId })),
-		).toBe(false);
+		expect(store.createCaptureRequest(baseCaptureRequest({ findingId }))).toBe(
+			false,
+		);
 		expect(store.listCaptureRequests()).toHaveLength(1);
 		store.close();
 	});
@@ -409,9 +409,9 @@ describe("LifecycleStore capture requests", () => {
 		expect(
 			store.listCaptureRequests("t1", "fulfilled").map((r) => r.id),
 		).toEqual([row.id]);
-		expect(
-			store.createCaptureRequest(baseCaptureRequest({ findingId })),
-		).toBe(true);
+		expect(store.createCaptureRequest(baseCaptureRequest({ findingId }))).toBe(
+			true,
+		);
 		expect(store.listCaptureRequests()).toHaveLength(2);
 		store.close();
 	});
@@ -444,9 +444,7 @@ describe("LifecycleStore capture requests", () => {
 	it("countActiveCaptureRequests counts pending + claimed only, per tenant", () => {
 		const store = new LifecycleStore(":memory:");
 		const f1 = store.insertFinding(baseFinding());
-		const f2 = store.insertFinding(
-			baseFinding({ fingerprint: "pattern:aaa" }),
-		);
+		const f2 = store.insertFinding(baseFinding({ fingerprint: "pattern:aaa" }));
 		store.createCaptureRequest(
 			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
 		);
@@ -537,9 +535,7 @@ describe("LifecycleStore capture requests", () => {
 	it("cancelCaptureRequest transitions pending or claimed -> cancelled", () => {
 		const store = new LifecycleStore(":memory:");
 		const f1 = store.insertFinding(baseFinding());
-		const f2 = store.insertFinding(
-			baseFinding({ fingerprint: "pattern:aaa" }),
-		);
+		const f2 = store.insertFinding(baseFinding({ fingerprint: "pattern:aaa" }));
 		store.createCaptureRequest(
 			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
 		);
@@ -547,9 +543,7 @@ describe("LifecycleStore capture requests", () => {
 			baseCaptureRequest({ findingId: f2, fingerprint: "telemetry:bbb" }),
 		);
 		const [pendingRow, toClaimRow] = store.listCaptureRequests();
-		expect(
-			store.cancelCaptureRequest(pendingRow.id),
-		).toBe(true);
+		expect(store.cancelCaptureRequest(pendingRow.id)).toBe(true);
 		expect(store.listCaptureRequests()[0].status).toBe("cancelled");
 
 		store.claimCaptureRequest(
@@ -557,26 +551,20 @@ describe("LifecycleStore capture requests", () => {
 			"executor-1",
 			"2026-07-12T00:00:00Z",
 		);
-		expect(
-			store.cancelCaptureRequest(toClaimRow.id),
-		).toBe(true);
+		expect(store.cancelCaptureRequest(toClaimRow.id)).toBe(true);
 		expect(
 			store.listCaptureRequests().find((r) => r.id === toClaimRow.id)?.status,
 		).toBe("cancelled");
 
 		// already cancelled -> refuse
-		expect(
-			store.cancelCaptureRequest(pendingRow.id),
-		).toBe(false);
+		expect(store.cancelCaptureRequest(pendingRow.id)).toBe(false);
 		store.close();
 	});
 
 	it("expireCaptureRequests sweeps pending/claimed rows with expiresAt <= now, respecting the boundary", () => {
 		const store = new LifecycleStore(":memory:");
 		const f1 = store.insertFinding(baseFinding());
-		const f2 = store.insertFinding(
-			baseFinding({ fingerprint: "pattern:aaa" }),
-		);
+		const f2 = store.insertFinding(baseFinding({ fingerprint: "pattern:aaa" }));
 		store.createCaptureRequest(
 			baseCaptureRequest({
 				findingId: f1,
@@ -594,12 +582,12 @@ describe("LifecycleStore capture requests", () => {
 		// boundary: exactly at expiresAt counts as expired ("<=")
 		expect(store.expireCaptureRequests("2026-07-18T00:00:00Z")).toBe(1);
 		const rows = store.listCaptureRequests();
-		expect(rows.find((r) => r.expiresAt === "2026-07-18T00:00:00Z")?.status).toBe(
-			"expired",
-		);
-		expect(rows.find((r) => r.expiresAt === "2026-07-19T00:00:00Z")?.status).toBe(
-			"pending",
-		);
+		expect(
+			rows.find((r) => r.expiresAt === "2026-07-18T00:00:00Z")?.status,
+		).toBe("expired");
+		expect(
+			rows.find((r) => r.expiresAt === "2026-07-19T00:00:00Z")?.status,
+		).toBe("pending");
 		expect(store.expireCaptureRequests("2026-07-19T00:00:00Z")).toBe(1);
 		expect(
 			store.listCaptureRequests().every((r) => r.status === "expired"),
@@ -612,9 +600,7 @@ describe("LifecycleStore capture requests", () => {
 	it("fulfillMatchingCaptureRequests matches the exact appId|objectType|objectId|methodName join key and is tenant-scoped", () => {
 		const store = new LifecycleStore(":memory:");
 		const f1 = store.insertFinding(baseFinding());
-		const f2 = store.insertFinding(
-			baseFinding({ fingerprint: "pattern:aaa" }),
-		);
+		const f2 = store.insertFinding(baseFinding({ fingerprint: "pattern:aaa" }));
 		const f3 = store.insertFinding(
 			baseFinding({ fingerprint: "pattern:bbb", tenant: "t2" }),
 		);

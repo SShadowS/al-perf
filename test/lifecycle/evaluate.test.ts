@@ -733,7 +733,11 @@ describe("evaluateRun — tenant normalization (debt-closure plan D1)", () => {
 		// Second run is a SECOND observation of the SAME finding (new -> open),
 		// not a fresh "first-seen" under a case-distinct tenant.
 		expect(o.transitions[0]).toEqual(
-			expect.objectContaining({ from: "new", to: "open", event: "seen-normal" }),
+			expect.objectContaining({
+				from: "new",
+				to: "open",
+				event: "seen-normal",
+			}),
 		);
 		expect(store.getActiveFinding("acme", FP)?.state).toBe("open");
 		expect(store.listFindings({ tenant: "acme" }).length).toBe(1);

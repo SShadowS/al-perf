@@ -128,7 +128,9 @@ describe("mergeLifecycleConfig", () => {
 		});
 
 		expect(merged.telemetry.maxSignalsPerBatch).toBe(10_000);
-		expect(merged.telemetry.severity).toEqual(DEFAULT_LIFECYCLE_CONFIG.telemetry.severity);
+		expect(merged.telemetry.severity).toEqual(
+			DEFAULT_LIFECYCLE_CONFIG.telemetry.severity,
+		);
 		expect(merged.telemetry.unmappedTenantPolicy).toBe("skip");
 		expect(merged.telemetry.tenantMap).toEqual({
 			"11111111-1111-1111-1111-111111111111": "acme",
@@ -162,7 +164,9 @@ describe("mergeLifecycleConfig", () => {
 			telemetry: { unmappedTenantPolicy: "fleet" },
 		});
 		expect(merged.telemetry.unmappedTenantPolicy).toBe("fleet");
-		expect(merged.telemetry.tenantMap).toEqual(DEFAULT_LIFECYCLE_CONFIG.telemetry.tenantMap);
+		expect(merged.telemetry.tenantMap).toEqual(
+			DEFAULT_LIFECYCLE_CONFIG.telemetry.tenantMap,
+		);
 	});
 
 	it("defaults tenantMap to {} and unmappedTenantPolicy to 'skip' for an empty patch", () => {
@@ -194,7 +198,9 @@ describe("loadLifecycleConfigFile", () => {
 		withTmpDir("alperf-lc-cfg-", (dir) => {
 			const file = join(dir, "array-root.json");
 			writeFileSync(file, JSON.stringify([1, 2, 3]));
-			expect(() => loadLifecycleConfigFile(file)).toThrow(/root must be an object/);
+			expect(() => loadLifecycleConfigFile(file)).toThrow(
+				/root must be an object/,
+			);
 		});
 	});
 
@@ -203,7 +209,9 @@ describe("loadLifecycleConfigFile", () => {
 			const file = join(dir, "sinks-only.json");
 			writeFileSync(
 				file,
-				JSON.stringify({ sinks: { github: { enabled: true, repo: "owner/repo" } } }),
+				JSON.stringify({
+					sinks: { github: { enabled: true, repo: "owner/repo" } },
+				}),
 			);
 			expect(loadLifecycleConfigFile(file)).toEqual({});
 		});
@@ -217,23 +225,35 @@ describe("loadLifecycleConfigFile", () => {
 					file,
 					JSON.stringify({ telemetry: { maxSignalsPerBatch: 10.5 } }),
 				);
-				expect(() => loadLifecycleConfigFile(file)).toThrow(/maxSignalsPerBatch/);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(
+					/maxSignalsPerBatch/,
+				);
 			});
 		});
 
 		it("rejects a zero/negative maxSignalsPerBatch", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "zero-max.json");
-				writeFileSync(file, JSON.stringify({ telemetry: { maxSignalsPerBatch: 0 } }));
-				expect(() => loadLifecycleConfigFile(file)).toThrow(/maxSignalsPerBatch/);
+				writeFileSync(
+					file,
+					JSON.stringify({ telemetry: { maxSignalsPerBatch: 0 } }),
+				);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(
+					/maxSignalsPerBatch/,
+				);
 			});
 		});
 
 		it("rejects a stringified maxSignalsPerBatch (quoted-number trap)", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "string-max.json");
-				writeFileSync(file, JSON.stringify({ telemetry: { maxSignalsPerBatch: "500" } }));
-				expect(() => loadLifecycleConfigFile(file)).toThrow(/maxSignalsPerBatch/);
+				writeFileSync(
+					file,
+					JSON.stringify({ telemetry: { maxSignalsPerBatch: "500" } }),
+				);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(
+					/maxSignalsPerBatch/,
+				);
 			});
 		});
 
@@ -244,11 +264,15 @@ describe("loadLifecycleConfigFile", () => {
 					file,
 					JSON.stringify({
 						telemetry: {
-							severity: { "RT0018; DROP TABLE": { warningMs: 1, criticalMs: 2 } },
+							severity: {
+								"RT0018; DROP TABLE": { warningMs: 1, criticalMs: 2 },
+							},
 						},
 					}),
 				);
-				expect(() => loadLifecycleConfigFile(file)).toThrow(/RT0018; DROP TABLE/);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(
+					/RT0018; DROP TABLE/,
+				);
 			});
 		});
 
@@ -296,7 +320,9 @@ describe("loadLifecycleConfigFile", () => {
 				writeFileSync(
 					file,
 					JSON.stringify({
-						telemetry: { severity: { RT0018: { warningMs: null, criticalMs: 2 } } },
+						telemetry: {
+							severity: { RT0018: { warningMs: null, criticalMs: 2 } },
+						},
 					}),
 				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/RT0018/);
@@ -310,7 +336,9 @@ describe("loadLifecycleConfigFile", () => {
 				writeFileSync(
 					file,
 					JSON.stringify({
-						telemetry: { severity: { RT0018: { warningMs: 1, criticalMs: -5 } } },
+						telemetry: {
+							severity: { RT0018: { warningMs: 1, criticalMs: -5 } },
+						},
 					}),
 				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/RT0018/);
@@ -366,7 +394,9 @@ describe("loadLifecycleConfigFile", () => {
 				writeFileSync(
 					file,
 					JSON.stringify({
-						telemetry: { severity: { RT0018: { warningMs: 50, criticalMs: 50 } } },
+						telemetry: {
+							severity: { RT0018: { warningMs: 50, criticalMs: 50 } },
+						},
 					}),
 				);
 				const patch = loadLifecycleConfigFile(file);
@@ -430,7 +460,9 @@ describe("loadLifecycleConfigFile", () => {
 						}),
 					);
 					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(guid));
-					expect(() => loadLifecycleConfigFile(file)).toThrow(/-leading-dash-not-allowed/);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(
+						/-leading-dash-not-allowed/,
+					);
 				});
 			});
 
@@ -465,10 +497,14 @@ describe("loadLifecycleConfigFile", () => {
 					const guid = "11111111-1111-1111-1111-111111111111";
 					writeFileSync(
 						file,
-						JSON.stringify({ telemetry: { tenantMap: { [guid]: "Continia-DO" } } }),
+						JSON.stringify({
+							telemetry: { tenantMap: { [guid]: "Continia-DO" } },
+						}),
 					);
 					const patch = loadLifecycleConfigFile(file);
-					expect(patch?.telemetry?.tenantMap).toEqual({ [guid]: "continia-do" });
+					expect(patch?.telemetry?.tenantMap).toEqual({
+						[guid]: "continia-do",
+					});
 				});
 			});
 
@@ -478,10 +514,15 @@ describe("loadLifecycleConfigFile", () => {
 					const guid = "11111111-1111-1111-1111-111111111111";
 					writeFileSync(
 						file,
-						JSON.stringify({ telemetry: { tenantMap: { [guid]: "Continia-DO" } } }),
+						JSON.stringify({
+							telemetry: { tenantMap: { [guid]: "Continia-DO" } },
+						}),
 					);
 					const patch = loadLifecycleConfigFile(file);
-					const merged = mergeLifecycleConfig(DEFAULT_LIFECYCLE_CONFIG, patch ?? {});
+					const merged = mergeLifecycleConfig(
+						DEFAULT_LIFECYCLE_CONFIG,
+						patch ?? {},
+					);
 					expect(merged.telemetry.tenantMap[guid]).toBe("continia-do");
 				});
 			});
@@ -497,8 +538,12 @@ describe("loadLifecycleConfigFile", () => {
 							telemetry: { tenantMap: { [upper]: "acme", [lower]: "contoso" } },
 						}),
 					);
-					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(upper));
-					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(lower));
+					expect(() => loadLifecycleConfigFile(file)).toThrow(
+						new RegExp(upper),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(
+						new RegExp(lower),
+					);
 				});
 			});
 
@@ -530,7 +575,9 @@ describe("loadLifecycleConfigFile", () => {
 						file,
 						JSON.stringify({ telemetry: { unmappedTenantPolicy: "explode" } }),
 					);
-					expect(() => loadLifecycleConfigFile(file)).toThrow(/unmappedTenantPolicy/);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(
+						/unmappedTenantPolicy/,
+					);
 				});
 			});
 
@@ -543,7 +590,9 @@ describe("loadLifecycleConfigFile", () => {
 						file,
 						JSON.stringify({ telemetry: { unmappedTenantPolicy: '"skip"' } }),
 					);
-					expect(() => loadLifecycleConfigFile(file)).toThrow(/unmappedTenantPolicy/);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(
+						/unmappedTenantPolicy/,
+					);
 				});
 			});
 
@@ -565,7 +614,10 @@ describe("loadLifecycleConfigFile", () => {
 		it("rejects a quoted boolean for enabled (the quoted-boolean trap)", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "quoted-bool.json");
-				writeFileSync(file, JSON.stringify({ captureRequests: { enabled: "false" } }));
+				writeFileSync(
+					file,
+					JSON.stringify({ captureRequests: { enabled: "false" } }),
+				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/enabled/);
 			});
 		});
@@ -573,7 +625,10 @@ describe("loadLifecycleConfigFile", () => {
 		it("rejects a non-positive-integer minOccurrences", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "bad-min-occ.json");
-				writeFileSync(file, JSON.stringify({ captureRequests: { minOccurrences: -1 } }));
+				writeFileSync(
+					file,
+					JSON.stringify({ captureRequests: { minOccurrences: -1 } }),
+				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/minOccurrences/);
 			});
 		});
@@ -581,7 +636,10 @@ describe("loadLifecycleConfigFile", () => {
 		it("rejects a non-positive-integer ttlDays", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "bad-ttl.json");
-				writeFileSync(file, JSON.stringify({ captureRequests: { ttlDays: 0 } }));
+				writeFileSync(
+					file,
+					JSON.stringify({ captureRequests: { ttlDays: 0 } }),
+				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/ttlDays/);
 			});
 		});
@@ -589,7 +647,10 @@ describe("loadLifecycleConfigFile", () => {
 		it("rejects a non-positive-integer maxPending", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "bad-max-pending.json");
-				writeFileSync(file, JSON.stringify({ captureRequests: { maxPending: 2.5 } }));
+				writeFileSync(
+					file,
+					JSON.stringify({ captureRequests: { maxPending: 2.5 } }),
+				);
 				expect(() => loadLifecycleConfigFile(file)).toThrow(/maxPending/);
 			});
 		});
@@ -610,7 +671,9 @@ describe("loadLifecycleConfigFile", () => {
 				const file = join(dir, "unknown-cr-key.json");
 				writeFileSync(
 					file,
-					JSON.stringify({ captureRequests: { maxPending: 5, somethingFuture: true } }),
+					JSON.stringify({
+						captureRequests: { maxPending: 5, somethingFuture: true },
+					}),
 				);
 				const patch = loadLifecycleConfigFile(file);
 				expect(patch).toEqual({ captureRequests: { maxPending: 5 } });

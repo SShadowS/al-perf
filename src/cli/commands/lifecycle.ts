@@ -38,7 +38,11 @@ import {
 } from "../../lifecycle/evaluate.js";
 import { createAzureDevOpsSink } from "../../lifecycle/sinks/azuredevops.js";
 import { createGitHubSink } from "../../lifecycle/sinks/github.js";
-import { type DrainReport, type DrainRuntime, drainOutbox } from "../../lifecycle/sinks/outbox.js";
+import {
+	type DrainReport,
+	type DrainRuntime,
+	drainOutbox,
+} from "../../lifecycle/sinks/outbox.js";
 import { processEventsForSinks } from "../../lifecycle/sinks/triggers.js";
 import {
 	loadSinksConfig,
@@ -211,7 +215,9 @@ function wrapAnthropicClient(anthropic: Anthropic): TriageClient {
  * fixed clock in tests produces a fixed, assertable id.
  */
 function randomTriageRunId(now: () => string): string {
-	const stamp = now().replace(/[^0-9]/g, "").slice(0, 17);
+	const stamp = now()
+		.replace(/[^0-9]/g, "")
+		.slice(0, 17);
 	const suffix = Math.random().toString(36).slice(2, 8);
 	return `run-${stamp}-${suffix}`;
 }
@@ -1011,7 +1017,8 @@ export function createLifecycleCommand(): Command {
 			}
 			const tenant = resolveTenantOpt(opts.tenant);
 			if (tenant === null) return;
-			const model = MODEL_IDS[opts.model === "opus" ? "opus" : ("sonnet" as ExplainModel)];
+			const model =
+				MODEL_IDS[opts.model === "opus" ? "opus" : ("sonnet" as ExplainModel)];
 			const client = wrapAnthropicClient(new Anthropic({ apiKey }));
 			const store = new LifecycleStore(cmd.opts().db);
 			try {

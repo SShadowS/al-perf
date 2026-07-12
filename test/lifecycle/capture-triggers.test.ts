@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.js";
 import { processCaptureTriggers } from "../../src/lifecycle/capture-triggers.js";
+import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.js";
 import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 
 const NOW = "2026-07-11T00:00:00Z";
@@ -161,10 +161,12 @@ describe("processCaptureTriggers", () => {
 			processCaptureTriggers(store, DEFAULT_LIFECYCLE_CONFIG, NOW).created,
 		).toBe(1);
 
-		const later = new Date(
-			Date.parse(NOW) + 15 * 86_400_000,
-		).toISOString(); // past the 14-day ttl
-		const report = processCaptureTriggers(store, DEFAULT_LIFECYCLE_CONFIG, later);
+		const later = new Date(Date.parse(NOW) + 15 * 86_400_000).toISOString(); // past the 14-day ttl
+		const report = processCaptureTriggers(
+			store,
+			DEFAULT_LIFECYCLE_CONFIG,
+			later,
+		);
 
 		expect(report.expired).toBe(1);
 		expect(report.created).toBe(1);
@@ -190,7 +192,10 @@ describe("processCaptureTriggers", () => {
 
 		const cfg = {
 			...DEFAULT_LIFECYCLE_CONFIG,
-			captureRequests: { ...DEFAULT_LIFECYCLE_CONFIG.captureRequests, maxPending: 1 },
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				maxPending: 1,
+			},
 		};
 		const report = processCaptureTriggers(store, cfg, NOW);
 

@@ -24,9 +24,7 @@ function config(gh?: Partial<GitHubSinkConfig>): LifecycleSinksConfig {
 	return { sinks: { github: { enabled: true, repo: "owner/repo", ...gh } } };
 }
 
-function adoConfig(
-	ado?: Partial<AzureDevOpsSinkConfig>,
-): LifecycleSinksConfig {
+function adoConfig(ado?: Partial<AzureDevOpsSinkConfig>): LifecycleSinksConfig {
 	return {
 		sinks: {
 			azureDevOps: { enabled: true, org: "myorg", project: "myproj", ...ado },
@@ -729,9 +727,9 @@ describe("processEventsForSinks — multi-sink fan-out", () => {
 		const report = processEventsForSinks(store, cfg, NOW);
 		expect(report.enqueued).toBe(1);
 		expect(store.listPendingOutbox("github", "create-issue")).toHaveLength(1);
-		expect(
-			store.listPendingOutbox("azureDevOps", "create-issue"),
-		).toHaveLength(0);
+		expect(store.listPendingOutbox("azureDevOps", "create-issue")).toHaveLength(
+			0,
+		);
 		store.close();
 	});
 
@@ -749,16 +747,16 @@ describe("processEventsForSinks — multi-sink fan-out", () => {
 		const report = processEventsForSinks(store, cfg, NOW);
 		// github: comment-recurred + reopen-issue; azureDevOps: comment-recurred only.
 		expect(report.enqueued).toBe(3);
-		expect(
-			store.listPendingOutbox("github", "comment-recurred"),
-		).toHaveLength(1);
+		expect(store.listPendingOutbox("github", "comment-recurred")).toHaveLength(
+			1,
+		);
 		expect(store.listPendingOutbox("github", "reopen-issue")).toHaveLength(1);
 		expect(
 			store.listPendingOutbox("azureDevOps", "comment-recurred"),
 		).toHaveLength(1);
-		expect(
-			store.listPendingOutbox("azureDevOps", "reopen-issue"),
-		).toHaveLength(0);
+		expect(store.listPendingOutbox("azureDevOps", "reopen-issue")).toHaveLength(
+			0,
+		);
 		store.close();
 	});
 
@@ -774,12 +772,12 @@ describe("processEventsForSinks — multi-sink fan-out", () => {
 		// github: comment-resolved + close-issue; azureDevOps: comment-resolved only.
 		expect(report.enqueued).toBe(3);
 		expect(store.listPendingOutbox("github", "close-issue")).toHaveLength(1);
-		expect(
-			store.listPendingOutbox("azureDevOps", "close-issue"),
-		).toHaveLength(0);
-		expect(
-			store.listPendingOutbox("github", "comment-resolved"),
-		).toHaveLength(1);
+		expect(store.listPendingOutbox("azureDevOps", "close-issue")).toHaveLength(
+			0,
+		);
+		expect(store.listPendingOutbox("github", "comment-resolved")).toHaveLength(
+			1,
+		);
 		expect(
 			store.listPendingOutbox("azureDevOps", "comment-resolved"),
 		).toHaveLength(1);

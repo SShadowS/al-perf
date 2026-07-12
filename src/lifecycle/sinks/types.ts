@@ -300,7 +300,12 @@ function validateSharedTriggerShape(
 		);
 	}
 	requireNumber(path, sinkName, "autoFileAfterRuns", obj.autoFileAfterRuns);
-	requireNumber(path, sinkName, "minMillisBetweenCalls", obj.minMillisBetweenCalls);
+	requireNumber(
+		path,
+		sinkName,
+		"minMillisBetweenCalls",
+		obj.minMillisBetweenCalls,
+	);
 	requireNumber(path, sinkName, "maxPerDrain", obj.maxPerDrain);
 	requireNumber(path, sinkName, "collapseThreshold", obj.collapseThreshold);
 }

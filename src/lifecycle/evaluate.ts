@@ -52,7 +52,6 @@ import {
 	type IdentityUpgrade,
 } from "./fingerprint.js";
 import { type FindingState, type SeenQualifier, transition } from "./states.js";
-import { normalizeTenantCode } from "./tenant.js";
 import type {
 	ExercisedApps,
 	FindingRow,
@@ -60,6 +59,7 @@ import type {
 	FindingSource,
 	LifecycleStore,
 } from "./store.js";
+import { normalizeTenantCode } from "./tenant.js";
 
 export interface RunMetadata {
 	/** Tenant key (CLI default "local"; web: the authenticated tenant code). */

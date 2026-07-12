@@ -721,10 +721,7 @@ function parseEnvironmentsCell(cell: unknown): string[] {
 }
 
 export async function listTenants(
-	opts: Pick<
-		PullTelemetryOptions,
-		"appId" | "apiKeyEnv" | "since" | "signals"
-	>,
+	opts: Pick<PullTelemetryOptions, "appId" | "apiKeyEnv" | "since" | "signals">,
 	fetchImpl: typeof fetch = fetch,
 ): Promise<TenantDiscovery[]> {
 	const { apiKey, signalIds, sinceIso } = resolvePullContext(opts);

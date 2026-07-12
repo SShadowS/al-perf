@@ -11,13 +11,13 @@ import {
 	parseTelemetryBatch,
 } from "../../src/core/telemetry-parser.ts";
 import {
-	loadLifecycleConfigFile,
-	mergeLifecycleConfig,
-} from "../../src/lifecycle/config-file.ts";
-import {
 	DEFAULT_LIFECYCLE_CONFIG,
 	type LifecycleConfig,
 } from "../../src/lifecycle/config.ts";
+import {
+	loadLifecycleConfigFile,
+	mergeLifecycleConfig,
+} from "../../src/lifecycle/config-file.ts";
 import { encryptBundle, type RsaJwk, xmlRsaToJwk } from "../crypto.ts";
 import {
 	checkBearerAgainstHash,

@@ -34,7 +34,8 @@ export function mergeLifecycleConfig(
 		...base,
 		telemetry: {
 			maxSignalsPerBatch:
-				patch.telemetry?.maxSignalsPerBatch ?? base.telemetry.maxSignalsPerBatch,
+				patch.telemetry?.maxSignalsPerBatch ??
+				base.telemetry.maxSignalsPerBatch,
 			severity: {
 				...base.telemetry.severity,
 				...patch.telemetry?.severity,
@@ -44,7 +45,8 @@ export function mergeLifecycleConfig(
 				...patch.telemetry?.tenantMap,
 			},
 			unmappedTenantPolicy:
-				patch.telemetry?.unmappedTenantPolicy ?? base.telemetry.unmappedTenantPolicy,
+				patch.telemetry?.unmappedTenantPolicy ??
+				base.telemetry.unmappedTenantPolicy,
 		},
 		captureRequests: {
 			...base.captureRequests,
@@ -66,7 +68,11 @@ const MIN_SEVERITY_VALUES = ["critical", "warning", "info"] as const;
  * setter (or shadow Object.prototype members) instead of storing an own
  * property — the entry silently vanishes rather than failing closed.
  */
-const RESERVED_SEVERITY_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const RESERVED_SEVERITY_KEYS = new Set([
+	"__proto__",
+	"constructor",
+	"prototype",
+]);
 
 /**
  * AAD tenant GUID shape (mirrors web/storage.ts ACTIVITY_ID_RE). Duplicated
@@ -121,15 +127,20 @@ function validateTelemetryBlock(
 				`${path}: telemetry.severity must be an object (got ${JSON.stringify(severityInput)})`,
 			);
 		}
-		const severity: Record<string, { warningMs: number; criticalMs: number }> = {};
-		for (const [key, value] of Object.entries(severityInput as Record<string, unknown>)) {
+		const severity: Record<string, { warningMs: number; criticalMs: number }> =
+			{};
+		for (const [key, value] of Object.entries(
+			severityInput as Record<string, unknown>,
+		)) {
 			if (!SEVERITY_KEY_RE.test(key)) {
 				throw new Error(
 					`${path}: telemetry.severity key "${key}" is invalid (must match ${SEVERITY_KEY_RE})`,
 				);
 			}
 			if (RESERVED_SEVERITY_KEYS.has(key)) {
-				throw new Error(`${path}: telemetry.severity key "${key}" is reserved and not allowed`);
+				throw new Error(
+					`${path}: telemetry.severity key "${key}" is reserved and not allowed`,
+				);
 			}
 			if (typeof value !== "object" || value === null || Array.isArray(value)) {
 				throw new Error(
@@ -176,7 +187,9 @@ function validateTelemetryBlock(
 		// rather than silently colliding downstream, where lookups are done
 		// against the lowercased GUID and would otherwise last-write-win.
 		const seenGuidKeys = new Map<string, string>();
-		for (const [key, value] of Object.entries(tenantMapInput as Record<string, unknown>)) {
+		for (const [key, value] of Object.entries(
+			tenantMapInput as Record<string, unknown>,
+		)) {
 			if (!TENANT_GUID_RE.test(key)) {
 				throw new Error(
 					`${path}: telemetry.tenantMap key "${key}" is not a valid AAD tenant GUID (must match ${TENANT_GUID_RE})`,
@@ -277,7 +290,9 @@ function validateCaptureRequestsBlock(
  * throw naming the path and field (fail-closed, loadSinksConfig posture).
  * The `sinks` block is ignored here (loadSinksConfig owns it).
  */
-export function loadLifecycleConfigFile(path: string): LifecycleConfigFilePatch | null {
+export function loadLifecycleConfigFile(
+	path: string,
+): LifecycleConfigFilePatch | null {
 	if (!existsSync(path)) return null;
 	let parsed: unknown;
 	try {
@@ -286,17 +301,28 @@ export function loadLifecycleConfigFile(path: string): LifecycleConfigFilePatch 
 		throw new Error(`${path} is not valid JSON: ${err}`);
 	}
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-		throw new Error(`${path}: root must be an object (got ${JSON.stringify(parsed)})`);
+		throw new Error(
+			`${path}: root must be an object (got ${JSON.stringify(parsed)})`,
+		);
 	}
 	const cfg = parsed as Record<string, unknown>;
 	const result: LifecycleConfigFilePatch = {};
 
 	if (cfg.telemetry !== undefined) {
 		const telemetry = cfg.telemetry;
-		if (typeof telemetry !== "object" || telemetry === null || Array.isArray(telemetry)) {
-			throw new Error(`${path}: telemetry must be an object (got ${JSON.stringify(telemetry)})`);
+		if (
+			typeof telemetry !== "object" ||
+			telemetry === null ||
+			Array.isArray(telemetry)
+		) {
+			throw new Error(
+				`${path}: telemetry must be an object (got ${JSON.stringify(telemetry)})`,
+			);
 		}
-		result.telemetry = validateTelemetryBlock(path, telemetry as Record<string, unknown>);
+		result.telemetry = validateTelemetryBlock(
+			path,
+			telemetry as Record<string, unknown>,
+		);
 	}
 
 	if (cfg.captureRequests !== undefined) {

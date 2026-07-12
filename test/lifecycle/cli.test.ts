@@ -1555,7 +1555,9 @@ describe("lifecycle pull-telemetry --list-tenants", () => {
 	it("json: exact shape { tenants (each with mappedTo), tenantMapStub }", async () => {
 		writeFileSync(
 			configPath,
-			JSON.stringify({ telemetry: { tenantMap: { [GUID_MAPPED]: "acme-inc" } } }),
+			JSON.stringify({
+				telemetry: { tenantMap: { [GUID_MAPPED]: "acme-inc" } },
+			}),
 		);
 		const response = listTenantsAppInsightsResponse([
 			[GUID_MAPPED, 5, JSON.stringify(["Production"])],

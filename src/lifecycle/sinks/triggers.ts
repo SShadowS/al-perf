@@ -277,7 +277,8 @@ export function processEventsForSinks(
 					PRESENCE_EVENTS.has(event.event) &&
 					sink.autoFile &&
 					!mapping &&
-					severityRank(row.severity) >= severityRank(sink.autoFileMinSeverity) &&
+					severityRank(row.severity) >=
+						severityRank(sink.autoFileMinSeverity) &&
 					store.countQualifyingOccurrences(row.id) >= sink.autoFileAfterRuns &&
 					row.absenceCount === 0 &&
 					row.state !== "resolved" &&

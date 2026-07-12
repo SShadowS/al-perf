@@ -375,7 +375,9 @@ describe("loadSinksConfig — azureDevOps block", () => {
 			writeFileSync(
 				file,
 				JSON.stringify({
-					sinks: { azureDevOps: { enabled: true, org: "myorg", project: "  " } },
+					sinks: {
+						azureDevOps: { enabled: true, org: "myorg", project: "  " },
+					},
 				}),
 			);
 			expect(() => loadSinksConfig(file)).toThrow(
@@ -519,7 +521,9 @@ describe("loadSinksConfig — azureDevOps block", () => {
 					},
 				}),
 			);
-			expect(() => loadSinksConfig(file)).toThrow(/sinks\.azureDevOps\.autoFile/);
+			expect(() => loadSinksConfig(file)).toThrow(
+				/sinks\.azureDevOps\.autoFile/,
+			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
