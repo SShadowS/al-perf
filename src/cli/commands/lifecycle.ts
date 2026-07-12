@@ -1651,5 +1651,64 @@ export function createLifecycleCommand(): Command {
 			}
 		});
 
+	captures
+		.command("health")
+		.description(
+			"Queue health: depth, oldest pending, stuck claims, at-cap state",
+		)
+		.option("--tenant <tenant>", "Tenant key (all tenants if omitted)")
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((opts: any) => {
+			if (opts.tenant !== undefined) {
+				const tenant = resolveTenantOpt(opts.tenant);
+				if (tenant === null) return;
+				opts.tenant = tenant;
+			}
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const cfg = resolveLifecycleConfig(cmd.opts().config).captureRequests;
+				const now = new Date().toISOString();
+				const health = store.captureQueueHealth(
+					now,
+					cfg.claimTtlMinutes,
+					cfg.maxPending,
+					opts.tenant,
+				);
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify(health, null, 2) + "\n");
+					return;
+				}
+				if (health.length === 0) {
+					console.log("No capture requests.");
+					return;
+				}
+				for (const h of health) {
+					const oldest =
+						h.oldestPendingAt === null
+							? "—"
+							: `${Math.floor((Date.parse(now) - Date.parse(h.oldestPendingAt)) / 3_600_000)}h`;
+					console.log(`Tenant: ${h.tenant}`);
+					console.log(`  pending:  ${h.pending}   oldest: ${oldest}`);
+					console.log(
+						`  claimed:  ${h.claimed}   stuck (claimed > ${cfg.claimTtlMinutes}m): ${h.stuck}${
+							h.stuckHolders.length > 0
+								? `   last held by: ${h.stuckHolders.join(", ")}`
+								: ""
+						}`,
+					);
+					console.log(
+						`  at maxPending cap (${h.maxPending}): ${h.atCap ? "YES" : "no"}`,
+					);
+					if (h.reclaimedEver > 0 && h.mostReclaimed !== null) {
+						console.log(
+							`  reclaimed at least once: ${h.reclaimedEver}   most-reclaimed: #${h.mostReclaimed.id} (${h.mostReclaimed.reclaimCount} times)`,
+						);
+					}
+				}
+			} finally {
+				store.close();
+			}
+		});
+
 	return cmd;
 }

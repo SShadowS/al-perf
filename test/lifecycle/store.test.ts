@@ -804,6 +804,158 @@ describe("reclaimStaleClaims", () => {
 	});
 });
 
+describe("captureQueueHealth", () => {
+	const NOW = "2026-07-10T00:00:00Z";
+
+	it("reports depth, stuck claims with their holders, at-cap, oldest pending, and reclaims", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:acme-source" }),
+		);
+
+		// Two pending requests — one old (the oldest pending), one newer.
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-pending-old",
+				requestedAt: "2026-07-01T00:00:00Z",
+			}),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-pending-new",
+				requestedAt: "2026-07-09T00:00:00Z",
+			}),
+		);
+
+		// Claimed long ago by "dead-executor" — stuck (well past the 60-minute TTL).
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-stuck",
+			}),
+		);
+		const stuckRow = store
+			.listCaptureRequests("acme", "pending")
+			.find((r) => r.fingerprint === "telemetry:acme-stuck");
+		if (!stuckRow) throw new Error("seed: stuck row missing");
+		store.claimCaptureRequest(
+			stuckRow.id,
+			"dead-executor",
+			"2026-07-08T00:00:00Z",
+		);
+
+		// Claimed, reclaimed three times (three different executors each go
+		// stale in turn), then re-claimed just now by "live-executor" — the
+		// most-reclaimed row, and NOT stuck (its current claim is fresh).
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-reclaimed",
+			}),
+		);
+		const reclaimedRow = store
+			.listCaptureRequests("acme", "pending")
+			.find((r) => r.fingerprint === "telemetry:acme-reclaimed");
+		if (!reclaimedRow) throw new Error("seed: reclaimed row missing");
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"executor-a",
+			"2026-07-05T00:00:00Z",
+		);
+		store.reclaimStaleClaims("2026-07-05T01:01:00Z", 60);
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"executor-b",
+			"2026-07-06T00:00:00Z",
+		);
+		store.reclaimStaleClaims("2026-07-06T01:01:00Z", 60);
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"executor-c",
+			"2026-07-07T00:00:00Z",
+		);
+		store.reclaimStaleClaims("2026-07-07T01:01:00Z", 60);
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"live-executor",
+			"2026-07-09T23:55:00Z",
+		);
+
+		const [health] = store.captureQueueHealth(NOW, 60, 4, "acme");
+
+		expect(health.tenant).toBe("acme");
+		expect(health.pending).toBe(2);
+		expect(health.claimed).toBe(2);
+		expect(health.stuck).toBe(1);
+		expect(health.stuckHolders).toEqual(["dead-executor"]);
+		expect(health.atCap).toBe(true); // 2 pending + 2 claimed == maxPending 4
+		expect(health.maxPending).toBe(4);
+		expect(health.oldestPendingAt).toBe("2026-07-01T00:00:00Z");
+		expect(health.reclaimedEver).toBe(1);
+		expect(health.mostReclaimed).toEqual({
+			id: expect.any(Number),
+			reclaimCount: 3,
+		});
+		store.close();
+	});
+
+	it("a healthy queue reports atCap false, no stuck claims, no reclaims", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:acme-healthy" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-healthy",
+			}),
+		);
+
+		const [health] = store.captureQueueHealth(NOW, 60, 20, "acme");
+		expect(health.atCap).toBe(false);
+		expect(health.stuck).toBe(0);
+		expect(health.stuckHolders).toEqual([]);
+		expect(health.reclaimedEver).toBe(0);
+		expect(health.mostReclaimed).toBeNull();
+		store.close();
+	});
+
+	it("returns one entry per tenant when no tenant is given", () => {
+		const store = new LifecycleStore(":memory:");
+		const acmeFindingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:multi-acme" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId: acmeFindingId,
+				fingerprint: "telemetry:multi-acme",
+			}),
+		);
+		const betaFindingId = store.insertFinding(
+			baseFinding({ tenant: "beta", fingerprint: "pattern:multi-beta" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "beta",
+				findingId: betaFindingId,
+				fingerprint: "telemetry:multi-beta",
+			}),
+		);
+
+		const all = store.captureQueueHealth(NOW, 60, 20);
+		expect(all.map((h) => h.tenant)).toEqual(["acme", "beta"]);
+		store.close();
+	});
+});
+
 describe("stale algo-version findings", () => {
 	function seed(
 		store: LifecycleStore,

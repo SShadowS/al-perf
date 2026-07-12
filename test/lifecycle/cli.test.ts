@@ -2243,6 +2243,35 @@ function seedCaptureRequest(
 	return row.id;
 }
 
+/**
+ * Seed a jammed-looking queue for tenant "acme": two pending requests, one
+ * claim stuck since the year 2000 under "dead-executor", and one fresh claim
+ * (claimed_at = now) under "live-executor" so the fresh claim never reads as
+ * stuck regardless of when the test actually runs.
+ */
+function seedJammedAcmeQueue(store: LifecycleStore): void {
+	seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-pending-1",
+		requestedAt: "2026-01-01T00:00:00Z",
+	});
+	seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-pending-2",
+		requestedAt: "2026-01-02T00:00:00Z",
+	});
+	const stuckId = seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-stuck",
+	});
+	store.claimCaptureRequest(stuckId, "dead-executor", "2000-01-01T00:00:00Z");
+	const freshId = seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-fresh",
+	});
+	store.claimCaptureRequest(freshId, "live-executor", new Date().toISOString());
+}
+
 describe("lifecycle captures", () => {
 	let dir: string;
 	let dbPath: string;
@@ -2437,6 +2466,49 @@ describe("lifecycle captures", () => {
 		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
 		expect(errText).toContain("999999");
 		expect(errText.toLowerCase()).toContain("no capture request");
+	});
+
+	it("captures health reports depth, stuck claims, and the at-cap state", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedJammedAcmeQueue(store);
+		store.close();
+		// 2 pending + 2 claimed == maxPending 4 — at cap.
+		const configPath = join(dir, "lifecycle.config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				captureRequests: { maxPending: 4, claimTtlMinutes: 60 },
+			}),
+		);
+
+		logSpy.mockClear();
+		await run([
+			"--config",
+			configPath,
+			"captures",
+			"health",
+			"--tenant",
+			"ACME", // mixed case: must normalize
+		]);
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).toContain("acme");
+		expect(printed).toMatch(/stuck/i);
+		expect(printed).toContain("dead-executor");
+		expect(printed).toMatch(/YES/); // at-cap
+	});
+
+	it("captures health -f json emits a bare parseable array on stdout", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedJammedAcmeQueue(store);
+		store.close();
+
+		await run(["captures", "health", "-f", "json"]);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const parsed = JSON.parse(output);
+		expect(Array.isArray(parsed)).toBe(true);
+		expect(parsed[0]).toHaveProperty("atCap");
 	});
 });
 

@@ -403,6 +403,25 @@ export interface CaptureRequestRow {
 	fulfilledByProfileId: string | null;
 }
 
+export interface CaptureQueueHealth {
+	tenant: string;
+	pending: number;
+	claimed: number;
+	/** Claimed longer than claimTtlMinutes — an executor that has not reported back. */
+	stuck: number;
+	/** Distinct executors holding stuck claims. */
+	stuckHolders: string[];
+	/** true when the tenant is at maxPending — the state in which new requests stop being filed. */
+	atCap: boolean;
+	maxPending: number;
+	/** ISO timestamp of the oldest pending request, or null when none are pending. */
+	oldestPendingAt: string | null;
+	/** Requests reclaimed at least once. */
+	reclaimedEver: number;
+	/** The single most-reclaimed request, or null when none have been reclaimed. */
+	mostReclaimed: { id: number; reclaimCount: number } | null;
+}
+
 export interface UnprocessedEvent {
 	id: number;
 	findingId: number;
@@ -1505,6 +1524,73 @@ export class LifecycleStore {
 			)
 			.get(tenant);
 		return row?.n ?? 0;
+	}
+
+	/**
+	 * Queue health per tenant. Reports FACTS, not verdicts — no "the executor is
+	 * dead" heuristic; the operator draws that conclusion from `stuck` and
+	 * `stuckHolders`. `atCap` is the exception, and it is not a heuristic: it is
+	 * literally the state in which processCaptureTriggers stops filing new
+	 * requests, so it is the one crisp definition of a jammed queue.
+	 */
+	captureQueueHealth(
+		now: string,
+		claimTtlMinutes: number,
+		maxPending: number,
+		tenant?: string,
+	): CaptureQueueHealth[] {
+		const rows = this.listCaptureRequests(tenant);
+		const cutoff = Date.parse(now) - claimTtlMinutes * 60_000;
+
+		const byTenant = new Map<string, CaptureRequestRow[]>();
+		for (const r of rows) {
+			const bucket = byTenant.get(r.tenant);
+			if (bucket) bucket.push(r);
+			else byTenant.set(r.tenant, [r]);
+		}
+
+		return [...byTenant.entries()]
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([t, rs]) => {
+				const pending = rs.filter((r) => r.status === "pending");
+				const claimed = rs.filter((r) => r.status === "claimed");
+				const stuck = claimed.filter(
+					(r) => r.claimedAt !== null && Date.parse(r.claimedAt) <= cutoff,
+				);
+				const reclaimed = rs.filter((r) => r.reclaimCount > 0);
+				const worst = reclaimed.reduce<CaptureRequestRow | null>(
+					(acc, r) =>
+						acc === null || r.reclaimCount > acc.reclaimCount ? r : acc,
+					null,
+				);
+				const oldestPendingAt = pending.reduce<string | null>(
+					(acc, r) =>
+						acc === null || r.requestedAt < acc ? r.requestedAt : acc,
+					null,
+				);
+				return {
+					tenant: t,
+					pending: pending.length,
+					claimed: claimed.length,
+					stuck: stuck.length,
+					stuckHolders: [
+						...new Set(
+							stuck
+								.map((r) => r.claimedBy)
+								.filter((b): b is string => b !== null),
+						),
+					].sort(),
+					// Same denominator processCaptureTriggers uses against maxPending.
+					atCap: pending.length + claimed.length >= maxPending,
+					maxPending,
+					oldestPendingAt,
+					reclaimedEver: reclaimed.length,
+					mostReclaimed:
+						worst === null
+							? null
+							: { id: worst.id, reclaimCount: worst.reclaimCount },
+				};
+			});
 	}
 
 	claimCaptureRequest(id: number, claimedBy: string, now: string): boolean {
