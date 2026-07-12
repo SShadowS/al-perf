@@ -75,23 +75,40 @@ a dead executor is an eyeball exercise. `countActiveCaptureRequests` exists
 New config `captureRequests.claimTtlMinutes`, default `60`.
 
 `reclaimStaleClaims(now, claimTtlMinutes)` runs inside `processCaptureTriggers`'s
-existing transaction, **after** `expireCaptureRequests` — a request past its
-creation TTL should die, not be recycled. A `claimed` row whose `claimed_at` is
-older than the TTL becomes:
+existing transaction, **after** `expireCaptureRequests`. A `claimed` row whose
+`claimed_at` is older than the TTL becomes:
 
 - `status = 'pending'`
 - `claimed_at = NULL`
 - `claimed_by` — **deliberately kept**
 - `reclaim_count = reclaim_count + 1`
 
-Nulling `claimed_at` is mandatory, not cosmetic: leave it set and the next sweep
-immediately re-reclaims the row it just reclaimed.
+Nulling `claimed_at` is mandatory because **a `pending` row carrying a
+`claimed_at` is a lie.** The column means "when the current holder claimed this",
+and a pending request has no holder — leaving stale data there corrupts any
+consumer that reasons about claim age (`captures health`'s stuck-claim detection
+is exactly such a consumer).
+
+> **Correction.** An earlier draft of this spec claimed that leaving `claimed_at`
+> set would make the next sweep "re-reclaim the row it just reclaimed, forever."
+> That is false: the reclaim sets `status = 'pending'` and the sweep's `WHERE`
+> requires `status = 'claimed'`, so the row simply stops matching. The decision is
+> right; the original reason was not. Caught by mutation-testing the claim rather
+> than reading it.
 
 Keeping `claimed_by` is a deliberate oddity. It is semantically strange on a
 `pending` row, and it is the only breadcrumb naming which executor dropped the
 request — without it, the evidence of a dead executor evaporates at the exact
 moment the sweep runs. `claimCaptureRequest` overwrites it on the next claim, so
 it reads as "last claimed by". Document it as such.
+
+**Why expiry runs before reclaim.** Not because the wrong order would let a
+past-TTL request survive — it would not; `expireCaptureRequests` matches
+`status IN ('pending','claimed')`, so it catches a just-reclaimed row inside the
+same transaction and the request dies either way. The order matters because the
+wrong one **spuriously increments `reclaim_count` and reports a bogus `reclaimed`
+on a row that is about to die** — corrupting the very signal `reclaim_count`
+exists to carry (see below).
 
 `reclaim_count` separates two failure modes that look identical from the outside:
 
