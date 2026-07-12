@@ -1357,6 +1357,304 @@ describe("lifecycle pull-telemetry --split-by-customer", () => {
 });
 
 // ---------------------------------------------------------------------------
+// lifecycle pull-telemetry --list-tenants (list-tenants plan, Task 1):
+// discovery mode for --split-by-customer onboarding — prints the AAD
+// tenants emitting the requested signals plus a paste-ready tenantMap stub,
+// instead of evaluating or writing anything.
+// ---------------------------------------------------------------------------
+
+function listTenantsAppInsightsResponse(rows: unknown[][]) {
+	return {
+		tables: [
+			{
+				name: "PrimaryTable",
+				columns: [
+					{ name: "aadTenantId", type: "string" },
+					{ name: "rows", type: "long" },
+					{ name: "environments", type: "dynamic" },
+				],
+				rows,
+			},
+		],
+	};
+}
+
+describe("lifecycle pull-telemetry --list-tenants", () => {
+	let dir: string;
+	let dbPath: string;
+	let configPath: string;
+	let originalFetch: typeof fetch;
+	let originalExitCode: number | string | null | undefined;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+	let errorSpy: ReturnType<typeof spyOn<Console, "error">>;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
+
+	const GUID_MAPPED = "aaaaaaaa-1111-2222-3333-444444444444";
+	const GUID_UNMAPPED = "bbbbbbbb-1111-2222-3333-444444444444";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-pull-list-tenants-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		configPath = join(dir, "lifecycle.config.json");
+		originalFetch = globalThis.fetch;
+		originalExitCode = process.exitCode;
+		process.exitCode = 0;
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	});
+	afterEach(async () => {
+		globalThis.fetch = originalFetch;
+		process.exitCode = originalExitCode ?? 0;
+		logSpy.mockRestore();
+		errorSpy.mockRestore();
+		stdoutSpy.mockRestore();
+		delete process.env[DEFAULT_API_KEY_ENV];
+		await rmSyncRetrying(dir);
+	});
+
+	it("text: renders the table ((none) for empty id, mapped code vs (unmapped) — D4 lowercase lookup) and a valid-JSON stub AFTER the table with only unmapped GUID-shaped ids", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: { tenantMap: { [GUID_MAPPED.toUpperCase()]: "acme-inc" } },
+			}),
+		);
+		const response = listTenantsAppInsightsResponse([
+			[GUID_MAPPED, 5, JSON.stringify(["Production"])],
+			[GUID_UNMAPPED, 2, JSON.stringify(["Sandbox"])],
+			["", 1, JSON.stringify([""])],
+			["common", 3, JSON.stringify(["Sandbox"])],
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--list-tenants",
+			],
+			{ from: "user" },
+		);
+
+		expect(process.exitCode ?? 0).toBe(0);
+		expect(existsSync(dbPath)).toBe(false);
+
+		// Last console.log call is the stub — everything before it is the table.
+		const stubText = String(logSpy.mock.calls.at(-1)?.[0]);
+		const tableText = logSpy.mock.calls
+			.slice(0, -1)
+			.map((c) => String(c[0]))
+			.join("\n");
+
+		expect(tableText).toContain("(none)");
+		expect(tableText).toContain("acme-inc");
+		expect(tableText).toContain("(unmapped)");
+		expect(tableText).toContain(GUID_UNMAPPED);
+		expect(tableText).toContain("common");
+
+		const stub = JSON.parse(stubText);
+		expect(stub).toEqual({
+			telemetry: { tenantMap: { [GUID_UNMAPPED]: "" } },
+		});
+
+		const fullOutput = tableText + "\n" + stubText;
+		expect(fullOutput).not.toContain(PULL_DECOY_KEY);
+	});
+
+	it("json: exact shape { tenants, tenantMapStub }", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({ telemetry: { tenantMap: { [GUID_MAPPED]: "acme-inc" } } }),
+		);
+		const response = listTenantsAppInsightsResponse([
+			[GUID_MAPPED, 5, JSON.stringify(["Production"])],
+			[GUID_UNMAPPED, 2, JSON.stringify(["Sandbox"])],
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--list-tenants",
+				"-f",
+				"json",
+			],
+			{ from: "user" },
+		);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const parsed = JSON.parse(output);
+		expect(parsed).toEqual({
+			tenants: [
+				{ aadTenantId: GUID_MAPPED, rows: 5, environments: ["Production"] },
+				{ aadTenantId: GUID_UNMAPPED, rows: 2, environments: ["Sandbox"] },
+			],
+			tenantMapStub: { telemetry: { tenantMap: { [GUID_UNMAPPED]: "" } } },
+		});
+	});
+
+	it("missing API key env var: exits 1, names the env var, zero fetches, never touches the DB", async () => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			["--db", dbPath, "pull-telemetry", "--app-id", APP_ID, "--list-tenants"],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(1);
+		expect(existsSync(dbPath)).toBe(false);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain(DEFAULT_API_KEY_ENV);
+		expect(errText).not.toContain(PULL_DECOY_KEY);
+	});
+
+	it("--list-tenants + --split-by-customer: exit 2, zero fetches, names the conflict", async () => {
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--list-tenants",
+				"--split-by-customer",
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(2);
+		expect(existsSync(dbPath)).toBe(false);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("--split-by-customer");
+	});
+
+	it("--list-tenants + --out: exit 2, zero fetches, names the conflict, never writes the file", async () => {
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+		const outPath = join(dir, "out.json");
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--list-tenants",
+				"--out",
+				outPath,
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(2);
+		expect(existsSync(outPath)).toBe(false);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("--out");
+	});
+
+	it("--list-tenants + --stream (explicit): exit 2, zero fetches, names the conflict", async () => {
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--list-tenants",
+				"--stream",
+				"custom-stream",
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(2);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("--stream");
+	});
+
+	it("--list-tenants + --profile-id (explicit): exit 2, zero fetches, names the conflict", async () => {
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--list-tenants",
+				"--profile-id",
+				"custom-id",
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(2);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("--profile-id");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // lifecycle captures — deep-capture request queue operator CLI
 // (capture-requests plan Task 4). Operates on rows filed by
 // processCaptureTriggers (Task 2) and closed by evaluateRun's fulfillment

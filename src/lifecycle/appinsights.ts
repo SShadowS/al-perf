@@ -663,3 +663,95 @@ export async function pullTelemetrySplit(
 
 	return { groups, skippedTenants };
 }
+
+// ---------------------------------------------------------------------------
+// listTenants (list-tenants plan, Task 1): tenant-discovery query for
+// --split-by-customer onboarding. One KQL query grouped by aadTenantId alone
+// (not by routine, and not one query per signal like buildKqlQuery/
+// fetchSignalTable) — discovery only needs "which tenants showed up", so
+// every requested signal is folded into a single `eventId in (...)` filter.
+// Reuses resolvePullContext for the same env-var/signal-id validation and
+// --since canonicalization as pullTelemetry/pullTelemetrySplit.
+// ---------------------------------------------------------------------------
+
+export interface TenantDiscovery {
+	/** Verbatim aadTenantId from telemetry — may be "" (on-prem/old-schema rows) or non-GUID. */
+	aadTenantId: string;
+	/** Row count observed for this tenant across the requested signals/window. */
+	rows: number;
+	/** Distinct environmentName values seen (make_set result) — order not guaranteed. */
+	environments: string[];
+}
+
+function buildListTenantsKqlQuery(
+	signalIds: readonly string[],
+	sinceIso: string,
+): string {
+	const eventList = signalIds.map((id) => `"${id}"`).join(", ");
+	return [
+		"traces",
+		`| where timestamp > datetime(${sinceIso})`,
+		`| where customDimensions.eventId in (${eventList})`,
+		"| extend aadTenantId = tostring(customDimensions.aadTenantId),",
+		"         environmentName = tostring(customDimensions.environmentName)",
+		"| summarize rows = count(), environments = make_set(environmentName) by aadTenantId",
+	].join("\n");
+}
+
+/**
+ * `make_set`'s dynamic column can arrive as an already-parsed array (the
+ * REST response body is JSON, so a nested array survives `res.json()` as-is)
+ * or as a JSON-encoded string cell — parse defensively rather than assume
+ * one shape; anything that's neither an array nor parseable JSON falls back
+ * to a single-element array of its string form rather than throwing.
+ */
+function parseEnvironmentsCell(cell: unknown): string[] {
+	if (Array.isArray(cell)) return cell.map((v) => String(v));
+	if (typeof cell === "string") {
+		try {
+			const parsed = JSON.parse(cell);
+			if (Array.isArray(parsed)) return parsed.map((v) => String(v));
+		} catch {
+			// not JSON — fall through to the single-element fallback below
+		}
+		return [String(cell)];
+	}
+	if (cell === null || cell === undefined) return [];
+	return [String(cell)];
+}
+
+export async function listTenants(
+	opts: Pick<
+		PullTelemetryOptions,
+		"appId" | "apiKeyEnv" | "since" | "signals"
+	>,
+	fetchImpl: typeof fetch = fetch,
+): Promise<TenantDiscovery[]> {
+	const { apiKey, signalIds, sinceIso } = resolvePullContext(opts);
+
+	const kql = buildListTenantsKqlQuery(signalIds, sinceIso);
+	const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(opts.appId)}/query?query=${encodeURIComponent(kql)}`;
+
+	let res: Response;
+	try {
+		res = await fetchImpl(url, { headers: { "x-api-key": apiKey } });
+	} catch (err) {
+		throw new Error(
+			`pull-telemetry --list-tenants: network error querying App Insights: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	if (!res.ok) {
+		throw new Error(
+			httpErrorMessage(res.status, res.statusText, "list-tenants"),
+		);
+	}
+	const json = await res.json();
+	const table = selectPrimaryTable(json, "list-tenants");
+	const cell = makeCellReader(table);
+
+	return table.rows.map((row) => ({
+		aadTenantId: asDisplayString(cell(row, "aadTenantId")),
+		rows: Number(cell(row, "rows")),
+		environments: parseEnvironmentsCell(cell(row, "environments")),
+	}));
+}
