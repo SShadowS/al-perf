@@ -1665,6 +1665,98 @@ describe("lifecycle pull-telemetry --list-tenants", () => {
 });
 
 // ---------------------------------------------------------------------------
+// lifecycle status -f json — triage note surfacing (agent-triage plan Task 1,
+// D6): triageNote/triagedAt/triagedBy appear ONLY once a finding has been
+// triaged (recordTriage clears needs_triage in the same write, so an
+// untriaged row must show none of the three keys — not even null).
+// ---------------------------------------------------------------------------
+
+function statusFinding(overrides?: Partial<NewFinding>): NewFinding {
+	return {
+		tenant: "local",
+		fingerprint: "pattern:statuscli000001",
+		algoVersion: 1,
+		state: "open",
+		source: "pattern",
+		patternId: "calcfields-in-loop",
+		title: "CalcFields inside loop",
+		severity: "warning",
+		appId: "",
+		appName: "",
+		routineKey: "",
+		firstSeenAt: "2026-07-01T00:00:00Z",
+		lastSeenAt: "2026-07-01T00:00:00Z",
+		lastEventAt: "2026-07-01T00:00:00Z",
+		observedKinds: ["sampling"],
+		observedStreams: ["nightly"],
+		...overrides,
+	};
+}
+
+describe("lifecycle status -f json", () => {
+	let dir: string;
+	let dbPath: string;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
+	let originalExitCode: number | string | null | undefined;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-status-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		originalExitCode = process.exitCode;
+		process.exitCode = 0;
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	});
+	afterEach(async () => {
+		process.exitCode = originalExitCode ?? 0;
+		stdoutSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	async function run(args: string[]): Promise<void> {
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, ...args], { from: "user" });
+	}
+
+	it("omits triageNote/triagedAt/triagedBy entirely for an untriaged finding", async () => {
+		const store = new LifecycleStore(dbPath);
+		store.insertFinding(statusFinding({ needsTriage: true }));
+		store.close();
+
+		await run(["status", "-f", "json"]);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const rows = JSON.parse(output);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).not.toHaveProperty("triageNote");
+		expect(rows[0]).not.toHaveProperty("triagedAt");
+		expect(rows[0]).not.toHaveProperty("triagedBy");
+	});
+
+	it("includes triageNote/triagedAt/triagedBy once the finding has been triaged", async () => {
+		const store = new LifecycleStore(dbPath);
+		const id = store.insertFinding(statusFinding({ needsTriage: true }));
+		store.recordTriage(
+			id,
+			"benign — scheduled batch job",
+			"agent-triage v1",
+			"2026-07-12T09:00:00Z",
+		);
+		store.close();
+
+		await run(["status", "-f", "json"]);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const rows = JSON.parse(output);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].triageNote).toBe("benign — scheduled batch job");
+		expect(rows[0].triagedBy).toBe("agent-triage v1");
+		expect(rows[0].triagedAt).toBe("2026-07-12T09:00:00Z");
+		expect(rows[0].needsTriage).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // lifecycle captures — deep-capture request queue operator CLI
 // (capture-requests plan Task 4). Operates on rows filed by
 // processCaptureTriggers (Task 2) and closed by evaluateRun's fulfillment

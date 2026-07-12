@@ -226,6 +226,14 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		`CREATE INDEX idx_capture_requests_tenant_status
 			ON capture_requests(tenant, status)`,
 	],
+	[
+		// Purely additive — no table rebuild, no FK-toggle complications.
+		// NULL = untriaged; recordTriage() sets all three together and
+		// clears needs_triage in the same UPDATE.
+		`ALTER TABLE findings ADD COLUMN triage_note TEXT`,
+		`ALTER TABLE findings ADD COLUMN triaged_at TEXT`,
+		`ALTER TABLE findings ADD COLUMN triaged_by TEXT`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -290,6 +298,10 @@ export interface FindingRow {
 	resolvedAt: string | null;
 	closedAt: string | null;
 	supersedes: number | null;
+	/** Agent/human triage assessment (schema v5); NULL until recordTriage() is called. */
+	triageNote: string | null;
+	triagedAt: string | null;
+	triagedBy: string | null;
 }
 
 export interface NewFinding {
@@ -691,6 +703,9 @@ export class LifecycleStore {
 			resolvedAt: (row.resolved_at as string | null) ?? null,
 			closedAt: (row.closed_at as string | null) ?? null,
 			supersedes: (row.supersedes as number | null) ?? null,
+			triageNote: (row.triage_note as string | null) ?? null,
+			triagedAt: (row.triaged_at as string | null) ?? null,
+			triagedBy: (row.triaged_by as string | null) ?? null,
 		};
 	}
 
@@ -833,6 +848,27 @@ export class LifecycleStore {
 			flag ? 1 : 0,
 			id,
 		]);
+	}
+
+	/**
+	 * Records a triage assessment and clears needs_triage in one
+	 * status-guarded UPDATE (D2): `WHERE id = ? AND needs_triage = 1`. A
+	 * finding that was already triaged (or never needed triage) leaves this
+	 * a no-op — the agent racing a human, or a second run racing itself, must
+	 * never overwrite a recorded assessment.
+	 */
+	recordTriage(
+		findingId: number,
+		note: string,
+		by: string,
+		at: string,
+	): boolean {
+		const res = this.db.run(
+			`UPDATE findings SET triage_note = ?, triaged_at = ?, triaged_by = ?, needs_triage = 0
+			 WHERE id = ? AND needs_triage = 1`,
+			[note, at, by, findingId],
+		);
+		return res.changes > 0;
 	}
 
 	recordOccurrence(o: {

@@ -50,7 +50,7 @@ src/
   debug/      — Debug ID tracking and diagnostic output
   explain/    — LLM-powered analysis explanation (Anthropic API)
   history/    — Performance history storage
-  lifecycle/  — finding lifecycle engine (SQLite store, state machine, baselines, digest, `sync` to drive sinks — config at `.al-perf/lifecycle.config.json`, GitHub sink token read from the env var named by `sinks.github.tokenEnv`; `lifecycle telemetry`/`lifecycle pull-telemetry` ingest App Insights BC telemetry as the trigger layer — see docs/telemetry-recipe.md; `lifecycle captures list/claim/cancel` operate the deep-capture request queue an external executor services — see docs/capture-request-contract.md)
+  lifecycle/  — finding lifecycle engine (SQLite store, state machine, baselines, digest, `sync` to drive sinks — config at `.al-perf/lifecycle.config.json`, GitHub sink token read from the env var named by `sinks.github.tokenEnv`; `lifecycle telemetry`/`lifecycle pull-telemetry` ingest App Insights BC telemetry as the trigger layer — see docs/telemetry-recipe.md; `lifecycle captures list/claim/cancel` operate the deep-capture request queue an external executor services — see docs/capture-request-contract.md; `lifecycle triage-agent` is the one optional, agentic step — a scheduled LLM pass over needs-triage findings with allow-listed tools and injection-hardened prompting — see docs/triage-agent-recipe.md)
   mcp/        — MCP server definition and tool wrappers
   output/     — Canonical output types shared across all interfaces
   source/     — tree-sitter-al integration for AL source code analysis
