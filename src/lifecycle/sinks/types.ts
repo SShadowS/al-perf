@@ -38,6 +38,7 @@ export type SinkDeliveryKind =
 	| "comment-regressed"
 	| "comment-resolved"
 	| "comment-recurred"
+	| "reopen-issue"
 	| "close-issue";
 
 export interface SinkDeliveryPayload {
@@ -103,6 +104,17 @@ export interface GitHubSinkConfig {
 	/** Hysteresis M: observed in at least this many runs before filing. */
 	autoFileAfterRuns?: number;
 	autoClose?: boolean;
+	/**
+	 * Recurrence-after-close visibility. A `filed-fresh` event on a finding
+	 * with an existing (presumably closed) issue mapping ALWAYS enqueues
+	 * comment-recurred — that is today's behavior and stays true regardless
+	 * of this flag. With this true, the same event ALSO enqueues a
+	 * reopen-issue delivery (PATCH state=open); harmless no-op if the mapped
+	 * issue is already open, since this store never tracks the mapped
+	 * issue's actual open/closed state. Default false preserves today's
+	 * comment-only behavior byte-for-byte.
+	 */
+	reopenOnRecurrence?: boolean;
 	/** Labels applied to created issues (filtered by the allow-list). */
 	labels?: string[];
 	labelsAllowList?: string[];
@@ -121,6 +133,7 @@ export const SINK_DEFAULTS = {
 	autoFileMinSeverity: "critical" as const,
 	autoFileAfterRuns: 2,
 	autoClose: false,
+	reopenOnRecurrence: false,
 	labels: ["al-perf"],
 	labelsAllowList: ["al-perf", "performance", "regression"],
 	minMillisBetweenCalls: 1000,
@@ -172,6 +185,7 @@ function validateGitHubSinkShape(
 	requireBoolean(path, "enabled", gh.enabled);
 	requireBoolean(path, "autoFile", gh.autoFile);
 	requireBoolean(path, "autoClose", gh.autoClose);
+	requireBoolean(path, "reopenOnRecurrence", gh.reopenOnRecurrence);
 	if (
 		gh.autoFileMinSeverity !== undefined &&
 		!(AUTO_FILE_MIN_SEVERITIES as readonly unknown[]).includes(

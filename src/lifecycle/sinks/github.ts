@@ -307,6 +307,19 @@ export function createGitHubSink(options: GitHubAdapterOptions): SinkAdapter {
 				return res.ok ? { ok: true, externalId: mapping.externalId } : res;
 			}
 
+			if (delivery.kind === "reopen-issue") {
+				// reopenOnRecurrence's delivery kind: harmless no-op if the mapped
+				// issue is already open (GitHub PATCH state=open on an open issue
+				// just succeeds) — the outbox never tracks the mapped issue's
+				// actual open/closed state, so this can't check first.
+				const res = await call(
+					"PATCH",
+					`/repos/${options.repo}/issues/${mapping.externalId}`,
+					{ state: "open" },
+				);
+				return res.ok ? { ok: true, externalId: mapping.externalId } : res;
+			}
+
 			// close-issue
 			const res = await call(
 				"PATCH",

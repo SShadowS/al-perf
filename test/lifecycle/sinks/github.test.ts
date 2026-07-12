@@ -271,6 +271,41 @@ describe("GitHub adapter contract (mocked HTTP)", () => {
 		expect(JSON.parse(String(close.calls[0].init.body)).state).toBe("closed");
 	});
 
+	it("reopen-issue: PATCHes the mapped issue with state open (reopenOnRecurrence's delivery kind)", async () => {
+		const map = memoryIssueMap();
+		map.putIssueMapping({
+			tenant: "t1",
+			sink: "github",
+			fingerprint: "pattern:abc123def4567890",
+			externalId: "42",
+			createdAt: "2026-07-09T00:00:00Z",
+		});
+		const { impl, calls } = mockFetch(200, { number: 42 });
+		const sink = createGitHubSink({
+			repo: "o/r",
+			token: "t0k",
+			fetchImpl: impl,
+		});
+		const res = await sink.deliver(delivery("reopen-issue"), map);
+		expect(res.ok).toBe(true);
+		expect(calls[0].url).toBe("https://api.github.com/repos/o/r/issues/42");
+		expect(calls[0].init.method).toBe("PATCH");
+		expect(JSON.parse(String(calls[0].init.body)).state).toBe("open");
+	});
+
+	it("reopen-issue with no mapping is non-retryable", async () => {
+		const map = memoryIssueMap();
+		const { impl } = mockFetch(200, {});
+		const sink = createGitHubSink({
+			repo: "o/r",
+			token: "t0k",
+			fetchImpl: impl,
+		});
+		const res = await sink.deliver(delivery("reopen-issue"), map);
+		expect(res.ok).toBe(false);
+		if (!res.ok) expect(res.retryable).toBe(false);
+	});
+
 	it("comment-recurred: POSTs to the mapped issue's comments with a body noting recurrence after close; escaping applies", async () => {
 		const map = memoryIssueMap();
 		map.putIssueMapping({

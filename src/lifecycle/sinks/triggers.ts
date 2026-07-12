@@ -14,6 +14,11 @@
  * knowledge; this scan runs at `lifecycle sync` time. A disabled sink
  * leaves events unprocessed so enabling it later can see the backlog.
  *
+ * Recurrence after close: `filed-fresh` on a finding with an existing issue
+ * mapping always enqueues comment-recurred (the visibility mechanism).
+ * `sinks.github.reopenOnRecurrence` (default false) additionally enqueues a
+ * reopen-issue delivery on the same event.
+ *
  * The entire scan (every enqueue decision plus the final sink_processed
  * flip) runs inside one enclosing `store.db.transaction()`, mirroring
  * evaluate.ts's discipline: a mid-scan throw rolls back everything, so a
@@ -163,6 +168,16 @@ export function processEventsForSinks(
 					)
 				) {
 					enqueued++;
+				}
+				// reopenOnRecurrence: comment-recurred above is the visibility
+				// mechanism regardless of this flag; when true, also PATCH the
+				// mapped issue back open (see github.ts's reopen-issue kind).
+				if (cfg.reopenOnRecurrence) {
+					if (
+						enqueue(row, event, "reopen-issue", `${SINK}:reopen:${event.id}`)
+					) {
+						enqueued++;
+					}
 				}
 			}
 
