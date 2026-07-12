@@ -415,4 +415,112 @@ describe("lifecycle sync — backlog drain", () => {
 			await rmSyncRetrying(dir);
 		}
 	});
+
+	it("reports the union of distinct skipped-migration events across scans, not the sum of per-scan totals, when sinks sit at different watermarks", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-backlog-skip-union-"));
+		const dbPath = join(dir, "lifecycle.sqlite");
+		const configPath = join(dir, "lifecycle.config.json");
+		const originalFetch = globalThis.fetch;
+		const originalExitCode = process.exitCode;
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const logSpy = spyOn(console, "log").mockImplementation(() => {});
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(
+			() => true,
+		);
+		try {
+			// Same shape as the "processed" union test above, but every event
+			// carries viaMigration:true. skippedMigration has the exact same
+			// per-sink-distinct-count contract as processed (see triggers.ts),
+			// so it is subject to the exact same overlap: github already
+			// scanned ids 1-400, azureDevOps starts at 0 and replays all 600.
+			// Summing each scan's skippedMigration (600 + 100 = 700) would
+			// double-count the 501-600 overlap; unioning the id sets across
+			// scans correctly reports 600.
+			const seed = new LifecycleStore(dbPath);
+			const migrationDetail = JSON.stringify({ viaMigration: true });
+			for (let i = 0; i < 600; i++) {
+				const id = seed.insertFinding({
+					tenant: "t1",
+					fingerprint: `pattern:skipunion${String(i).padStart(4, "0")}`,
+					algoVersion: 1,
+					state: "open",
+					source: "pattern",
+					patternId: "calcfields-in-loop",
+					title: `Skip union finding ${i}`,
+					severity: "info",
+					appId: "",
+					appName: "",
+					routineKey: "",
+					firstSeenAt: NOW,
+					lastSeenAt: NOW,
+					lastEventAt: NOW,
+					observedKinds: ["sampling"],
+					observedStreams: ["nightly"],
+				} satisfies NewFinding);
+				seed.logEvent({
+					findingId: id,
+					event: "seen-normal",
+					fromState: "open",
+					toState: "open",
+					at: NOW,
+					detail: migrationDetail,
+				});
+			}
+			seed.advanceSinkProgress("github", 400);
+			seed.close();
+
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: { enabled: true, repo: "owner/repo" },
+						azureDevOps: {
+							enabled: true,
+							org: "myorg",
+							project: "myproj",
+						},
+					},
+				}),
+			);
+
+			// viaMigration events never reach a sink regardless of autoFile —
+			// no delivery should ever be attempted.
+			globalThis.fetch = (async (...args: unknown[]) => {
+				throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+			}) as typeof fetch;
+
+			const cmd = createLifecycleCommand();
+			cmd.exitOverride();
+			await cmd.parseAsync(
+				[
+					"--db",
+					dbPath,
+					"--config",
+					configPath,
+					"sync",
+					"--dry-run",
+					"-f",
+					"json",
+				],
+				{ from: "user" },
+			);
+
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.triggers.processed).toBe(600);
+			expect(summary.triggers.skippedMigration).toBe(600);
+
+			const store = new LifecycleStore(dbPath);
+			expect(store.listUnprocessedEvents("github").length).toBe(0);
+			expect(store.listUnprocessedEvents("azureDevOps").length).toBe(0);
+			store.close();
+		} finally {
+			globalThis.fetch = originalFetch;
+			process.exitCode = originalExitCode ?? 0;
+			errorSpy.mockRestore();
+			logSpy.mockRestore();
+			stdoutSpy.mockRestore();
+			await rmSyncRetrying(dir);
+		}
+	});
 });

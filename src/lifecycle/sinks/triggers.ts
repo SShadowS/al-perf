@@ -115,6 +115,12 @@ export interface TriggerReport {
 	processedIds: number[];
 	enqueued: number;
 	skippedMigration: number;
+	/**
+	 * The distinct event ids counted in `skippedMigration`, sorted ascending.
+	 * Same caveat as `processedIds`: a caller draining several scans must
+	 * union these rather than sum `skippedMigration`.
+	 */
+	skippedIds: number[];
 }
 
 function safeParse(json: string | null): Record<string, unknown> | null {
@@ -162,7 +168,13 @@ export function processEventsForSinks(
 		// No enabled sink: nothing to scan and no watermark to advance. Each
 		// sink's watermark is its own, so a sink enabled later still sees the
 		// backlog — that no longer depends on leaving events unprocessed.
-		return { processed: 0, processedIds: [], enqueued: 0, skippedMigration: 0 };
+		return {
+			processed: 0,
+			processedIds: [],
+			enqueued: 0,
+			skippedMigration: 0,
+			skippedIds: [],
+		};
 	}
 
 	const enqueue = (
@@ -331,6 +343,7 @@ export function processEventsForSinks(
 			processedIds: [...processedIds].sort((a, b) => a - b),
 			enqueued,
 			skippedMigration: skippedIds.size,
+			skippedIds: [...skippedIds].sort((a, b) => a - b),
 		};
 	});
 

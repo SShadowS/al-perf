@@ -1124,21 +1124,24 @@ export function createLifecycleCommand(): Command {
 					// needs several scans. The loop terminates because every non-empty
 					// scan advances at least one sink's watermark.
 					//
-					// triggers.processed must count DISTINCT events across the whole
-					// drain, not the sum of each scan's count: sinks sitting at
-					// different watermarks (e.g. a newly-enabled sink replaying a
-					// backlog another sink has already passed) can each see the same
-					// event in a later scan, so summing scan.processed double-counts
-					// it. Union the per-scan id sets instead.
+					// triggers.processed and triggers.skippedMigration must both count
+					// DISTINCT events across the whole drain, not the sum of each
+					// scan's count: sinks sitting at different watermarks (e.g. a
+					// newly-enabled sink replaying a backlog another sink has already
+					// passed) can each see the same event in a later scan, so summing
+					// scan.processed or scan.skippedMigration double-counts it. Union
+					// the per-scan id sets instead.
 					const processedEventIds = new Set<number>();
+					const skippedEventIds = new Set<number>();
 					for (;;) {
 						const scan = processEventsForSinks(store, config);
 						if (scan.processed === 0) break;
 						for (const id of scan.processedIds) processedEventIds.add(id);
+						for (const id of scan.skippedIds) skippedEventIds.add(id);
 						triggers.enqueued += scan.enqueued;
-						triggers.skippedMigration += scan.skippedMigration;
 					}
 					triggers.processed = processedEventIds.size;
+					triggers.skippedMigration = skippedEventIds.size;
 
 					// D2 sink registry: one plan per ENABLED sink block, built here
 					// (not in triggers.ts) because only sync needs live adapters —
