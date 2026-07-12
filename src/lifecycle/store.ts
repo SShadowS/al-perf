@@ -1009,12 +1009,20 @@ export class LifecycleStore {
 		});
 
 		const apply = this.db.transaction((): "renamed" | "merged" | "no-op" => {
-			const recorded = this.db.run(
+			// Record the audit row (idempotent — a duplicate insert is silently
+			// ignored). This is audit bookkeeping ONLY: it must NOT gate whether
+			// the rekey below runs. A migration can legitimately be recorded once
+			// with no from-finding present (a run without fusion, or the al-sem
+			// engine down) and THEN, on a later run, find a from-finding that
+			// actually needs rekeying — gating on `changes === 0` here would
+			// permanently block that later rekey once the audit row exists,
+			// leaving the finding stuck at its old fingerprint forever (the exact
+			// duplicate-forking failure this migration mechanism exists to stop).
+			this.db.run(
 				`INSERT OR IGNORE INTO fingerprint_migrations (tenant, from_fingerprint, to_fingerprint, reason, applied_at)
 				 VALUES (?, ?, ?, ?, ?)`,
 				[tenant, from, to, migration.reason, appliedAt],
 			);
-			if (recorded.changes === 0) return "no-op"; // already applied
 
 			const fromRow = this.getActiveFinding(tenant, from);
 			if (!fromRow) return "no-op";
@@ -1042,6 +1050,19 @@ export class LifecycleStore {
 				// stale to-row mapping is the one that gets replaced away.
 				this.db.run(
 					"UPDATE OR REPLACE sink_issue_map SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
+					[to, tenant, from],
+				);
+				// Same treatment for capture_requests: terminal rows
+				// (fulfilled/expired/cancelled) rekey for free since
+				// idx_capture_requests_active excludes them — nothing to collide
+				// with. An active row COULD collide with an unrelated active
+				// request already parked under the to-fingerprint; OR REPLACE
+				// resolves that exactly like the sink_issue_map rename above — the
+				// from-row is the live one here, so it wins and the other active
+				// row is dropped (a dropped capture request just re-files on the
+				// next sync).
+				this.db.run(
+					"UPDATE OR REPLACE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
 					[to, tenant, from],
 				);
 				this.logEvent({
@@ -1096,6 +1117,37 @@ export class LifecycleStore {
 						[tenant, sink, from],
 					);
 				}
+			}
+			// Rekey capture_requests the same way. Terminal rows move over
+			// unconditionally — they aren't covered by idx_capture_requests_active
+			// so there's no collision to guard against, and it keeps the
+			// fingerprint column coherent for historical rows. The
+			// from-fingerprint's active request (that partial-unique index
+			// permits at most one) repoints onto `to` if `to` has no active
+			// request of its own; otherwise — since a second active request for
+			// the same routine is a duplicate ask, wasteful but not harmful (D5) —
+			// it's cancelled instead of repointed. Its fingerprint still rekeys
+			// to `to` along with it: once terminal it no longer falls under
+			// idx_capture_requests_active, so this can't collide.
+			this.db.run(
+				"UPDATE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ? AND status NOT IN ('pending','claimed')",
+				[to, tenant, from],
+			);
+			const toHasActiveRequest = this.db
+				.query<{ n: number }, [string, string]>(
+					"SELECT count(*) AS n FROM capture_requests WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+				)
+				.get(tenant, to);
+			if ((toHasActiveRequest?.n ?? 0) === 0) {
+				this.db.run(
+					"UPDATE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+					[to, tenant, from],
+				);
+			} else {
+				this.db.run(
+					"UPDATE capture_requests SET fingerprint = ?, status = 'cancelled' WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+					[to, tenant, from],
+				);
 			}
 			// The from-row's own history now lives under toRow.id — log ITS
 			// ending against fromRow.id AFTER that reassignment, so the

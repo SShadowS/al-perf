@@ -146,6 +146,40 @@ describe("applyFingerprintMigration", () => {
 		store.close();
 	});
 
+	it("an existing migration audit row does NOT permanently block a LATER rekey once a from-finding actually appears (I1 regression)", () => {
+		const store = new LifecycleStore(":memory:");
+		// First application: no from-finding exists yet (e.g. a run without
+		// fusion, or the al-sem engine was down) — recorded as a no-op, same as
+		// "no active from-finding is a recorded no-op" above.
+		expect(
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).toBe("no-op");
+
+		// A later run (still without fusion, or before the engine came back)
+		// files a fresh finding under the fallback fingerprint — this is the
+		// exact duplicate-forking scenario the branch exists to prevent.
+		const id = store.insertFinding(finding("pattern:fallbackhash00001"));
+
+		// The SAME migration is applied again (a subsequent fused run). The
+		// audit row from the first application already exists (INSERT OR
+		// IGNORE no-ops on it), but that must NOT suppress the rekey now that
+		// an active from-finding is actually present — otherwise this finding
+		// is permanently stuck at F1, unmergeable, flapping seen/absent.
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-09T00:00:00Z",
+		);
+		expect(outcome).toBe("renamed");
+		expect(
+			store.getActiveFinding("t1", "pattern:fallbackhash00001"),
+		).toBeNull();
+		expect(store.getActiveFinding("t1", "pattern:stablehash000001")?.id).toBe(
+			id,
+		);
+		store.close();
+	});
+
 	it("PK collision: a run present under both identities keeps the to-row's occurrence", () => {
 		const store = new LifecycleStore(":memory:");
 		const oldId = store.insertFinding(finding("pattern:fallbackhash00001"));
@@ -451,6 +485,209 @@ describe("applyFingerprintMigration", () => {
 			"pattern:stablehash000001",
 		);
 		expect(canonical?.externalId).toBe("99"); // to-row's own issue survives
+		store.close();
+	});
+
+	function captureRequest(
+		overrides: Partial<Parameters<LifecycleStore["createCaptureRequest"]>[0]> &
+			Pick<
+				Parameters<LifecycleStore["createCaptureRequest"]>[0],
+				"fingerprint" | "findingId"
+			>,
+	): Parameters<LifecycleStore["createCaptureRequest"]>[0] {
+		return {
+			tenant: "t1",
+			appId: "app1",
+			appName: null,
+			objectType: "codeunit",
+			objectId: 50100,
+			methodName: "postorder",
+			reason: "RT0018 × 5 runs, max 42000ms",
+			requestedAt: "2026-07-01T00:00:00Z",
+			expiresAt: "2026-07-08T00:00:00Z",
+			...overrides,
+		};
+	}
+
+	it("rename repoints an active capture request onto the new fingerprint, keeping it active", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(finding("pattern:fallbackhash00001"));
+		store.createCaptureRequest(
+			captureRequest({ fingerprint: "pattern:fallbackhash00001", findingId }),
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("renamed");
+		const requests = store.listCaptureRequests("t1");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.fingerprint).toBe("pattern:stablehash000001");
+		expect(requests[0]?.status).toBe("pending");
+		store.close();
+	});
+
+	it("rename survives an active capture request already parked under the to-fingerprint (PK collision) — the live from-row wins, and a retry no-ops without throwing", () => {
+		const store = new LifecycleStore(":memory:");
+		const fromFindingId = store.insertFinding(
+			finding("pattern:fallbackhash00001"),
+		);
+		const otherFindingId = store.insertFinding(
+			finding("pattern:otherfinding001"),
+		);
+		// Pre-existing, unrelated active request already sitting at the
+		// to-fingerprint.
+		store.createCaptureRequest(
+			captureRequest({
+				fingerprint: "pattern:stablehash000001",
+				findingId: otherFindingId,
+				reason: "stale ask",
+				requestedAt: "2026-06-01T00:00:00Z",
+			}),
+		);
+		// The from-row's own, live request.
+		store.createCaptureRequest(
+			captureRequest({
+				fingerprint: "pattern:fallbackhash00001",
+				findingId: fromFindingId,
+				reason: "live ask",
+			}),
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("renamed");
+		const pending = store.listCaptureRequests("t1", "pending");
+		expect(pending).toHaveLength(1);
+		expect(pending[0]?.reason).toBe("live ask"); // live from-row wins; stale row lost
+		expect(pending[0]?.fingerprint).toBe("pattern:stablehash000001");
+
+		// Retry (e.g. after a crash, or simply re-running the same batch) must
+		// be a clean no-op, not a re-throw of the same PK collision.
+		expect(() =>
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).not.toThrow();
+		expect(
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).toBe("no-op");
+		store.close();
+	});
+
+	it("rename rekeys a terminal (fulfilled) capture request too, for fingerprint coherence", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(finding("pattern:fallbackhash00001"));
+		store.createCaptureRequest(
+			captureRequest({ fingerprint: "pattern:fallbackhash00001", findingId }),
+		);
+		const [req] = store.listCaptureRequests("t1");
+		store.db.run(
+			"UPDATE capture_requests SET status = 'fulfilled', fulfilled_at = ?, fulfilled_by_profile_id = ? WHERE id = ?",
+			["2026-06-05T00:00:00Z", "p1", req?.id],
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("renamed");
+		const fulfilled = store.listCaptureRequests("t1", "fulfilled");
+		expect(fulfilled).toHaveLength(1);
+		expect(fulfilled[0]?.fingerprint).toBe("pattern:stablehash000001");
+		store.close();
+	});
+
+	it("merge repoints the from-row's active capture request onto the to-fingerprint when the to-fingerprint has none", () => {
+		const store = new LifecycleStore(":memory:");
+		const fromFindingId = store.insertFinding(
+			finding("pattern:fallbackhash00001"),
+		);
+		store.insertFinding(finding("pattern:stablehash000001"));
+		store.createCaptureRequest(
+			captureRequest({
+				fingerprint: "pattern:fallbackhash00001",
+				findingId: fromFindingId,
+			}),
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("merged");
+		const requests = store.listCaptureRequests("t1", "pending");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.fingerprint).toBe("pattern:stablehash000001");
+		store.close();
+	});
+
+	it("merge cancels the from-row's active capture request when the to-fingerprint already has one (duplicate ask, not harmful)", () => {
+		const store = new LifecycleStore(":memory:");
+		const fromFindingId = store.insertFinding(
+			finding("pattern:fallbackhash00001"),
+		);
+		const toFindingId = store.insertFinding(finding("pattern:stablehash000001"));
+		store.createCaptureRequest(
+			captureRequest({
+				fingerprint: "pattern:fallbackhash00001",
+				findingId: fromFindingId,
+				reason: "from ask",
+				requestedAt: "2026-07-01T00:00:00Z",
+			}),
+		);
+		store.createCaptureRequest(
+			captureRequest({
+				fingerprint: "pattern:stablehash000001",
+				findingId: toFindingId,
+				reason: "to ask",
+				requestedAt: "2026-07-02T00:00:00Z",
+			}),
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("merged");
+		const pending = store.listCaptureRequests("t1", "pending");
+		expect(pending).toHaveLength(1);
+		expect(pending[0]?.reason).toBe("to ask"); // to-row's own request survives
+		const cancelled = store.listCaptureRequests("t1", "cancelled");
+		expect(cancelled).toHaveLength(1);
+		expect(cancelled[0]?.reason).toBe("from ask");
+		// Cancelling doesn't exempt it from "rekey every row for tenant+from" —
+		// it stays coherent with every other row instead of being the lone
+		// row still parked at the old identity.
+		expect(cancelled[0]?.fingerprint).toBe("pattern:stablehash000001");
+		store.close();
+	});
+
+	it("no-op migration (no active finding under from) leaves capture_requests untouched", () => {
+		const store = new LifecycleStore(":memory:");
+		// A finding exists (to satisfy the FK) under a DIFFERENT fingerprint
+		// than the one the capture request itself claims — the migration's
+		// `from` never resolves to an active finding, so it must no-op before
+		// touching anything, capture_requests included.
+		const anchorFindingId = store.insertFinding(
+			finding("pattern:unrelatedanchor1"),
+		);
+		store.createCaptureRequest(
+			captureRequest({
+				fingerprint: "pattern:fallbackhash00001",
+				findingId: anchorFindingId,
+			}),
+		);
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-08T00:00:00Z",
+		);
+		expect(outcome).toBe("no-op");
+		const requests = store.listCaptureRequests("t1");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.fingerprint).toBe("pattern:fallbackhash00001");
 		store.close();
 	});
 });

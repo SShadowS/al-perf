@@ -10,6 +10,7 @@
  * without invoking the engine at all.
  */
 
+import type { IdentityUpgrade } from "../lifecycle/fingerprint.js";
 import { fingerprintPatterns } from "../lifecycle/wire.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { FusedModel } from "../types/fused.js";
@@ -48,7 +49,9 @@ export interface FuseOptions {
 	 *     attributions (lifecycle phase-2 identity upgrade): anchors with a
 	 *     confident alsem match move from the fallback key to their stable
 	 *     routine identity. Every fusion path passes the SAME array its result
-	 *     carries, so upgraded identities flow to the output.
+	 *     carries, so upgraded identities flow to the output. Each fingerprint
+	 *     that actually changed is recorded on the result's
+	 *     `identityUpgrades` (see FusedModel.identityUpgrades).
 	 * When absent (or empty), both steps are skipped (graceful no-op).
 	 */
 	patterns?: DetectedPattern[];
@@ -112,9 +115,20 @@ export async function fuseProfile(
 	// Lifecycle phase-2 wiring: re-mint pattern fingerprints with the
 	// correlation attributions, upgrading confidently-matched anchors from
 	// fallback keys to stable routine identities (identity-upgrade semantics —
-	// see routineIdentityFromCorrelation).
+	// see routineIdentityFromCorrelation). Each fingerprint that actually
+	// changed is collected and surfaced on the result for the lifecycle apply
+	// path (Task 3) to rekey instead of duplicate.
 	if (opts?.patterns && opts.patterns.length > 0) {
-		fingerprintPatterns(opts.patterns, methods, fused.attributions);
+		const identityUpgrades: IdentityUpgrade[] = [];
+		fingerprintPatterns(
+			opts.patterns,
+			methods,
+			fused.attributions,
+			identityUpgrades,
+		);
+		if (identityUpgrades.length > 0) {
+			fused.identityUpgrades = identityUpgrades;
+		}
 	}
 
 	return fused;

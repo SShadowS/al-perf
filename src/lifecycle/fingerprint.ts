@@ -179,6 +179,45 @@ export function formatFingerprint(fp: FindingFingerprint): string {
 	return `${fp.namespace}:${fp.value}`;
 }
 
+/**
+ * Parse the canonical string form back into a `FindingFingerprint`. The
+ * inverse of `formatFingerprint`.
+ *
+ * Splits on the FIRST colon only — the `alsem:` namespace passes a native
+ * fingerprint through verbatim (module header), and that native value may
+ * itself contain colons.
+ *
+ * The string form carries no `algoVersion` (only namespace + value), so a
+ * parsed fingerprint is stamped with the CURRENT `FINGERPRINT_ALGO_VERSION`.
+ * This mirrors how in-process fingerprints are always re-derived from
+ * strings minted moments earlier at the running algorithm version (e.g. the
+ * identity-upgrade collector in wire.ts) — it is not a lossless round-trip
+ * across an algo-version bump.
+ */
+export function parseFingerprint(s: string): FindingFingerprint {
+	const idx = s.indexOf(":");
+	if (idx < 0) {
+		throw new TypeError(
+			`parseFingerprint: not a namespaced fingerprint string: ${JSON.stringify(s)}`,
+		);
+	}
+	const namespace = s.slice(0, idx);
+	if (
+		namespace !== "alsem" &&
+		namespace !== "pattern" &&
+		namespace !== "telemetry"
+	) {
+		throw new TypeError(
+			`parseFingerprint: unknown namespace ${JSON.stringify(namespace)} in ${JSON.stringify(s)}`,
+		);
+	}
+	return {
+		value: s.slice(idx + 1),
+		namespace,
+		algoVersion: FINGERPRINT_ALGO_VERSION,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Hashing (internal)
 //
@@ -416,6 +455,27 @@ export interface FingerprintMigration {
 	from: FindingFingerprint;
 	to: FindingFingerprint;
 	reason: FingerprintMigrationReason;
+}
+
+/**
+ * A single pattern's fingerprint identity upgrade, captured by
+ * `fingerprintPatterns` (src/lifecycle/wire.ts) when a re-mint changes an
+ * ALREADY-fingerprinted pattern's identity (fallback → stable, or
+ * stable → a different stable). Surfaced on `FusedModel.identityUpgrades`
+ * (src/semantic/fuse.ts) for the lifecycle apply path to turn into
+ * `FingerprintMigration`s with reason "identity-upgrade" via
+ * `applyFingerprintMigration`.
+ *
+ * Distinct from `FingerprintMigration`: this carries `patternId` (which
+ * pattern produced the upgrade) and omits `reason` (always
+ * "identity-upgrade" at this call site — the consumer adds it).
+ */
+export interface IdentityUpgrade {
+	patternId: string;
+	/** The pre-upgrade fingerprint (fallback key). */
+	from: FindingFingerprint;
+	/** The upgraded identity. */
+	to: FindingFingerprint;
 }
 
 /**

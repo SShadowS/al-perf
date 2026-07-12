@@ -182,7 +182,22 @@ telemetry findings can plausibly clear the thresholds; hourly is a
 reasonable default alongside a 15-minute `pull-telemetry` pull — there is no
 reason to poll on a tighter cadence than the scan that produces the rows.
 
-## 7. Related docs
+## 7. Identity-upgrade migrations rekey requests, they never duplicate them
+
+A finding's fingerprint isn't permanent: `lifecycle evaluate`/`lifecycle
+sync` run with `--source` pointed at an AL workspace can trigger al-sem
+fusion, which upgrades a pattern from its fallback identity to a stable
+`stableRoutineId`-anchored one once the anchor routine confidently matches.
+When that happens, the resulting `identity-upgrade` `FingerprintMigration` is
+applied via `applyFingerprintMigration` **before** the run is evaluated — the
+existing finding (and its capture requests, active or terminal) is renamed
+to the new fingerprint, not left behind under the old one. An executor
+polling `captures list` never sees a stale duplicate request under the old
+identity alongside a fresh one under the new: the original request row is
+what shows up, just with an updated `fingerprint` field, and a request
+already claimed keeps its claim and status across the rekey.
+
+## 8. Related docs
 
 - [`docs/telemetry-recipe.md`](telemetry-recipe.md) — how findings enter the
   lifecycle DB in the first place, and §8 "Closing the loop" for the

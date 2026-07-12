@@ -32,6 +32,7 @@ import {
 } from "../../lifecycle/config-file.js";
 import { buildDigest, renderDigestMarkdown } from "../../lifecycle/digest.js";
 import {
+	applyIdentityUpgrades,
 	type EvaluationOutcome,
 	evaluateRun,
 } from "../../lifecycle/evaluate.js";
@@ -54,6 +55,9 @@ import {
 	type TriageClientResponse,
 	type TriageContentBlock,
 } from "../../lifecycle/triage/agent.js";
+import { isAlWorkspaceDir } from "../../semantic/engine-runner.js";
+import { type FuseResult, fuseProfile } from "../../semantic/fuse.js";
+import type { MethodBreakdown } from "../../types/aggregated.js";
 import type { TelemetryBatchDocument } from "../../types/telemetry.js";
 
 /** CLI default DB location (plan decision: dot-dir in cwd, one file). */
@@ -726,10 +730,58 @@ export function createLifecycleCommand(): Command {
 			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				let allMethods: MethodBreakdown[] = [];
 				const result = await analyzeProfile(profilePath, {
 					includePatterns: true,
 					sourcePath: opts.source,
+					onAllMethods: (m: MethodBreakdown[]) => {
+						allMethods = m;
+					},
 				});
+
+				// al-sem fusion (fpwire phase-2 payoff): when a confident anchor
+				// match upgrades a pattern's fingerprint from its fallback identity
+				// to a stable one, the migration must be APPLIED to the store
+				// before evaluateRun below — otherwise the existing finding is
+				// left behind under its old fingerprint and evaluateRun files a
+				// fresh duplicate under the new one. fuseProfile re-mints
+				// result.patterns[].fingerprint IN PLACE, so evaluateRun always
+				// reads whatever fingerprint ends up on each pattern here.
+				if (opts.source && isAlWorkspaceDir(opts.source)) {
+					let fuseResult: FuseResult | undefined;
+					try {
+						// fuseProfile itself never throws (degrades to {disabled}),
+						// but this catch stays defensive and matches the `analyze`
+						// command's fusion error handling — it must NOT also cover
+						// applyIdentityUpgrades below (see that call's comment).
+						fuseResult = await fuseProfile(allMethods, opts.source, {
+							patterns: result.patterns,
+						});
+					} catch (err: unknown) {
+						// Never crash `lifecycle evaluate` over fusion — log silently.
+						const msg = err instanceof Error ? err.message : String(err);
+						process.stderr.write(`al-sem fusion: unexpected error: ${msg}\n`);
+					}
+					if (
+						fuseResult &&
+						!("disabled" in fuseResult) &&
+						fuseResult.identityUpgrades
+					) {
+						// Deliberately OUTSIDE the try/catch above: a store failure
+						// here must abort the run, not be swallowed and fall through
+						// to evaluateRun with patterns already re-minted to their
+						// upgraded fingerprints but the migration only partially (or
+						// not at all) applied — that half-applied state is exactly
+						// the duplicate-finding bug this wiring exists to prevent.
+						applyIdentityUpgrades(
+							store,
+							opts.tenant,
+							fuseResult.identityUpgrades,
+							new Date().toISOString(),
+						);
+					}
+				}
+
 				const profileId =
 					opts.profileId ??
 					createHash("sha256")
