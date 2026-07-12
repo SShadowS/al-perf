@@ -11,9 +11,16 @@
  * investigates it, never bleed into the next finding's messages array.
  *
  * D5 — data-not-instructions: every finding-derived string handed to the
- * model (the opening prompt, and every tool result) is wrapped in
- * `<finding-data>...</finding-data>` by `wrapFindingData` below — the SINGLE
- * framing point promised by tools.ts's module docstring.
+ * model (the opening prompt, and every tool result) is wrapped by
+ * `wrapFindingData` below — the SINGLE framing point promised by tools.ts's
+ * module docstring — in a delimiter that carries a per-RUN nonce
+ * (`<finding-data id="...">...</finding-data id="...">`) AND has any
+ * literal delimiter-lookalike text inside it neutralized. Both are needed:
+ * a fixed, nonce-less delimiter is forgeable by finding text containing a
+ * literal `</finding-data>` (closes the block early, everything after reads
+ * as harness-authored); the nonce alone stops that but a defense-in-depth
+ * escape also blocks a lookalike from ever appearing in the raw text at
+ * all. See `wrapFindingData`'s docstring for the full reasoning.
  */
 
 import type { LifecycleConfig } from "../config.js";
@@ -176,12 +183,42 @@ export const TRIAGE_TOOL_DEFS: TriageToolDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// D5 framing helper — the ONE place finding-derived text gets wrapped.
+// D5 framing + bounding — the ONE place finding-derived text gets wrapped,
+// and the ONE place it gets size-capped, before it reaches the model or the
+// audit log (Task 3 review fixes).
 // ---------------------------------------------------------------------------
 
-/** Wraps arbitrary (potentially finding-derived) text in the non-instruction delimiter SYSTEM_PROMPT tells the model to treat as data, never commands. */
-export function wrapFindingData(text: string): string {
-	return `<finding-data>\n${text}\n</finding-data>`;
+/**
+ * D5 belt-and-suspenders: even with `wrapFindingData`'s per-run nonce making
+ * a MATCHING close tag unguessable to text authored before this run
+ * started, finding-derived text must never be able to even superficially
+ * resemble a `<finding-data>` delimiter. Neutralizes `<finding-data` /
+ * `</finding-data` (case-insensitive) by swapping the leading `<` for a
+ * lookalike character, so the text stays legible (the model can still see
+ * something was there) rather than being silently deleted — and so this
+ * defense holds even if a future refactor ever drops the nonce.
+ */
+function escapeDelimiterLookalikes(text: string): string {
+	return text.replace(/<(\/?finding-data)/gi, "‹$1");
+}
+
+/**
+ * Wraps arbitrary (potentially finding-derived) text in the non-instruction
+ * delimiter SYSTEM_PROMPT tells the model to treat as data, never commands.
+ *
+ * `nonce` is unique per RUN (the CLI's already-random, already-sanitized
+ * runId — see `runTriageAgent`) and unknown to whatever authored the
+ * finding text, since that text was written before this run existed. A
+ * literal `</finding-data>` inside a hostile title can therefore never
+ * match the harness's actual closing tag, `</finding-data id="<nonce>">` —
+ * closing the block early would require guessing the nonce in advance.
+ * `escapeDelimiterLookalikes` is the second, independent layer: it
+ * neutralizes any literal delimiter-shaped text before the real tags are
+ * even added, so the defense doesn't rest on the nonce alone.
+ */
+export function wrapFindingData(text: string, nonce: string): string {
+	const escaped = escapeDelimiterLookalikes(text);
+	return `<finding-data id="${nonce}">\n${escaped}\n</finding-data id="${nonce}">`;
 }
 
 /**
@@ -197,7 +234,55 @@ export function mintRunId(date: Date): string {
 	return date.toISOString().replace(/:/g, "-");
 }
 
-function buildOpeningMessage(row: FindingRow): string {
+/**
+ * Two DIFFERENT bounds (Task 3 review fix — a single shared 500-char bound
+ * starved the model of usable tool output), not one shared number:
+ *   - MODEL_TOOL_RESULT_MAX_CHARS: generous — the model needs enough of a
+ *     findings_get/findings_list result (or the opening finding summary) to
+ *     actually do its job; a single finding row easily exceeds a tight
+ *     bound on its own.
+ *   - AUDIT_RESULT_SUMMARY_MAX_CHARS: tight — the audit log is a
+ *     human-skimmed, local file; a one-line resultSummary is enough to know
+ *     what happened, not a full replay.
+ * Both still cap a hostile blob's worst case (carry-over hardening, Task 2
+ * review) — only the "how much does the model see" tradeoff differs.
+ */
+const MODEL_TOOL_RESULT_MAX_CHARS = 8000;
+const AUDIT_RESULT_SUMMARY_MAX_CHARS = 500;
+const TRUNCATION_MARKER = "…[truncated]";
+
+/**
+ * Truncates to at most `maxChars` UTF-16 code units, backing off one further
+ * unit if the cut would otherwise land inside a surrogate pair (Task 3
+ * review fix) — plain `.slice()` is code-unit-based and can split a pair,
+ * leaving an unpaired surrogate (e.g. half of an emoji) in the output.
+ */
+function truncate(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	let end = maxChars;
+	const code = text.charCodeAt(end - 1);
+	if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+	return `${text.slice(0, end)}${TRUNCATION_MARKER}`;
+}
+
+function rawToolResultText(result: ToolResult<unknown>): string {
+	return result.ok ? JSON.stringify(result.result) : `error: ${result.error}`;
+}
+
+/**
+ * Bounds a tool call's `input` before it's written to the audit log (Task 3
+ * review minor: symmetry with resultSummary — an unbounded input could
+ * balloon the audit file same as an unbounded result). Kept as the original
+ * structured object (readable JSONL) in the common case; only degrades to a
+ * truncated string when the serialized input is itself oversized.
+ */
+function boundedAuditInput(input: unknown): unknown {
+	const raw = JSON.stringify(input) ?? "undefined";
+	if (raw.length <= AUDIT_RESULT_SUMMARY_MAX_CHARS) return input;
+	return truncate(raw, AUDIT_RESULT_SUMMARY_MAX_CHARS);
+}
+
+function buildOpeningMessage(row: FindingRow, nonce: string): string {
 	const summary = {
 		id: row.id,
 		fingerprint: row.fingerprint,
@@ -211,10 +296,19 @@ function buildOpeningMessage(row: FindingRow): string {
 		routineKey: row.routineKey,
 		absenceCount: row.absenceCount,
 	};
+	// Task 3 review fix: bounded through the SAME model-facing limit as tool
+	// results — an oversized title/appName/routineKey must not balloon the
+	// very first turn of every finding's conversation. The cumulative budget
+	// check only runs BETWEEN findings (see runTriageAgent below), so it
+	// can't catch an oversized opening message on its own.
+	const serialized = truncate(
+		JSON.stringify(summary, null, 2),
+		MODEL_TOOL_RESULT_MAX_CHARS,
+	);
 	return [
 		`Triage finding #${row.id} for tenant "${row.tenant}". Investigate using your tools as needed, then call record_triage exactly once.`,
 		"",
-		wrapFindingData(JSON.stringify(summary, null, 2)),
+		wrapFindingData(serialized, nonce),
 	].join("\n");
 }
 
@@ -261,22 +355,6 @@ export interface TriageAgentRunResult {
 }
 
 const DEFAULT_MAX_TOKENS_PER_TURN = 2048;
-/**
- * Carry-over hardening (Task 2 review): a huge finding — a large report_file
- * write, a verbose occurrence-details blob — must not balloon either the
- * audit log OR the model's context. The SAME bounded string is used for
- * both: computed once per tool call and reused for the audit resultSummary
- * and the <finding-data>-wrapped tool_result content sent back to the model.
- */
-const RESULT_SUMMARY_MAX_CHARS = 500;
-
-function summarizeToolResult(result: ToolResult<unknown>): string {
-	const raw = result.ok
-		? JSON.stringify(result.result)
-		: `error: ${result.error}`;
-	if (raw.length <= RESULT_SUMMARY_MAX_CHARS) return raw;
-	return `${raw.slice(0, RESULT_SUMMARY_MAX_CHARS)}…[truncated]`;
-}
 
 interface FindingOutcome {
 	triaged: boolean;
@@ -292,11 +370,13 @@ async function triageOneFinding(
 	client: TriageClient,
 	config: TriageAgentConfig,
 	maxTokensPerTurn: number,
+	/** Per-run D5 nonce — see wrapFindingData's docstring and runTriageAgent below. */
+	nonce: string,
 ): Promise<FindingOutcome> {
 	// Fresh messages array PER FINDING (D3) — nothing from a prior finding's
 	// conversation is ever referenced here.
 	const messages: TriageClientMessage[] = [
-		{ role: "user", content: buildOpeningMessage(row) },
+		{ role: "user", content: buildOpeningMessage(row, nonce) },
 	];
 
 	let inputTokens = 0;
@@ -333,13 +413,19 @@ async function triageOneFinding(
 		const toolResults: TriageMessageContentParam[] = [];
 		for (const block of toolUseBlocks) {
 			const result = tools.dispatch(block.name, block.input);
-			// Computed once, reused for both sinks — see RESULT_SUMMARY_MAX_CHARS.
-			const resultSummary = summarizeToolResult(result);
+			// Raw text computed once; two DIFFERENT bounds applied to it — see
+			// MODEL_TOOL_RESULT_MAX_CHARS/AUDIT_RESULT_SUMMARY_MAX_CHARS's
+			// docstring for why they're no longer the same number.
+			const raw = rawToolResultText(result);
+			const auditSummary = truncate(raw, AUDIT_RESULT_SUMMARY_MAX_CHARS);
+			const modelText = truncate(raw, MODEL_TOOL_RESULT_MAX_CHARS);
 			auditLog.logToolCall({
 				findingId: row.id,
 				tool: block.name,
-				input: block.input,
-				resultSummary,
+				// Task 3 review minor: bounded for the same reason resultSummary
+				// is — an oversized tool_use input must not balloon the audit file.
+				input: boundedAuditInput(block.input),
+				resultSummary: auditSummary,
 			});
 			if (block.name === "record_triage" && result.ok) {
 				// Structural success (the call was well-formed and dispatched),
@@ -352,10 +438,10 @@ async function triageOneFinding(
 				type: "tool_result",
 				tool_use_id: block.id,
 				// D5: tool results echo store data back to the model — the single
-				// wrapping point tools.ts's docstring defers to here. Bounded
-				// (resultSummary), not the raw JSON.stringify(result) — see
-				// RESULT_SUMMARY_MAX_CHARS.
-				content: wrapFindingData(resultSummary),
+				// wrapping point tools.ts's docstring defers to here. Bounded to
+				// the generous model-facing limit (modelText), not the raw
+				// JSON.stringify(result) and not the tighter audit bound.
+				content: wrapFindingData(modelText, nonce),
 				is_error: !result.ok,
 			});
 		}
@@ -407,6 +493,14 @@ export async function runTriageAgent(
 		limit: config.maxFindings,
 	});
 
+	// D5 nonce (Task 3 review fix): reuse the run's already-random,
+	// already-sanitized runId — minted at the CLI boundary BEFORE any
+	// finding is read, so no finding's stored text (however old) could ever
+	// have been crafted to match it. One nonce per RUN, not per finding, is
+	// enough: the same unpredictability property holds for every finding
+	// investigated in this run. See wrapFindingData's docstring.
+	const nonce = options.runId;
+
 	let triagedCount = 0;
 	const skipped: Array<{ findingId: number; reason: TriageFindingSkipReason }> =
 		[];
@@ -433,6 +527,7 @@ export async function runTriageAgent(
 			client,
 			config,
 			maxTokensPerTurn,
+			nonce,
 		);
 		inputTokens += outcome.usage.inputTokens;
 		outputTokens += outcome.usage.outputTokens;

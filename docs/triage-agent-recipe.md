@@ -83,15 +83,23 @@ from a customer's environment, not a trusted operator.
 The defense here is structural framing plus a capped tool surface, not a
 promise that the model can never be fooled. Every finding-derived string the
 agent loop hands to the model — the opening message, and every tool result —
-is wrapped in `<finding-data>...</finding-data>` (one wrapping point,
-`wrapFindingData` in `src/lifecycle/triage/agent.ts`), and the versioned
-system prompt (`SYSTEM_PROMPT`/`PROMPT_VERSION` in
+is wrapped in `<finding-data id="...">...</finding-data id="...">` (one
+wrapping point, `wrapFindingData` in `src/lifecycle/triage/agent.ts`), and
+the versioned system prompt (`SYSTEM_PROMPT`/`PROMPT_VERSION` in
 `src/lifecycle/triage/prompt.ts`) tells the model everything inside those
-tags is data to read, never an instruction to follow. If a jailbroken model
-ignores that framing anyway, the blast radius is capped by the tool surface
-itself: the worst it can do is write a wrong triage note or a file inside
-the jailed report directory — both attributable (the audit log has the
-exact tool call) and reversible (a wrong note is just a string in a
+tags is data to read, never an instruction to follow. The `id` is a random
+value minted fresh for the run (reusing the run's already-random `runId`,
+generated at the CLI boundary before any finding is even read) — a finding's
+stored text, however it got there, could never have been crafted to guess
+it in advance, so it can't forge a matching closing tag and end the data
+block early. As a second, independent layer, `wrapFindingData` also
+neutralizes any literal `<finding-data`/`</finding-data`-shaped text inside
+the wrapped content before the real tags are added, so a delimiter
+lookalike can't even superficially resemble a tag boundary. If a jailbroken
+model ignores that framing anyway, the blast radius is capped by the tool
+surface itself: the worst it can do is write a wrong triage note or a file
+inside the jailed report directory — both attributable (the audit log has
+the exact tool call) and reversible (a wrong note is just a string in a
 column). There is no tool that changes a finding's state, no tool that
 reaches another tenant, and no tool that touches a sink (GitHub or
 otherwise) — sinks are entirely untouched by this feature, so there is
@@ -99,8 +107,14 @@ nothing outward-facing here that would need a human-confirmation step.
 
 Tool results and the opening finding summary are also **bounded** before
 they reach the model or the audit log (truncated with a `…[truncated]`
-marker past a fixed character limit) — a single huge occurrence-details blob
-or report write can't balloon either the model's context or the audit file.
+marker past a fixed character limit) — a single huge occurrence-details blob,
+oversized finding title, or report write can't balloon either the model's
+context or the audit file. Two different limits apply, not one shared
+number: what the model sees (tool results, the opening summary) is bounded
+generously (8,000 characters) so the agent still has enough to actually do
+its job; what lands in the audit log's `resultSummary`/`input` fields is
+bounded tightly (500 characters), since that file is a human-skimmed local
+record, not a full replay.
 
 ## Audit log
 
