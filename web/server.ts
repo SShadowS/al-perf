@@ -981,15 +981,20 @@ export const server = Bun.serve({
 		}
 
 		// This route has no authentication — no bearer check, no admin gate —
-		// unlike /api/record-next-batch below, which IS admin-gated even
+		// unlike /api/record-next-batch above, which IS admin-gated even
 		// though it's dev-only. Because anyone who can reach this endpoint
 		// can read the response, it must never publish customer tenant
 		// identifiers, only aggregate counts. An external monitor only needs
-		// to know that *something* is blocked; an operator who needs the
-		// actual tenant names runs the authenticated `lifecycle status` CLI
-		// (which calls the same `listStaleAlgoTenants` query below). Do NOT
-		// "helpfully" restore tenant names or the raw array here — that would
-		// reintroduce a customer-data leak on an unauthenticated route.
+		// to know that *something* is blocked. Do NOT "helpfully" restore
+		// tenant names or the raw array here — that would reintroduce a
+		// customer-data leak on an unauthenticated route.
+		//
+		// Note there is currently NO authenticated surface that enumerates
+		// WHICH tenants are blocked: `lifecycle status --tenant <t>` warns
+		// about the one tenant it was asked about, so an operator who sees a
+		// nonzero count here has to probe tenant by tenant. If that becomes
+		// painful, add the enumeration to an AUTHENTICATED surface (an admin-
+		// gated route, or a new CLI subcommand) — not to this one.
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
 			const aiEnabled =
 				process.env.AI_DISABLED !== "1" && !!process.env.ANTHROPIC_API_KEY;
