@@ -706,3 +706,47 @@ describe("evaluateRun — captureTime canonicalization", () => {
 		store.close();
 	});
 });
+
+describe("evaluateRun — tenant normalization (debt-closure plan D1)", () => {
+	it("two casings of the same tenant land on one finding, not two", () => {
+		const store = new LifecycleStore(":memory:");
+		evaluateRun(
+			store,
+			makeResult(),
+			makeRun({
+				tenant: "ACME",
+				profileId: "p1",
+				captureTime: "2026-07-01T10:00:00Z",
+			}),
+			CFG,
+		);
+		const o = evaluateRun(
+			store,
+			makeResult(),
+			makeRun({
+				tenant: "acme",
+				profileId: "p2",
+				captureTime: "2026-07-02T10:00:00Z",
+			}),
+			CFG,
+		);
+		// Second run is a SECOND observation of the SAME finding (new -> open),
+		// not a fresh "first-seen" under a case-distinct tenant.
+		expect(o.transitions[0]).toEqual(
+			expect.objectContaining({ from: "new", to: "open", event: "seen-normal" }),
+		);
+		expect(store.getActiveFinding("acme", FP)?.state).toBe("open");
+		expect(store.listFindings({ tenant: "acme" }).length).toBe(1);
+		// The as-typed, un-normalized casing was never used as a storage key.
+		expect(store.getActiveFinding("ACME", FP)).toBeNull();
+		store.close();
+	});
+
+	it("rejects a blank tenant with a clear error", () => {
+		const store = new LifecycleStore(":memory:");
+		expect(() =>
+			evaluateRun(store, makeResult(), makeRun({ tenant: "   " }), CFG),
+		).toThrow(/tenant/);
+		store.close();
+	});
+});

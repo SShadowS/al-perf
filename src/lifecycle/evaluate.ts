@@ -49,6 +49,7 @@ import {
 import { DEFAULT_LIFECYCLE_CONFIG, type LifecycleConfig } from "./config.js";
 import { FINGERPRINT_ALGO_VERSION } from "./fingerprint.js";
 import { type FindingState, type SeenQualifier, transition } from "./states.js";
+import { normalizeTenantCode } from "./tenant.js";
 import type {
 	ExercisedApps,
 	FindingRow,
@@ -264,7 +265,11 @@ export function evaluateRun(
 	run: RunMetadata,
 	configPatch?: Partial<LifecycleConfig>,
 ): EvaluationOutcome {
-	run = { ...run, captureTime: canonicalCaptureTime(run.captureTime) };
+	run = {
+		...run,
+		tenant: normalizeTenantCode(run.tenant),
+		captureTime: canonicalCaptureTime(run.captureTime),
+	};
 	const cfg: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, ...configPatch };
 	const incomplete = (result.meta.incompleteInvocations ?? 0) > 0;
 	const index = buildMethodIndex(result);
