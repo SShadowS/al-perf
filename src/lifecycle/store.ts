@@ -798,6 +798,43 @@ export class LifecycleStore {
 	}
 
 	/**
+	 * Every tenant currently blocked by the stale-algo guard. Same predicate as
+	 * countStaleAlgoFindings, widened across tenants — the query the status
+	 * surfaces poll so an operator learns about a blocked tenant from a
+	 * dashboard rather than from a stderr line in a headless service's log.
+	 */
+	listStaleAlgoTenants(
+		currentVersion: number,
+	): Array<{ tenant: string; count: number; versions: number[] }> {
+		const rows = this.db
+			.query<{ tenant: string; algo_version: number; n: number }, [number]>(
+				`SELECT tenant, algo_version, COUNT(*) AS n FROM findings
+				 WHERE state != 'closed' AND algo_version != ?
+				 GROUP BY tenant, algo_version
+				 ORDER BY tenant, algo_version`,
+			)
+			.all(currentVersion);
+		const byTenant = new Map<
+			string,
+			{ tenant: string; count: number; versions: number[] }
+		>();
+		for (const r of rows) {
+			const entry = byTenant.get(r.tenant);
+			if (entry) {
+				entry.count += r.n;
+				entry.versions.push(r.algo_version);
+			} else {
+				byTenant.set(r.tenant, {
+					tenant: r.tenant,
+					count: r.n,
+					versions: [r.algo_version],
+				});
+			}
+		}
+		return [...byTenant.values()];
+	}
+
+	/**
 	 * Delete every finding for `tenant` minted at a different algorithm version,
 	 * in any state, along with its dependent rows. This is the escape hatch the
 	 * stale-algo guard points at: history cannot be carried across a fingerprint
