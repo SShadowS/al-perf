@@ -138,12 +138,21 @@ function printEvaluationOutcome(
  * D4: `<out-without-ext>.<tenant>.<sanitized-stream>.json` — stream
  * characters outside `[A-Za-z0-9-]` become `_` (a raw `environmentName` is
  * untrusted and would otherwise land in a path segment, e.g. `"Prod/EU"`).
+ * `tenant` is lowercased for the filename only (mapped `tenantMap` values
+ * are already lowercased at config-load time; the raw `--tenant` flag used
+ * as the fleet bucket isn't — without this, a fleet-bucketed "Acme" group
+ * and a mapped "acme" group on the same stream produce case-distinct paths
+ * that collide and silently overwrite on a case-insensitive filesystem like
+ * NTFS). This is scoped to the filename only — the `tenant` field in the
+ * written-files summary, and every non-`--out` code path, still carry the
+ * value as-authored; broader `--tenant` case normalization is a tracked
+ * follow-up, not this fix's scope).
  */
 function splitOutPath(outPath: string, tenant: string, stream: string): string {
 	const ext = extname(outPath);
 	const base = ext ? outPath.slice(0, -ext.length) : outPath;
 	const sanitizedStream = stream.replace(/[^A-Za-z0-9-]/g, "_");
-	return `${base}.${tenant}.${sanitizedStream}${ext}`;
+	return `${base}.${tenant.toLowerCase()}.${sanitizedStream}${ext}`;
 }
 
 /**
@@ -205,6 +214,28 @@ function formatSkippedTenantsSummary(
 }
 
 /**
+ * `--stream`/`--profile-id` are meaningless once split derives both per
+ * group (D2 stream=environmentName, D5 profileId=content hash) — commander
+ * still applies their defaults, so `opts.stream`/`opts.profileId` are
+ * truthy either way; `getOptionValueSource` is the only way to tell "the
+ * operator typed this flag" apart from "this is just the default value".
+ */
+function warnIgnoredSplitFlags(splitCommand: Command): void {
+	if (splitCommand.getOptionValueSource("stream") === "cli") {
+		console.error(
+			"pull-telemetry --split-by-customer: --stream is ignored — each group's " +
+				"stream is derived from environmentName instead (docs/telemetry-recipe.md §10).",
+		);
+	}
+	if (splitCommand.getOptionValueSource("profileId") === "cli") {
+		console.error(
+			"pull-telemetry --split-by-customer: --profile-id is ignored — each group " +
+				"gets its own content-hash profileId instead (docs/telemetry-recipe.md §10).",
+		);
+	}
+}
+
+/**
  * `pull-telemetry --split-by-customer`: fans one App Insights pull into one
  * batch per (customer AAD tenant, environment) via `pullTelemetrySplit`,
  * then either evaluates N batches into the lifecycle DB or writes N `--out`
@@ -212,7 +243,13 @@ function formatSkippedTenantsSummary(
  * `pull-telemetry` action) so the non-split path stays byte-identical to
  * before this flag existed.
  */
-async function runSplitByCustomer(cmd: Command, opts: any): Promise<void> {
+async function runSplitByCustomer(
+	cmd: Command,
+	opts: any,
+	splitCommand: Command,
+): Promise<void> {
+	warnIgnoredSplitFlags(splitCommand);
+
 	const config = resolveLifecycleConfig(cmd.opts().config);
 	const tenantMapNonEmpty = Object.keys(config.telemetry.tenantMap).length > 0;
 	const fleetPolicy = config.telemetry.unmappedTenantPolicy === "fleet";
@@ -329,8 +366,16 @@ async function runSplitByCustomer(cmd: Command, opts: any): Promise<void> {
 			error: string;
 		}> = [];
 		for (const group of splitResult.groups) {
+			// The store's duplicate-run guard keys off (tenant, profileId) alone
+			// — stream isn't part of that uniqueness constraint (store.ts) — so
+			// hashing the batch alone lets two same-tenant streams with
+			// byte-identical signal sets (e.g. Production/Sandbox both quiet
+			// this window) collide and the second silently skips as
+			// duplicate-run. Folding tenant+stream into the hash input keeps
+			// each group's idempotency key distinct even when their content is
+			// identical.
 			const profileId = createHash("sha256")
-				.update(JSON.stringify(group.batch))
+				.update(JSON.stringify([group.tenant, group.stream, group.batch]))
 				.digest("hex")
 				.slice(0, 32);
 			try {
@@ -794,15 +839,19 @@ export function createLifecycleCommand(): Command {
 			'Tenant key (also the fleet bucket for --split-by-customer\'s unmapped-tenant "fleet" policy)',
 			"local",
 		)
-		.option("--stream <stream>", "Capture stream", "telemetry")
+		.option(
+			"--stream <stream>",
+			"Capture stream (ignored under --split-by-customer, which derives one stream per group from environmentName)",
+			"telemetry",
+		)
 		.option(
 			"--profile-id <id>",
-			"Idempotency key (default: sha256 of the normalized batch)",
+			"Idempotency key, default: sha256 of the normalized batch (ignored under --split-by-customer, which derives one content-hash profileId per group)",
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
-		.action(async (opts: any) => {
+		.action(async (opts: any, splitCommand: Command) => {
 			if (opts.splitByCustomer) {
-				await runSplitByCustomer(cmd, opts);
+				await runSplitByCustomer(cmd, opts, splitCommand);
 				return;
 			}
 

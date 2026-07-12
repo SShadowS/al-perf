@@ -1160,6 +1160,200 @@ describe("lifecycle pull-telemetry --split-by-customer", () => {
 		expect(output).toContain(firstPath);
 		expect(output).toContain(secondPath);
 	});
+
+	it("evaluate mode: identical-content groups under the same tenant but different streams get distinct profileIds (no false duplicate-run)", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: { tenantMap: { [SPLIT_GUID_A]: "acme-inc" } },
+			}),
+		);
+		// Same mapped tenant, two different environments, byte-identical signal
+		// content — the store's duplicate-run guard keys off (tenant, profileId)
+		// alone (no stream column in that UNIQUE constraint), so hashing the
+		// batch alone would make these two groups collide.
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production" }),
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Sandbox" }),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+			],
+			{ from: "user" },
+		);
+
+		const store = new LifecycleStore(dbPath);
+		const runs = store.db
+			.query<{ stream: string }, [string]>(
+				"SELECT stream FROM runs WHERE tenant = ?",
+			)
+			.all("acme-inc");
+		store.close();
+		// A false duplicate-run collision would leave only one run row.
+		expect(runs).toHaveLength(2);
+		expect(runs.map((r) => r.stream).sort()).toEqual(["Production", "Sandbox"]);
+
+		expect(process.exitCode ?? 0).toBe(0);
+		const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(output).toContain("acme-inc/Production:");
+		expect(output).toContain("acme-inc/Sandbox:");
+		expect(output).not.toContain("duplicate-run");
+	});
+
+	it("--stream and --profile-id print a one-line stderr warning each under --split-by-customer, and the derived values win", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: { tenantMap: { [SPLIT_GUID_A]: "acme-inc" } },
+			}),
+		);
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production" }),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+				"--stream",
+				"custom-stream",
+				"--profile-id",
+				"custom-id",
+			],
+			{ from: "user" },
+		);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("--stream is ignored");
+		expect(errText).toContain("--profile-id is ignored");
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "acme-inc" });
+		expect(findings.length).toBeGreaterThan(0);
+		expect(findings[0].observedStreams).toContain("Production");
+		expect(findings[0].observedStreams).not.toContain("custom-stream");
+		store.close();
+	});
+
+	it("no warning prints when --stream/--profile-id are left at their defaults under --split-by-customer", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: { tenantMap: { [SPLIT_GUID_A]: "acme-inc" } },
+			}),
+		);
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production" }),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+			],
+			{ from: "user" },
+		);
+
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).not.toContain("is ignored");
+	});
+
+	it("--out lowercases --tenant before filename embedding: a fleet-bucketed 'Acme-Inc' and a mapped 'acme-inc' group on the same stream don't collide", async () => {
+		const UNMAPPED_GUID = "dddddddd-1111-2222-3333-444444444444";
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					tenantMap: { [SPLIT_GUID_A]: "acme-inc" },
+					unmappedTenantPolicy: "fleet",
+				},
+			}),
+		);
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production" }),
+			splitRow({
+				aadTenantId: UNMAPPED_GUID,
+				environmentName: "Production",
+				methodName: "FleetMethod",
+			}),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+		const outPath = join(dir, "out-batch.json");
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+				"--out",
+				outPath,
+				"--tenant",
+				"Acme-Inc",
+			],
+			{ from: "user" },
+		);
+
+		const firstPath = join(dir, "out-batch.acme-inc.Production.json");
+		const secondPath = join(dir, "out-batch.acme-inc.Production-2.json");
+		expect(existsSync(firstPath)).toBe(true);
+		expect(existsSync(secondPath)).toBe(true);
+		const firstWritten = JSON.parse(readFileSync(firstPath, "utf8"));
+		const secondWritten = JSON.parse(readFileSync(secondPath, "utf8"));
+		const methodNames = [
+			firstWritten.signals[0].methodName,
+			secondWritten.signals[0].methodName,
+		].sort();
+		expect(methodNames).toEqual(["FleetMethod", "ProcessLine"]);
+	});
 });
 
 // ---------------------------------------------------------------------------

@@ -468,6 +468,8 @@ non-split `--out`.
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
 | `--split-by-customer` | `pull-telemetry` | Opt in to the per-`(aadTenantId, environmentName)` fan-out described above; requires a non-empty `telemetry.tenantMap` or `unmappedTenantPolicy: "fleet"` in `--config`. `--tenant` doubles as the fleet bucket. |
+| `--stream` | `pull-telemetry --split-by-customer` | Ignored — each group's stream is derived from `environmentName` instead. Passing it anyway prints a one-line stderr warning rather than silently doing nothing. |
+| `--profile-id` | `pull-telemetry --split-by-customer` | Ignored — each group gets its own content-hash `profileId` instead (D5). Passing it anyway prints a one-line stderr warning. |
 
 ### Confidentiality note
 
