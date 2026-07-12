@@ -50,21 +50,21 @@ afterEach(() => {
 });
 
 /** Platform-appropriate launcher for alsem-stub.ts in "findings" mode. */
-function makeStubBinary(mode: "ok" | "findings" = "findings"): string {
+function makeStubBinary(): string {
 	const tmpDir = mkdtempSync(join(tmpdir(), "al-perf-cli-fuse-stub-"));
 	fusionCleanups.push(() => rmSync(tmpDir, { recursive: true, force: true }));
 	if (process.platform === "win32") {
 		const cmdPath = join(tmpDir, "alsem-stub.cmd");
 		writeFileSync(
 			cmdPath,
-			`@echo off\r\nset "ALSEM_STUB_MODE=${mode}"\r\n"${BUN_EXE}" "${STUB_TS}" %*\r\n`,
+			`@echo off\r\nset "ALSEM_STUB_MODE=findings"\r\n"${BUN_EXE}" "${STUB_TS}" %*\r\n`,
 		);
 		return cmdPath;
 	}
 	const shPath = join(tmpDir, "alsem-stub.sh");
 	writeFileSync(
 		shPath,
-		`#!/bin/sh\nexport ALSEM_STUB_MODE='${mode}'\nexec "${BUN_EXE}" "${STUB_TS}" "$@"\n`,
+		`#!/bin/sh\nexport ALSEM_STUB_MODE='findings'\nexec "${BUN_EXE}" "${STUB_TS}" "$@"\n`,
 	);
 	chmodSync(shPath, 0o755);
 	return shPath;
@@ -359,7 +359,12 @@ describe("lifecycle --tenant normalization", () => {
 		expect(errorSpy).toHaveBeenCalled();
 	});
 
-	it("evaluate: two --tenant casings land on one finding, not two", async () => {
+	it("evaluate: two --tenant casings converge on one finding end-to-end (evaluateRun's internal normalization is a second line of defense)", async () => {
+		// This pins the end-state only: evaluateRun normalizes the tenant itself,
+		// so it passes even if resolveTenantOpt were stripped from the CLI
+		// action. The "evaluate --source" fusion test below (which spies on
+		// applyFingerprintMigration) is what actually guards the CLI boundary
+		// for evaluate.
 		await run([
 			"evaluate",
 			"test/fixtures/sampling-minimal.alcpuprofile",
@@ -393,7 +398,7 @@ describe("lifecycle --tenant normalization", () => {
 	});
 
 	it("evaluate --source: identity upgrades land in the normalized tenant", async () => {
-		const stubBin = makeStubBinary("findings");
+		const stubBin = makeStubBinary();
 		const prevBin = process.env.AL_SEM_BIN;
 		process.env.AL_SEM_BIN = stubBin;
 		const migrateSpy = spyOn(
@@ -456,6 +461,28 @@ describe("lifecycle --tenant normalization", () => {
 			observedStreams: ["nightly"],
 		} satisfies NewFinding);
 		store.close();
+
+		// `digest` writes via process.stdout.write on both format branches (not
+		// console.log), so it needs its own spy rather than the block's logSpy.
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(
+			() => true,
+		);
+		await run(["digest", "--tenant", "ACME", "-f", "json"]);
+		const digestOutput = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		stdoutSpy.mockRestore();
+		const digest = JSON.parse(digestOutput);
+		expect(digest.tenant).toBe("acme");
+		expect(
+			digest.resolved.map((f: { fingerprint: string }) => f.fingerprint),
+		).toContain(fp);
+
+		// `triage` is only legal against an active (non-closed) finding — the
+		// seed above is resolved, so an uppercase --tenant that resolves
+		// correctly will find it and flip needs-triage.
+		await run(["triage", fp, "--tenant", "ACME"]);
+		const midway = new LifecycleStore(dbPath);
+		expect(midway.getActiveFinding("acme", fp)?.needsTriage).toBe(true);
+		midway.close();
 
 		// `close` is only legal from `resolved` — the seed above is resolved, so
 		// an uppercase --tenant that resolves correctly will find and close it.
