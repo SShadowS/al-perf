@@ -31,13 +31,17 @@ coexisting). Fields not present in the file keep their code default:
 		"minOccurrences": 3,
 		"minSeverity": "warning",
 		"ttlDays": 14,
-		"maxPending": 20
+		"maxPending": 20,
+		"claimTtlMinutes": 60
 	}
 }
 ```
 
 `maxPending` caps ACTIVE (pending/claimed) requests per tenant — further
 qualifying candidates are skipped, not queued, until the count drops.
+`claimTtlMinutes` bounds how long a claim survives an executor that never
+reports back — see §3 for what reclaims it and why an executor should not
+also build its own version of this.
 
 ## 2. The executor loop
 
@@ -103,10 +107,32 @@ not a lock on the target routine: nothing stops a second executor from
 claiming a *different* request for the same routine, or a human from running
 an ad-hoc capture outside the queue entirely — and a claimed request can
 still be fulfilled by any matching profile, from any source (see
-`capture-fulfill.test.ts`'s "a claimed request is also fulfillable" case). If
-your executor pool needs stronger mutual exclusion, build it above this —
-e.g. your own scheduler enforcing a claim TTL, after which it re-polls and
-reclaims a stale claim.
+`capture-fulfill.test.ts`'s "a claimed request is also fulfillable" case).
+
+The claim TTL itself is **server-side, not something your executor builds**:
+on every `lifecycle sync` scan, the engine reclaims any claim older than
+`claimTtlMinutes` (default 60, configurable under `captureRequests` — see §1)
+and returns the request to `pending` for another worker to pick up. Do not
+also implement your own claim TTL — an executor that builds one on top of
+this ends up with two independent timers racing each other. What stays
+unchanged is that the claim is advisory only *between two live workers*
+racing the same row; the reclaim above handles the dead-worker case for you.
+
+One consequence: a slow-but-alive executor — one still working past
+`claimTtlMinutes` — can have its claim reclaimed and the same request handed
+to, and captured by, a second worker. That is wasteful, not corrupting: both
+captures fulfil the same finding (§2 step 5), and the second is simply
+redundant. If your captures routinely run longer than the default TTL, raise
+`claimTtlMinutes` rather than re-adding a client-side guard.
+
+**Note for bc-dev-mcp's `--keep-claim-on-failure`:** this flag's guarantee is
+weaker than its name implies. It keeps the claim held after a failed capture
+attempt (rather than cancelling it), but the engine reclaims a kept claim
+just like any other, once it passes `claimTtlMinutes` — another worker can
+then pick it up and retry. Arguably that outcome *is* the retry you wanted,
+but the flag does not hold the request indefinitely, and an operator relying
+on it to pin a request to one executor until it succeeds needs to know it
+will eventually be reclaimed and handed elsewhere.
 
 ## 4. `CaptureRequestRow` — the exact JSON shape
 

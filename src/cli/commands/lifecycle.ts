@@ -837,9 +837,14 @@ export function createLifecycleCommand(): Command {
 			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				const lifecycleConfig = resolveLifecycleConfig(cmd.opts().config);
 				const digest = buildDigest(store, {
 					tenant,
 					since: opts.since,
+					captureRequests: {
+						claimTtlMinutes: lifecycleConfig.captureRequests.claimTtlMinutes,
+						maxPending: lifecycleConfig.captureRequests.maxPending,
+					},
 				});
 				process.stdout.write(
 					opts.format === "json"

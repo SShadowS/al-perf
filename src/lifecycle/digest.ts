@@ -9,7 +9,11 @@
  */
 
 import type { FindingState } from "./states.js";
-import type { FindingRow, LifecycleStore } from "./store.js";
+import type {
+	CaptureQueueHealth,
+	FindingRow,
+	LifecycleStore,
+} from "./store.js";
 
 export interface DigestOptions {
 	tenant?: string;
@@ -19,6 +23,12 @@ export interface DigestOptions {
 	now?: string;
 	/** Per-section cap (default 50). */
 	limit?: number;
+	/**
+	 * Capture-request queue config, needed to compute captureQueue health.
+	 * Absent (e.g. an older caller that hasn't been updated) → captureQueue
+	 * is always null and nothing renders.
+	 */
+	captureRequests?: { claimTtlMinutes: number; maxPending: number };
 }
 
 export interface DigestFindingEntry {
@@ -53,6 +63,13 @@ export interface DigestData {
 	improving: DigestFindingEntry[];
 	resolved: DigestFindingEntry[];
 	needsTriage: DigestFindingEntry[];
+	/**
+	 * Queue health for the digest's tenant, or null when the digest is not
+	 * tenant-scoped, the tenant has no capture requests, or the caller did not
+	 * supply the capture config. Rendered ONLY when jammed — see
+	 * renderDigestMarkdown.
+	 */
+	captureQueue: CaptureQueueHealth | null;
 }
 
 function toEntry(store: LifecycleStore, row: FindingRow): DigestFindingEntry {
@@ -106,8 +123,21 @@ export function buildDigest(
 			.slice(0, limit)
 			.map((row) => toEntry(store, row));
 
+	const generatedAt = opts?.now ?? new Date().toISOString();
+
+	let captureQueue: CaptureQueueHealth | null = null;
+	if (tenant && opts?.captureRequests) {
+		const [h] = store.captureQueueHealth(
+			generatedAt,
+			opts.captureRequests.claimTtlMinutes,
+			opts.captureRequests.maxPending,
+			tenant,
+		);
+		captureQueue = h ?? null;
+	}
+
 	return {
-		generatedAt: opts?.now ?? new Date().toISOString(),
+		generatedAt,
 		tenant: tenant ?? null,
 		since,
 		totals,
@@ -118,6 +148,7 @@ export function buildDigest(
 		needsTriage: store
 			.listFindings({ tenant, needsTriage: true, limit })
 			.map((row) => toEntry(store, row)),
+		captureQueue,
 	};
 }
 
@@ -148,11 +179,35 @@ function renderSection(title: string, entries: DigestFindingEntry[]): string {
 
 export function renderDigestMarkdown(digest: DigestData): string {
 	const t = digest.totals;
+
+	// ONLY when jammed. A section that always renders would push routine queue
+	// chatter into every GitHub/ADO issue the digest drives, and the whole digest
+	// gets ignored inside a month.
+	const q = digest.captureQueue;
+	const jammed = q !== null && (q.atCap || q.stuck > 0);
+	const queueBlock = jammed
+		? [
+				"> **⚠ Capture queue jammed.**",
+				`> ${q.pending} pending, ${q.claimed} claimed (${q.stuck} stuck)${
+					q.atCap ? `, at the maxPending cap (${q.maxPending})` : ""
+				}.`,
+				q.atCap
+					? "> New capture requests are NOT being filed while the queue is at the cap."
+					: "",
+				q.stuckHolders.length > 0
+					? `> Stuck claims last held by: ${q.stuckHolders.join(", ")}.`
+					: "",
+				"> Run `lifecycle captures health` for detail.",
+				"",
+			].filter((line) => line !== "")
+		: [];
+
 	const header = [
 		"# al-perf Finding Digest",
 		"",
 		`Generated: ${digest.generatedAt}${digest.tenant ? ` · tenant: ${digest.tenant}` : ""}${digest.since ? ` · since: ${digest.since}` : ""}`,
 		"",
+		...queueBlock,
 		`| new | open | regressed | improving | resolved | closed | needs-triage |`,
 		`|---|---|---|---|---|---|---|`,
 		`| ${t.new} | ${t.open} | ${t.regressed} | ${t.improving} | ${t.resolved} | ${t.closed} | ${t.needsTriage} |`,
