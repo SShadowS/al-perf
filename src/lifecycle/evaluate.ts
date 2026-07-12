@@ -47,7 +47,10 @@ import {
 	versionStampFrom,
 } from "./baselines.js";
 import { DEFAULT_LIFECYCLE_CONFIG, type LifecycleConfig } from "./config.js";
-import { FINGERPRINT_ALGO_VERSION } from "./fingerprint.js";
+import {
+	FINGERPRINT_ALGO_VERSION,
+	type IdentityUpgrade,
+} from "./fingerprint.js";
 import { type FindingState, type SeenQualifier, transition } from "./states.js";
 import type {
 	ExercisedApps,
@@ -256,6 +259,35 @@ function collectFindings(
 	}
 
 	return { collected: [...byFingerprint.values()], unfingerprinted };
+}
+
+/**
+ * Apply each identity-upgrade migration BEFORE evaluateRun consumes the
+ * upgraded fingerprints (fpwire phase-2 payoff): renaming the EXISTING
+ * finding to its new identity first is what lets evaluateRun see the
+ * upgraded fingerprint as a CONTINUATION of that finding's history — an
+ * "already open" finding it advances — instead of filing a fresh
+ * "first-seen" duplicate under an identity the store has never held.
+ *
+ * `applyFingerprintMigration` is itself transactional and idempotent — a
+ * migration whose `from` fingerprint no longer has an active finding
+ * (already applied on a prior run, since fuseProfile recomputes the same
+ * fallback -> stable pair every run) is a recorded no-op, never a re-throw
+ * or a duplicate.
+ */
+export function applyIdentityUpgrades(
+	store: LifecycleStore,
+	tenant: string,
+	upgrades: IdentityUpgrade[],
+	appliedAt: string,
+): Array<"renamed" | "merged" | "no-op"> {
+	return upgrades.map((u) =>
+		store.applyFingerprintMigration(
+			tenant,
+			{ from: u.from, to: u.to, reason: "identity-upgrade" },
+			appliedAt,
+		),
+	);
 }
 
 export function evaluateRun(

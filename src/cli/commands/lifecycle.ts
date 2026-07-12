@@ -32,6 +32,7 @@ import {
 } from "../../lifecycle/config-file.js";
 import { buildDigest, renderDigestMarkdown } from "../../lifecycle/digest.js";
 import {
+	applyIdentityUpgrades,
 	type EvaluationOutcome,
 	evaluateRun,
 } from "../../lifecycle/evaluate.js";
@@ -53,6 +54,9 @@ import {
 	type TriageClientResponse,
 	type TriageContentBlock,
 } from "../../lifecycle/triage/agent.js";
+import { isAlWorkspaceDir } from "../../semantic/engine-runner.js";
+import { fuseProfile } from "../../semantic/fuse.js";
+import type { MethodBreakdown } from "../../types/aggregated.js";
 import type { TelemetryBatchDocument } from "../../types/telemetry.js";
 
 /** CLI default DB location (plan decision: dot-dir in cwd, one file). */
@@ -703,10 +707,44 @@ export function createLifecycleCommand(): Command {
 		.action(async (profilePath: string, opts: any) => {
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				let allMethods: MethodBreakdown[] = [];
 				const result = await analyzeProfile(profilePath, {
 					includePatterns: true,
 					sourcePath: opts.source,
+					onAllMethods: (m: MethodBreakdown[]) => {
+						allMethods = m;
+					},
 				});
+
+				// al-sem fusion (fpwire phase-2 payoff): when a confident anchor
+				// match upgrades a pattern's fingerprint from its fallback identity
+				// to a stable one, the migration must be APPLIED to the store
+				// before evaluateRun below — otherwise the existing finding is
+				// left behind under its old fingerprint and evaluateRun files a
+				// fresh duplicate under the new one. fuseProfile re-mints
+				// result.patterns[].fingerprint IN PLACE, so evaluateRun always
+				// reads whatever fingerprint ends up on each pattern here.
+				if (opts.source && isAlWorkspaceDir(opts.source)) {
+					try {
+						const fuseResult = await fuseProfile(allMethods, opts.source, {
+							patterns: result.patterns,
+						});
+						if (!("disabled" in fuseResult) && fuseResult.identityUpgrades) {
+							applyIdentityUpgrades(
+								store,
+								opts.tenant,
+								fuseResult.identityUpgrades,
+								new Date().toISOString(),
+							);
+						}
+					} catch (err: unknown) {
+						// Never crash `lifecycle evaluate` over fusion — log silently,
+						// mirroring the `analyze` command's fusion error handling.
+						const msg = err instanceof Error ? err.message : String(err);
+						process.stderr.write(`al-sem fusion: unexpected error: ${msg}\n`);
+					}
+				}
+
 				const profileId =
 					opts.profileId ??
 					createHash("sha256")
