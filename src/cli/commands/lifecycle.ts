@@ -3,12 +3,15 @@ import Table from "cli-table3";
 import { Command } from "commander";
 import { createHash } from "crypto";
 import { readFileSync, statSync, writeFileSync } from "fs";
+import { extname } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
 import {
 	DEFAULT_API_KEY_ENV,
 	DEFAULT_SIGNALS,
 	DEFAULT_SINCE,
+	type PullSplitResult,
 	pullTelemetry,
+	pullTelemetrySplit,
 } from "../../lifecycle/appinsights.js";
 import { rollupRoutineMetrics } from "../../lifecycle/baselines.js";
 import {
@@ -124,6 +127,174 @@ function printEvaluationOutcome(
 	);
 	for (const t of outcome.transitions) {
 		console.log(`  ${t.fingerprint}: ${t.from ?? "-"} -> ${t.to} (${t.event})`);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pull-telemetry --split-by-customer (telemetry-multitenant plan, Task 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * D4: `<out-without-ext>.<tenant>.<sanitized-stream>.json` — stream
+ * characters outside `[A-Za-z0-9-]` become `_` (a raw `environmentName` is
+ * untrusted and would otherwise land in a path segment, e.g. `"Prod/EU"`).
+ */
+function splitOutPath(outPath: string, tenant: string, stream: string): string {
+	const ext = extname(outPath);
+	const base = ext ? outPath.slice(0, -ext.length) : outPath;
+	const sanitizedStream = stream.replace(/[^A-Za-z0-9-]/g, "_");
+	return `${base}.${tenant}.${sanitizedStream}${ext}`;
+}
+
+/**
+ * One summary line for tenants skipped by the "skip" unmapped-tenant policy.
+ * CONTROLLER-PINNED (Task 2 review): an empty `aadTenantId` (on-prem/
+ * old-schema rows that never carried an AAD tenant id) must render visibly
+ * as "(none)" here — never an invisible empty string. JSON output (the
+ * `skippedTenants` array itself) keeps the raw `""`; only this text summary
+ * substitutes the placeholder.
+ */
+function formatSkippedTenantsSummary(
+	skipped: PullSplitResult["skippedTenants"],
+): string | null {
+	if (skipped.length === 0) return null;
+	const totalSignals = skipped.reduce((sum, s) => sum + s.signalCount, 0);
+	const detail = skipped
+		.map(
+			(s) =>
+				`${s.aadTenantId === "" ? "(none)" : s.aadTenantId} (${s.signalCount})`,
+		)
+		.join(", ");
+	return `Skipped ${skipped.length} tenant(s) not in tenantMap (${totalSignals} signal(s) total): ${detail}`;
+}
+
+/**
+ * `pull-telemetry --split-by-customer`: fans one App Insights pull into one
+ * batch per (customer AAD tenant, environment) via `pullTelemetrySplit`,
+ * then either evaluates N batches into the lifecycle DB or writes N `--out`
+ * files. Kept as a standalone function (not inlined into the main
+ * `pull-telemetry` action) so the non-split path stays byte-identical to
+ * before this flag existed.
+ */
+async function runSplitByCustomer(cmd: Command, opts: any): Promise<void> {
+	const config = resolveLifecycleConfig(cmd.opts().config);
+	const tenantMapNonEmpty = Object.keys(config.telemetry.tenantMap).length > 0;
+	const fleetPolicy = config.telemetry.unmappedTenantPolicy === "fleet";
+	if (!tenantMapNonEmpty && !fleetPolicy) {
+		console.error(
+			"pull-telemetry --split-by-customer requires the --config file's " +
+				"telemetry.tenantMap to contain at least one AAD-tenant-GUID entry, " +
+				'or telemetry.unmappedTenantPolicy to be "fleet" — with an empty ' +
+				'tenantMap and the default "skip" policy every tenant would be ' +
+				"skipped (100% of the pull lost). Add customers to " +
+				'telemetry.tenantMap, or set unmappedTenantPolicy: "fleet" to bucket ' +
+				"everything unmapped under --tenant.",
+		);
+		process.exitCode = 2;
+		return;
+	}
+
+	let splitResult: PullSplitResult;
+	try {
+		const signals = String(opts.signals)
+			.split(",")
+			.map((s: string) => s.trim())
+			.filter((s: string) => s.length > 0);
+		const clientTypes = opts.clientTypes
+			? String(opts.clientTypes)
+					.split(",")
+					.map((s: string) => s.trim())
+					.filter((s: string) => s.length > 0)
+			: undefined;
+		splitResult = await pullTelemetrySplit({
+			appId: opts.appId,
+			apiKeyEnv: opts.apiKeyEnv,
+			since: opts.since,
+			signals,
+			clientTypes,
+			tenantMap: config.telemetry.tenantMap,
+			unmappedTenantPolicy: config.telemetry.unmappedTenantPolicy,
+			fleetTenant: opts.tenant,
+		});
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err));
+		process.exitCode = 1;
+		return;
+	}
+
+	const skippedSummary = formatSkippedTenantsSummary(
+		splitResult.skippedTenants,
+	);
+
+	if (opts.out) {
+		const written = splitResult.groups.map((group) => {
+			const path = splitOutPath(opts.out, group.tenant, group.stream);
+			writeFileSync(path, JSON.stringify(group.batch, null, 2) + "\n");
+			return {
+				tenant: group.tenant,
+				stream: group.stream,
+				path,
+				signalCount: group.batch.signals.length,
+			};
+		});
+		if (opts.format === "json") {
+			process.stdout.write(
+				JSON.stringify(
+					{ written, skippedTenants: splitResult.skippedTenants },
+					null,
+					2,
+				) + "\n",
+			);
+		} else {
+			for (const w of written) {
+				console.log(
+					`Wrote telemetry batch (${w.signalCount} signal(s)) for ${w.tenant}/${w.stream} to ${w.path}`,
+				);
+			}
+			if (skippedSummary) console.log(skippedSummary);
+		}
+		return;
+	}
+
+	const store = new LifecycleStore(cmd.opts().db);
+	try {
+		const groups = splitResult.groups.map((group) => {
+			const profileId = createHash("sha256")
+				.update(JSON.stringify(group.batch))
+				.digest("hex")
+				.slice(0, 32);
+			const outcome = evaluateTelemetryBatch(
+				store,
+				group.batch,
+				{ tenant: group.tenant, stream: group.stream, profileId },
+				config,
+			);
+			return {
+				tenant: group.tenant,
+				stream: group.stream,
+				aadTenantId: group.aadTenantId,
+				environmentName: group.environmentName,
+				outcome,
+			};
+		});
+		if (opts.format === "json") {
+			process.stdout.write(
+				JSON.stringify(
+					{ groups, skippedTenants: splitResult.skippedTenants },
+					null,
+					2,
+				) + "\n",
+			);
+		} else {
+			for (const g of groups) {
+				console.log(
+					`${g.tenant}/${g.stream}: ${g.outcome.findingsSeen} findings seen`,
+				);
+			}
+			if (skippedSummary) console.log(skippedSummary);
+		}
+	} finally {
+		store.close();
 	}
 }
 
@@ -371,11 +542,7 @@ export function createLifecycleCommand(): Command {
 					skippedMaxPending: 0,
 				};
 				if (lifecycleConfig.captureRequests.enabled) {
-					captureRequests = processCaptureTriggers(
-						store,
-						lifecycleConfig,
-						now,
-					);
+					captureRequests = processCaptureTriggers(store, lifecycleConfig, now);
 				}
 
 				// Sinks live under the same config file's `sinks` block, but
@@ -535,7 +702,15 @@ export function createLifecycleCommand(): Command {
 			"--out <path>",
 			"Write the normalized batch JSON here instead of evaluating (does not touch the DB)",
 		)
-		.option("--tenant <tenant>", "Tenant key", "local")
+		.option(
+			"--split-by-customer",
+			'Fan out into one batch per (customer AAD tenant, environment) via the --config file\'s telemetry.tenantMap; requires a non-empty tenantMap or unmappedTenantPolicy: "fleet" (see docs/telemetry-recipe.md)',
+		)
+		.option(
+			"--tenant <tenant>",
+			'Tenant key (also the fleet bucket for --split-by-customer\'s unmapped-tenant "fleet" policy)',
+			"local",
+		)
 		.option("--stream <stream>", "Capture stream", "telemetry")
 		.option(
 			"--profile-id <id>",
@@ -543,6 +718,11 @@ export function createLifecycleCommand(): Command {
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action(async (opts: any) => {
+			if (opts.splitByCustomer) {
+				await runSplitByCustomer(cmd, opts);
+				return;
+			}
+
 			// The API key check inside pullTelemetry happens before any fetch —
 			// deliberately caught here (not rethrown) so a missing key never
 			// opens the lifecycle store either, matching --out's "no side effects

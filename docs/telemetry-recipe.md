@@ -158,10 +158,13 @@ runtime, per tenant, with no fork required: `lifecycle`'s parent `--config
 <path>` flag (default `.al-perf/lifecycle.config.json`) and the web ingest
 path's `AL_PERF_LIFECYCLE_CONFIG` env var both load a `telemetry` block that
 deep-merges onto these defaults BY KEY — override just `RT0018` and
-`RT0005`/`default` are untouched. See §11 for a full config file example and
+`RT0005`/`default` are untouched. See §12 for a full config file example and
 §9 for the `@clientType` composite-key convention (e.g.
 `"RT0018@Background"`) that lets background job-queue methods carry
-different thresholds than interactive sessions:
+different thresholds than interactive sessions. The same `telemetry` block
+also carries `tenantMap`/`unmappedTenantPolicy`, which govern
+`--split-by-customer` (§10) rather than severity — shown here so the shape of
+the whole block is visible in one place:
 
 ```json
 {
@@ -171,7 +174,9 @@ different thresholds than interactive sessions:
 			"RT0018": { "warningMs": 10000, "criticalMs": 30000 },
 			"RT0005": { "warningMs": 10000, "criticalMs": 60000 },
 			"default": { "warningMs": 10000, "criticalMs": 60000 }
-		}
+		},
+		"tenantMap": {},
+		"unmappedTenantPolicy": "skip"
 	}
 }
 ```
@@ -180,7 +185,7 @@ different thresholds than interactive sessions:
 is rejected outright (protects the ingest path from an unbounded payload).
 Unknown `signalId`s (future BC event ids) fall back to `"default"` rather
 than being dropped. A config file's `telemetry.severity` entries deep-merge
-onto this table by key (§11); a file containing only `{"telemetry":
+onto this table by key (§12); a file containing only `{"telemetry":
 {"severity": {...}}}` leaves `maxSignalsPerBatch` and every untouched
 severity key at its default.
 
@@ -335,7 +340,7 @@ ${clientType}` (e.g. `"RT0018@Background"`), then plain `${signalId}`, then
 `"default"` — each rung checked with `Object.hasOwn` so a crafted or
 coincidental key can't hijack the lookup via the prototype chain. Configure
 the composite key exactly like a plain signal id, just with `@ClientType`
-appended (§10 has a worked example, §11 the full file shape).
+appended (§11 has a worked example, §12 the full file shape).
 
 **Fingerprint identity is unaffected.** `clientType` never enters the
 fingerprint — a routine running slow in `Background` and slow in
@@ -346,7 +351,139 @@ across constituents, counts sum, `maxDurationMs` is the max observed, and
 the finding's evidence lists a `ClientType: N × max Xms` line per
 constituent so the breakdown stays visible even though there's one finding.
 
-## 10. Tuning for job-queue apps
+## 10. ISV multi-tenant pulling
+
+Two personas read `pull-telemetry` differently:
+
+- **ISV, one shared App Insights resource.** Your extension's
+  `applicationInsightsConnectionString` (§1) ships telemetry for every
+  install, so one resource receives RT0018/RT0005 traces from every
+  customer's AAD tenant and environment at once. Without
+  `--split-by-customer` that's exactly what happens today: `pull-telemetry`
+  collapses everyone into one fleet-wide bucket under `--tenant` (default
+  `local`), so "slow *where*?" is unanswerable and one finding's occurrence
+  count mixes every customer together. This section is for you.
+- **A BC customer's own environment resource** (§1's "environment-level
+  wiring" route, scoped to their own SaaS/OnPrem environment). Telemetry
+  already belongs to a single tenant — there's nothing to split. Skip this
+  section; the defaults already do the right thing.
+
+### Opting in
+
+`--split-by-customer` (default off) groups pulled rows by `(aadTenantId,
+environmentName)` and evaluates — or writes with `--out` — one batch per
+group instead of one fleet-wide batch. It requires the `--config` file's
+`telemetry.tenantMap` to contain at least one entry, or
+`telemetry.unmappedTenantPolicy` to be `"fleet"` — an empty map with the
+default `"skip"` policy would silently skip every row (100% of the pull),
+which is never what an operator meant by asking for a split, so
+`pull-telemetry` refuses with exit code 2 and zero HTTP calls rather than
+guess:
+
+```json
+{
+	"telemetry": {
+		"tenantMap": {
+			"aaaaaaaa-1111-2222-3333-444444444444": "acme-inc",
+			"bbbbbbbb-5555-6666-7777-888888888888": "widgets-co"
+		},
+		"unmappedTenantPolicy": "skip"
+	}
+}
+```
+
+`tenantMap` keys are a customer's AAD tenant GUID as it appears in
+`customDimensions.aadTenantId` (matching is case-insensitive); values are the
+al-perf tenant code that customer's findings, digest, and capture requests
+file under — validated the same way `--tenant` is
+(`^[A-Za-z0-9][A-Za-z0-9-]{0,39}$`) and lowercased at load, so a mixed-case
+value in the file can't accidentally split one customer's history into two
+tenants.
+
+### Tenant = customer, stream = environment
+
+The al-perf **tenant** a group evaluates under is the mapped `tenantMap`
+value; the **stream** is `environmentName` verbatim (falling back to
+`"telemetry"` when absent). Every stream-scoped lifecycle rule — most
+importantly absence counting, so a finding only resolves after N consecutive
+absent runs *in that stream* — stays correctly separated: a customer's
+`Production` and `Sandbox` environments never resolve or count occurrences
+for each other, even though both land under the same tenant.
+
+### Unmapped tenants: skip (default) or fleet
+
+`unmappedTenantPolicy` decides what happens to a `(aadTenantId,
+environmentName)` group whose `aadTenantId` is absent from `tenantMap` —
+including the empty string, which is what an on-prem or old-schema row
+without an AAD tenant id normalizes to:
+
+- **`"skip"` (default).** The group is never evaluated or written; its row
+  count is folded into a `skippedTenants` summary so the miss is loud, not
+  silent. This is the safe default — mixing an unrecognized customer's
+  telemetry into another customer's bucket, or into the fleet bucket, is
+  exactly the failure this feature exists to prevent.
+- **`"fleet"`.** Unmapped groups are bucketed under the `--tenant` flag's
+  value instead of being skipped — `--tenant` doubles as the fleet bucket
+  for this policy. Useful mid-migration, while you're still adding customers
+  to `tenantMap` one at a time and don't want their telemetry dropped in the
+  meantime; once every active customer has a `tenantMap` entry, switch back
+  to `"skip"` so a genuinely new/unrecognized tenant is never silently
+  absorbed into the fleet bucket.
+
+### Onboarding a new customer
+
+1. Register the customer under an al-perf tenant code (whatever convention
+   you already use for `--tenant`/`--config`-scoped tenants).
+2. Add their AAD tenant GUID to `telemetry.tenantMap` in the config file,
+   mapped to that tenant code.
+3. The next `pull-telemetry --split-by-customer` run (cron tick or manual)
+   starts filing their findings under the new tenant — no backfill, no
+   restart, no code change.
+
+### CLI shapes
+
+Evaluate mode (no `--out`) prints one line per group and a skipped-tenant
+summary when nonempty:
+
+```
+$ al-profile lifecycle pull-telemetry --app-id <guid> --split-by-customer
+acme-inc/Production: 3 findings seen
+widgets-co/Sandbox: 1 findings seen
+Skipped 1 tenant(s) not in tenantMap (2 signal(s) total): (none) (2)
+```
+
+(`(none)` above is an on-prem/old-schema row with no AAD tenant id at all —
+still reported, never silently dropped.) `-f json` returns `{ groups: [{
+tenant, stream, aadTenantId, environmentName, outcome }], skippedTenants }`
+— `skippedTenants` keeps the raw (possibly empty) `aadTenantId` in JSON;
+only the text summary above substitutes `(none)`.
+
+`--out <path>` writes one file per group instead of touching the DB —
+`<path-without-extension>.<tenant>.<sanitized-stream>.json` (stream
+characters outside `[A-Za-z0-9-]` become `_`, e.g. `Production/EU` becomes
+`Production_EU` in the filename) — and prints the file list plus the same
+skipped-tenant summary. Zero DB access either way, same guarantee as
+non-split `--out`.
+
+| Flag | Applies to | Meaning |
+| --- | --- | --- |
+| `--split-by-customer` | `pull-telemetry` | Opt in to the per-`(aadTenantId, environmentName)` fan-out described above; requires a non-empty `telemetry.tenantMap` or `unmappedTenantPolicy: "fleet"` in `--config`. `--tenant` doubles as the fleet bucket. |
+
+### Confidentiality note
+
+Splitting by customer means customer-identifying data — AAD tenant GUIDs,
+environment names, and by extension which customer is having a performance
+problem — now flows into `lifecycle digest`, capture-request rows, and, if a
+sink is ever enabled for these tenants, an external issue tracker. The
+digest-first default (§7) already keeps this internal: nothing files
+externally until `sinks.github.autoFile` (or a future sink) is turned on for
+a given tenant. But once you *do* enable a sink for per-customer tenants,
+that's a data-handling decision — you (the ISV) become the processor of your
+customer's operational data, however narrow (a routine name, a duration, an
+environment name) — so make it deliberately, not as a side effect of turning
+on `--split-by-customer`.
+
+## 11. Tuning for job-queue apps
 
 Interactive-AL defaults (`RT0018`: warning 10 s / critical 30 s) are tuned
 for a user waiting on a page. They are the wrong yardstick for a background
@@ -378,7 +515,7 @@ falls through to plain `"RT0018"` if the composite key is absent — so this
 file segment is additive, not a replacement of the interactive rung, and you
 can drop it in without touching anything else in `telemetry.severity`.
 
-## 11. Config file — full example
+## 12. Config file — full example
 
 `lifecycle`'s parent `--config <path>` flag (default
 `.al-perf/lifecycle.config.json`; missing file → defaults apply) is read by
@@ -386,8 +523,9 @@ can drop it in without touching anything else in `telemetry.severity`.
 path via the `AL_PERF_LIFECYCLE_CONFIG` env var. One file, three coexisting
 blocks — `sinks` (GitHub delivery, see
 [`docs/lifecycle-gh-recipe.md`](lifecycle-gh-recipe.md)), `telemetry`
-(severity thresholds, §5/§9/§10), and `captureRequests` (deep-capture
-trigger tuning, see
+(severity thresholds, §5/§9/§11; `tenantMap`/`unmappedTenantPolicy` for
+`--split-by-customer`, §10), and `captureRequests` (deep-capture trigger
+tuning, see
 [`docs/capture-request-contract.md`](capture-request-contract.md)):
 
 ```json
@@ -412,7 +550,12 @@ trigger tuning, see
 			"RT0018": { "warningMs": 10000, "criticalMs": 30000 },
 			"RT0005": { "warningMs": 10000, "criticalMs": 60000 },
 			"default": { "warningMs": 10000, "criticalMs": 60000 }
-		}
+		},
+		"tenantMap": {
+			"aaaaaaaa-1111-2222-3333-444444444444": "acme-inc",
+			"bbbbbbbb-5555-6666-7777-888888888888": "widgets-co"
+		},
+		"unmappedTenantPolicy": "skip"
 	},
 	"captureRequests": {
 		"enabled": true,
@@ -427,10 +570,13 @@ trigger tuning, see
 Every block is optional and independently omittable — a file with only
 `sinks` (the pre-existing shape) still works exactly as before; a file with
 only `telemetry` or only `captureRequests` patches just that block onto the
-code defaults. The merge is BY KEY within `telemetry.severity`: the example
-above overrides `RT0018@Background` and leaves `RT0005`/`default` at their
-code defaults untouched (`maxSignalsPerBatch` shown explicitly here, but it
-would stay at its default of `10000` even if omitted).
+code defaults. The merge is BY KEY within `telemetry.severity` and
+`telemetry.tenantMap` alike: the example above overrides `RT0018@Background`
+and leaves `RT0005`/`default` at their code defaults untouched
+(`maxSignalsPerBatch` shown explicitly here, but it would stay at its
+default of `10000` even if omitted), and adding a third customer to
+`tenantMap` in a later file only needs that one new GUID entry — `acme-inc`
+and `widgets-co` above stay mapped without restating them.
 
 **The `--config` flag moved.** Earlier versions accepted a `sync`-level
 `--config <path>` flag (`lifecycle sync --config <path>`). It has been

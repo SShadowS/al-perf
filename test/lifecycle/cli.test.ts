@@ -589,7 +589,9 @@ describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
 
 		expect(calls).toHaveLength(1);
 		const decoded = decodeURIComponent(calls[0]);
-		expect(decoded).toContain('| where clientType in ("Background", "WebClient")');
+		expect(decoded).toContain(
+			'| where clientType in ("Background", "WebClient")',
+		);
 	});
 
 	it("an invalid --client-types value exits 1 with zero fetch calls (usage error, same posture as an invalid signal id)", async () => {
@@ -621,6 +623,280 @@ describe("lifecycle pull-telemetry — App Insights puller CLI", () => {
 
 		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
 		expect(errText).toContain("client-types");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// lifecycle pull-telemetry --split-by-customer (telemetry-multitenant plan,
+// Task 3): fans one pull into one batch per (aadTenantId, environmentName)
+// group via pullTelemetrySplit (Task 2), then either evaluates N batches or
+// writes N --out files.
+// ---------------------------------------------------------------------------
+
+const SPLIT_GUID_A = "aaaaaaaa-1111-2222-3333-444444444444";
+const SPLIT_GUID_B = "bbbbbbbb-1111-2222-3333-444444444444";
+
+function splitRow(overrides: {
+	aadTenantId?: string;
+	environmentName?: string;
+	methodName?: string;
+}) {
+	return [
+		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", // appId
+		"My App", // appName
+		"Codeunit", // objectType
+		50100, // objectId
+		"Sales Post", // objectName
+		overrides.methodName ?? "ProcessLine", // methodName
+		3, // count
+		12_000, // maxDurationMs
+		9_500, // avgDurationMs
+		"", // stackTrace
+		overrides.aadTenantId ?? "",
+		overrides.environmentName ?? "",
+	];
+}
+
+function appInsightsSplitResponse(rows: unknown[][]) {
+	return {
+		tables: [
+			{
+				name: "PrimaryTable",
+				columns: [
+					{ name: "appId", type: "string" },
+					{ name: "appName", type: "string" },
+					{ name: "objectType", type: "string" },
+					{ name: "objectId", type: "long" },
+					{ name: "objectName", type: "string" },
+					{ name: "methodName", type: "string" },
+					{ name: "count", type: "long" },
+					{ name: "maxDurationMs", type: "real" },
+					{ name: "avgDurationMs", type: "real" },
+					{ name: "stackTrace", type: "string" },
+					{ name: "aadTenantId", type: "string" },
+					{ name: "environmentName", type: "string" },
+				],
+				rows,
+			},
+		],
+	};
+}
+
+describe("lifecycle pull-telemetry --split-by-customer", () => {
+	let dir: string;
+	let dbPath: string;
+	let configPath: string;
+	let originalFetch: typeof fetch;
+	let originalExitCode: number | string | null | undefined;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+	let errorSpy: ReturnType<typeof spyOn<Console, "error">>;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-pull-split-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		configPath = join(dir, "lifecycle.config.json");
+		originalFetch = globalThis.fetch;
+		originalExitCode = process.exitCode;
+		process.exitCode = 0;
+		process.env[DEFAULT_API_KEY_ENV] = PULL_DECOY_KEY;
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	});
+	afterEach(async () => {
+		globalThis.fetch = originalFetch;
+		process.exitCode = originalExitCode ?? 0;
+		logSpy.mockRestore();
+		errorSpy.mockRestore();
+		stdoutSpy.mockRestore();
+		delete process.env[DEFAULT_API_KEY_ENV];
+		await rmSyncRetrying(dir);
+	});
+
+	it("without a tenantMap or fleet policy: exit 2, names both outs, zero fetches", async () => {
+		let fetchCalls = 0;
+		globalThis.fetch = (async (...args: unknown[]) => {
+			fetchCalls++;
+			throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+		}) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--split-by-customer",
+			],
+			{ from: "user" },
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(process.exitCode).toBe(2);
+		expect(existsSync(dbPath)).toBe(false);
+		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(errText).toContain("tenantMap");
+		expect(errText).toContain("fleet");
+	});
+
+	it("evaluate mode fans out one group per mapped (tenant, stream) into separate DB tenants, and reports skipped tenants with '(none)' for an empty aadTenantId", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					tenantMap: {
+						[SPLIT_GUID_A]: "acme-inc",
+						[SPLIT_GUID_B]: "widgets-co",
+					},
+				},
+			}),
+		);
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production" }),
+			splitRow({ aadTenantId: SPLIT_GUID_B, environmentName: "Sandbox" }),
+			splitRow({ aadTenantId: "", environmentName: "OnPrem" }),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+			],
+			{ from: "user" },
+		);
+
+		const store = new LifecycleStore(dbPath);
+		const acmeFindings = store.listFindings({ tenant: "acme-inc" });
+		const widgetsFindings = store.listFindings({ tenant: "widgets-co" });
+		expect(acmeFindings.length).toBeGreaterThan(0);
+		expect(widgetsFindings.length).toBeGreaterThan(0);
+		expect(acmeFindings[0].observedStreams).toContain("Production");
+		expect(widgetsFindings[0].observedStreams).toContain("Sandbox");
+		store.close();
+
+		const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(output).toContain("acme-inc/Production:");
+		expect(output).toContain("widgets-co/Sandbox:");
+		expect(output).toContain("(none)");
+		expect(output).not.toContain(PULL_DECOY_KEY);
+	});
+
+	it("json evaluate output keeps the raw empty aadTenantId in skippedTenants (only text substitutes '(none)')", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: { tenantMap: { [SPLIT_GUID_A]: "acme-inc" } },
+			}),
+		);
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production" }),
+			splitRow({ aadTenantId: "", environmentName: "OnPrem" }),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+				"-f",
+				"json",
+			],
+			{ from: "user" },
+		);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const parsed = JSON.parse(output);
+		expect(parsed.groups).toHaveLength(1);
+		expect(parsed.groups[0]).toMatchObject({
+			tenant: "acme-inc",
+			stream: "Production",
+			aadTenantId: SPLIT_GUID_A,
+			environmentName: "Production",
+		});
+		expect(parsed.skippedTenants).toEqual([
+			{ aadTenantId: "", signalCount: 1 },
+		]);
+	});
+
+	it("--out writes one suffixed file per group with the stream sanitized, and never touches the DB", async () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				telemetry: {
+					tenantMap: {
+						[SPLIT_GUID_A]: "acme-inc",
+						[SPLIT_GUID_B]: "widgets-co",
+					},
+				},
+			}),
+		);
+		const response = appInsightsSplitResponse([
+			splitRow({ aadTenantId: SPLIT_GUID_A, environmentName: "Production/EU" }),
+			splitRow({ aadTenantId: SPLIT_GUID_B, environmentName: "Sandbox" }),
+		]);
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify(response), { status: 200 })) as typeof fetch;
+		const outPath = join(dir, "out-batch.json");
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"--config",
+				configPath,
+				"pull-telemetry",
+				"--app-id",
+				APP_ID,
+				"--signals",
+				"RT0018",
+				"--split-by-customer",
+				"--out",
+				outPath,
+			],
+			{ from: "user" },
+		);
+
+		expect(existsSync(dbPath)).toBe(false);
+		const acmePath = join(dir, "out-batch.acme-inc.Production_EU.json");
+		const widgetsPath = join(dir, "out-batch.widgets-co.Sandbox.json");
+		expect(existsSync(acmePath)).toBe(true);
+		expect(existsSync(widgetsPath)).toBe(true);
+		const acmeWritten = JSON.parse(readFileSync(acmePath, "utf8"));
+		expect(acmeWritten.payloadType).toBe("telemetry-batch");
+		expect(acmeWritten.signals).toHaveLength(1);
+
+		const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(output).toContain(acmePath);
+		expect(output).toContain(widgetsPath);
 	});
 });
 
@@ -691,7 +967,8 @@ function seedCaptureRequest(
 	const row = store
 		.listCaptureRequests(tenant, "pending")
 		.find((r) => r.fingerprint === fingerprint);
-	if (!row) throw new Error(`seedCaptureRequest: no pending row for ${fingerprint}`);
+	if (!row)
+		throw new Error(`seedCaptureRequest: no pending row for ${fingerprint}`);
 	return row.id;
 }
 
