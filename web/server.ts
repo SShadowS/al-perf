@@ -980,28 +980,24 @@ export const server = Bun.serve({
 			}
 		}
 
-		// ACCEPTED RISK (knowingly left as-is, not a fix-later TODO): this route
-		// has no authentication — no bearer check, no admin gate — unlike
-		// /api/record-next-batch below, which IS admin-gated even though it's
-		// dev-only. Before this stale-algo visibility work, that meant no tenant
-		// data leaked here at all. Now `staleAlgoTenants` publishes customer
-		// tenant codes to anyone who can reach this endpoint. That has been
-		// consciously accepted for now — do NOT quietly "fix" it by gating or
-		// aggregating without discussing it first. But before this server is
-		// ever reachable from an untrusted network, this route MUST be either
-		// gated behind an admin bearer token or reduced to aggregate counts
-		// (e.g. total stale-algo tenant count, no names).
+		// This route has no authentication — no bearer check, no admin gate —
+		// unlike /api/record-next-batch below, which IS admin-gated even
+		// though it's dev-only. Because anyone who can reach this endpoint
+		// can read the response, it must never publish customer tenant
+		// identifiers, only aggregate counts. An external monitor only needs
+		// to know that *something* is blocked; an operator who needs the
+		// actual tenant names runs the authenticated `lifecycle status` CLI
+		// (which calls the same `listStaleAlgoTenants` query below). Do NOT
+		// "helpfully" restore tenant names or the raw array here — that would
+		// reintroduce a customer-data leak on an unauthenticated route.
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
 			const aiEnabled =
 				process.env.AI_DISABLED !== "1" && !!process.env.ANTHROPIC_API_KEY;
 			// Only query the lifecycle store when lifecycle tracking is actually
 			// on — opening one just to answer this status query would create a
 			// lifecycle DB on a deployment that never uses lifecycle at all.
-			let staleAlgoTenants: Array<{
-				tenant: string;
-				count: number;
-				versions: number[];
-			}> = [];
+			let staleAlgoTenantCount = 0;
+			let staleAlgoFindingCount = 0;
 			if (process.env.AL_PERF_LIFECYCLE === "1") {
 				const { getLifecycleStore } = await import("./lifecycle-db.ts");
 				const { FINGERPRINT_ALGO_VERSION } = await import(
@@ -1010,8 +1006,13 @@ export const server = Bun.serve({
 				// Read env per-request so tests can override the data dir after import.
 				const dataDir =
 					process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
-				staleAlgoTenants = getLifecycleStore(dataDir).listStaleAlgoTenants(
-					FINGERPRINT_ALGO_VERSION,
+				const staleAlgoTenants = getLifecycleStore(
+					dataDir,
+				).listStaleAlgoTenants(FINGERPRINT_ALGO_VERSION);
+				staleAlgoTenantCount = staleAlgoTenants.length;
+				staleAlgoFindingCount = staleAlgoTenants.reduce(
+					(sum, t) => sum + t.count,
+					0,
 				);
 			}
 			return withSecurityHeaders(
@@ -1022,7 +1023,8 @@ export const server = Bun.serve({
 					debugMode: DEBUG_MODE,
 					pendingCaptures: debugStore.pendingCount,
 					aiEnabled,
-					staleAlgoTenants,
+					staleAlgoTenantCount,
+					staleAlgoFindingCount,
 				}),
 			);
 		}
