@@ -2015,7 +2015,7 @@ describe("lifecycle captures", () => {
 		const cancelId = seedCaptureRequest(store, {
 			fingerprint: "telemetry:deadbeef00000003",
 		});
-		store.cancelCaptureRequest(cancelId, "2026-07-02T00:00:00Z");
+		store.cancelCaptureRequest(cancelId);
 		store.close();
 
 		await run(["captures", "list", "-f", "json", "--status", "pending"]);
@@ -2084,7 +2084,7 @@ describe("lifecycle captures", () => {
 	it("cancel on an already-cancelled row exits 1 and names the current status", async () => {
 		const store = new LifecycleStore(dbPath);
 		const id = seedCaptureRequest(store);
-		store.cancelCaptureRequest(id, "2026-07-02T00:00:00Z");
+		store.cancelCaptureRequest(id);
 		store.close();
 
 		await run(["captures", "cancel", String(id)]);

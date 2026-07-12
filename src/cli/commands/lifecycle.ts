@@ -1427,8 +1427,7 @@ export function createLifecycleCommand(): Command {
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const id = parseInt(idArg, 10);
-				const now = new Date().toISOString();
-				const ok = store.cancelCaptureRequest(id, now);
+				const ok = store.cancelCaptureRequest(id);
 				if (!ok) {
 					console.error(captureRequestFailureMessage(store, id, "cancelled"));
 					process.exitCode = 1;

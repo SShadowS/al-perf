@@ -377,6 +377,23 @@ describe("LifecycleStore capture requests", () => {
 		store.close();
 	});
 
+	it("createCaptureRequest returns false when a claimed duplicate exists for the same (tenant, fingerprint) — the partial-unique index covers claimed, not just pending", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		expect(
+			store.createCaptureRequest(baseCaptureRequest({ findingId })),
+		).toBe(true);
+		const [row] = store.listCaptureRequests();
+		expect(
+			store.claimCaptureRequest(row.id, "executor-1", "2026-07-12T00:00:00Z"),
+		).toBe(true);
+		expect(
+			store.createCaptureRequest(baseCaptureRequest({ findingId })),
+		).toBe(false);
+		expect(store.listCaptureRequests()).toHaveLength(1);
+		store.close();
+	});
+
 	it("createCaptureRequest returns true again once the prior active request was fulfilled (dedupe is active-only)", () => {
 		const store = new LifecycleStore(":memory:");
 		const findingId = store.insertFinding(baseFinding());
@@ -438,7 +455,7 @@ describe("LifecycleStore capture requests", () => {
 		);
 		const [first, second] = store.listCaptureRequests("t1");
 		store.claimCaptureRequest(first.id, "executor-1", "2026-07-12T00:00:00Z");
-		store.cancelCaptureRequest(second.id, "2026-07-12T00:00:00Z");
+		store.cancelCaptureRequest(second.id);
 		expect(store.countActiveCaptureRequests("t1")).toBe(1); // claimed counts, cancelled doesn't
 		expect(store.countActiveCaptureRequests("t2")).toBe(0);
 		store.close();
@@ -463,7 +480,7 @@ describe("LifecycleStore capture requests", () => {
 			store.claimCaptureRequest(row.id, "executor-2", "2026-07-13T00:00:00Z"),
 		).toBe(false);
 
-		store.cancelCaptureRequest(row.id, "2026-07-14T00:00:00Z"); // -> cancelled
+		store.cancelCaptureRequest(row.id); // -> cancelled
 		expect(
 			store.claimCaptureRequest(row.id, "executor-2", "2026-07-15T00:00:00Z"),
 		).toBe(false);
@@ -531,7 +548,7 @@ describe("LifecycleStore capture requests", () => {
 		);
 		const [pendingRow, toClaimRow] = store.listCaptureRequests();
 		expect(
-			store.cancelCaptureRequest(pendingRow.id, "2026-07-12T00:00:00Z"),
+			store.cancelCaptureRequest(pendingRow.id),
 		).toBe(true);
 		expect(store.listCaptureRequests()[0].status).toBe("cancelled");
 
@@ -541,7 +558,7 @@ describe("LifecycleStore capture requests", () => {
 			"2026-07-12T00:00:00Z",
 		);
 		expect(
-			store.cancelCaptureRequest(toClaimRow.id, "2026-07-13T00:00:00Z"),
+			store.cancelCaptureRequest(toClaimRow.id),
 		).toBe(true);
 		expect(
 			store.listCaptureRequests().find((r) => r.id === toClaimRow.id)?.status,
@@ -549,7 +566,7 @@ describe("LifecycleStore capture requests", () => {
 
 		// already cancelled -> refuse
 		expect(
-			store.cancelCaptureRequest(pendingRow.id, "2026-07-14T00:00:00Z"),
+			store.cancelCaptureRequest(pendingRow.id),
 		).toBe(false);
 		store.close();
 	});
