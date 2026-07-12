@@ -768,8 +768,9 @@ describe("stale algo-version findings", () => {
 			createdAt: "2026-07-01T00:00:00Z",
 		});
 		// A finding at the CURRENT algo version that supersedes the doomed one —
-		// this is the one dependency the FK constraint can't catch (supersedes
-		// has no REFERENCES clause), so it needs its own assertion below.
+		// the FK constraint (REFERENCES findings(id)) enforces that the pointer is
+		// nulled or the reference deleted; the assertion below proves that the
+		// survivor itself is preserved and its supersedes pointer is actually nulled.
 		const survivorId = seed(store, "acme", "pattern:ccccccccccccccc2", 2);
 		store.db.run("UPDATE findings SET supersedes = ? WHERE id = ?", [
 			id,
