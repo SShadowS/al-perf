@@ -146,6 +146,40 @@ describe("applyFingerprintMigration", () => {
 		store.close();
 	});
 
+	it("an existing migration audit row does NOT permanently block a LATER rekey once a from-finding actually appears (I1 regression)", () => {
+		const store = new LifecycleStore(":memory:");
+		// First application: no from-finding exists yet (e.g. a run without
+		// fusion, or the al-sem engine was down) — recorded as a no-op, same as
+		// "no active from-finding is a recorded no-op" above.
+		expect(
+			store.applyFingerprintMigration("t1", MIGRATION, "2026-07-08T00:00:00Z"),
+		).toBe("no-op");
+
+		// A later run (still without fusion, or before the engine came back)
+		// files a fresh finding under the fallback fingerprint — this is the
+		// exact duplicate-forking scenario the branch exists to prevent.
+		const id = store.insertFinding(finding("pattern:fallbackhash00001"));
+
+		// The SAME migration is applied again (a subsequent fused run). The
+		// audit row from the first application already exists (INSERT OR
+		// IGNORE no-ops on it), but that must NOT suppress the rekey now that
+		// an active from-finding is actually present — otherwise this finding
+		// is permanently stuck at F1, unmergeable, flapping seen/absent.
+		const outcome = store.applyFingerprintMigration(
+			"t1",
+			MIGRATION,
+			"2026-07-09T00:00:00Z",
+		);
+		expect(outcome).toBe("renamed");
+		expect(
+			store.getActiveFinding("t1", "pattern:fallbackhash00001"),
+		).toBeNull();
+		expect(store.getActiveFinding("t1", "pattern:stablehash000001")?.id).toBe(
+			id,
+		);
+		store.close();
+	});
+
 	it("PK collision: a run present under both identities keeps the to-row's occurrence", () => {
 		const store = new LifecycleStore(":memory:");
 		const oldId = store.insertFinding(finding("pattern:fallbackhash00001"));

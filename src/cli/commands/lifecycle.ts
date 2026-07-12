@@ -55,7 +55,7 @@ import {
 	type TriageContentBlock,
 } from "../../lifecycle/triage/agent.js";
 import { isAlWorkspaceDir } from "../../semantic/engine-runner.js";
-import { fuseProfile } from "../../semantic/fuse.js";
+import { type FuseResult, fuseProfile } from "../../semantic/fuse.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
 import type { TelemetryBatchDocument } from "../../types/telemetry.js";
 
@@ -725,23 +725,37 @@ export function createLifecycleCommand(): Command {
 				// result.patterns[].fingerprint IN PLACE, so evaluateRun always
 				// reads whatever fingerprint ends up on each pattern here.
 				if (opts.source && isAlWorkspaceDir(opts.source)) {
+					let fuseResult: FuseResult | undefined;
 					try {
-						const fuseResult = await fuseProfile(allMethods, opts.source, {
+						// fuseProfile itself never throws (degrades to {disabled}),
+						// but this catch stays defensive and matches the `analyze`
+						// command's fusion error handling — it must NOT also cover
+						// applyIdentityUpgrades below (see that call's comment).
+						fuseResult = await fuseProfile(allMethods, opts.source, {
 							patterns: result.patterns,
 						});
-						if (!("disabled" in fuseResult) && fuseResult.identityUpgrades) {
-							applyIdentityUpgrades(
-								store,
-								opts.tenant,
-								fuseResult.identityUpgrades,
-								new Date().toISOString(),
-							);
-						}
 					} catch (err: unknown) {
-						// Never crash `lifecycle evaluate` over fusion — log silently,
-						// mirroring the `analyze` command's fusion error handling.
+						// Never crash `lifecycle evaluate` over fusion — log silently.
 						const msg = err instanceof Error ? err.message : String(err);
 						process.stderr.write(`al-sem fusion: unexpected error: ${msg}\n`);
+					}
+					if (
+						fuseResult &&
+						!("disabled" in fuseResult) &&
+						fuseResult.identityUpgrades
+					) {
+						// Deliberately OUTSIDE the try/catch above: a store failure
+						// here must abort the run, not be swallowed and fall through
+						// to evaluateRun with patterns already re-minted to their
+						// upgraded fingerprints but the migration only partially (or
+						// not at all) applied — that half-applied state is exactly
+						// the duplicate-finding bug this wiring exists to prevent.
+						applyIdentityUpgrades(
+							store,
+							opts.tenant,
+							fuseResult.identityUpgrades,
+							new Date().toISOString(),
+						);
 					}
 				}
 

@@ -1009,12 +1009,20 @@ export class LifecycleStore {
 		});
 
 		const apply = this.db.transaction((): "renamed" | "merged" | "no-op" => {
-			const recorded = this.db.run(
+			// Record the audit row (idempotent — a duplicate insert is silently
+			// ignored). This is audit bookkeeping ONLY: it must NOT gate whether
+			// the rekey below runs. A migration can legitimately be recorded once
+			// with no from-finding present (a run without fusion, or the al-sem
+			// engine down) and THEN, on a later run, find a from-finding that
+			// actually needs rekeying — gating on `changes === 0` here would
+			// permanently block that later rekey once the audit row exists,
+			// leaving the finding stuck at its old fingerprint forever (the exact
+			// duplicate-forking failure this migration mechanism exists to stop).
+			this.db.run(
 				`INSERT OR IGNORE INTO fingerprint_migrations (tenant, from_fingerprint, to_fingerprint, reason, applied_at)
 				 VALUES (?, ?, ?, ?, ?)`,
 				[tenant, from, to, migration.reason, appliedAt],
 			);
-			if (recorded.changes === 0) return "no-op"; // already applied
 
 			const fromRow = this.getActiveFinding(tenant, from);
 			if (!fromRow) return "no-op";
