@@ -304,6 +304,23 @@ function buildTenantMapStub(
 }
 
 /**
+ * D4: lowercased-GUID → tenant-code lookup, shared by the text table's
+ * "Mapped to" column and the JSON `tenants[].mappedTo` field so both
+ * formats resolve the exact same mapping (same lookup as
+ * pullTelemetrySplit's tenantMapLower).
+ */
+function buildTenantMapLookup(
+	tenantMap: Record<string, string>,
+): Map<string, string> {
+	return new Map(
+		Object.entries(tenantMap).map(([guid, tenant]) => [
+			guid.toLowerCase(),
+			tenant,
+		]),
+	);
+}
+
+/**
  * Text rendering: table first, stub JSON last (docs §10 onboarding flow —
  * scan the table, then copy the stub straight off the bottom of the
  * output). "(none)" for an empty aadTenantId mirrors
@@ -314,12 +331,7 @@ function renderListTenantsText(
 	discoveries: TenantDiscovery[],
 	tenantMap: Record<string, string>,
 ): void {
-	const tenantMapLower = new Map(
-		Object.entries(tenantMap).map(([guid, tenant]) => [
-			guid.toLowerCase(),
-			tenant,
-		]),
-	);
+	const tenantMapLower = buildTenantMapLookup(tenantMap);
 	if (discoveries.length === 0) {
 		console.log("No tenants observed in the requested window.");
 	} else {
@@ -370,10 +382,18 @@ async function runListTenants(cmd: Command, opts: any): Promise<void> {
 	const config = resolveLifecycleConfig(cmd.opts().config);
 
 	if (opts.format === "json") {
+		// mappedTo is carried per row (D4 lowercase lookup) so a JSON consumer
+		// can tell "mapped" from "unmapped" directly — the stub alone is
+		// ambiguous (a non-GUID id is also absent from it, but isn't mapped).
+		const tenantMapLower = buildTenantMapLookup(config.telemetry.tenantMap);
+		const tenants = discoveries.map((d) => ({
+			...d,
+			mappedTo: tenantMapLower.get(d.aadTenantId.toLowerCase()) ?? null,
+		}));
 		process.stdout.write(
 			JSON.stringify(
 				{
-					tenants: discoveries,
+					tenants,
 					tenantMapStub: buildTenantMapStub(
 						discoveries,
 						config.telemetry.tenantMap,

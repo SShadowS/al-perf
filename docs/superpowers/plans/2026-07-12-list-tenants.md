@@ -24,7 +24,7 @@
 - **D2 — KQL:** one query across the configured `--signals` (default RT0018,RT0005) and `--since` window:
   `traces | where timestamp > datetime({since}) | where customDimensions.eventId in ({signals}) [extension filter if --app-extension-id given — NO: keep current behavior, the puller already scopes by App Insights app, not extension] | summarize rows=count(), environments=make_set(tostring(customDimensions.environmentName)) by aadTenantId=tostring(customDimensions.aadTenantId) | order by rows desc`
   (signals injected via the existing validated-signal splice; since via the existing ISO canonicalization).
-- **D3 — Output:** text = table (aadTenantId, rows, environments CSV, mapped→tenant-code or "(unmapped)", with empty aadTenantId rendered "(none)"); json = `{tenants: [{aadTenantId, rows, environments, mappedTo}], unmappedCount}`. After the text table, print a paste-ready stub for UNMAPPED GUID-shaped tenants only:
+- **D3 — Output:** text = table (aadTenantId, rows, environments CSV, mapped→tenant-code or "(unmapped)", with empty aadTenantId rendered "(none)"); json = `{tenants: [{aadTenantId, rows, environments, mappedTo}], tenantMapStub}` — **amended in review: `unmappedCount` → `tenantMapStub`** (the same paste-ready stub object the text format prints, so a JSON consumer doesn't have to recompute it; strict improvement over a bare count), **`mappedTo` retained per row** (string | null — dropping it broke text/JSON parity, since "absent from the stub" is ambiguous between "already mapped" and "not GUID-shaped"). After the text table, print a paste-ready stub for UNMAPPED GUID-shaped tenants only:
   ```json
   "tenantMap": {
   	"<guid>": "TODO-tenant-code",

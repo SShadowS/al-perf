@@ -1471,7 +1471,7 @@ describe("lifecycle pull-telemetry --list-tenants", () => {
 		expect(fullOutput).not.toContain(PULL_DECOY_KEY);
 	});
 
-	it("json: exact shape { tenants, tenantMapStub }", async () => {
+	it("json: exact shape { tenants (each with mappedTo), tenantMapStub }", async () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({ telemetry: { tenantMap: { [GUID_MAPPED]: "acme-inc" } } }),
@@ -1505,8 +1505,18 @@ describe("lifecycle pull-telemetry --list-tenants", () => {
 		const parsed = JSON.parse(output);
 		expect(parsed).toEqual({
 			tenants: [
-				{ aadTenantId: GUID_MAPPED, rows: 5, environments: ["Production"] },
-				{ aadTenantId: GUID_UNMAPPED, rows: 2, environments: ["Sandbox"] },
+				{
+					aadTenantId: GUID_MAPPED,
+					rows: 5,
+					environments: ["Production"],
+					mappedTo: "acme-inc",
+				},
+				{
+					aadTenantId: GUID_UNMAPPED,
+					rows: 2,
+					environments: ["Sandbox"],
+					mappedTo: null,
+				},
 			],
 			tenantMapStub: { telemetry: { tenantMap: { [GUID_UNMAPPED]: "" } } },
 		});
