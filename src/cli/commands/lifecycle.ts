@@ -36,12 +36,15 @@ import {
 	type EvaluationOutcome,
 	evaluateRun,
 } from "../../lifecycle/evaluate.js";
+import { createAzureDevOpsSink } from "../../lifecycle/sinks/azuredevops.js";
 import { createGitHubSink } from "../../lifecycle/sinks/github.js";
-import { drainOutbox } from "../../lifecycle/sinks/outbox.js";
+import { type DrainReport, type DrainRuntime, drainOutbox } from "../../lifecycle/sinks/outbox.js";
 import { processEventsForSinks } from "../../lifecycle/sinks/triggers.js";
 import {
 	loadSinksConfig,
+	resolveAzureDevOpsConfig,
 	resolveGitHubConfig,
+	type SinkAdapter,
 } from "../../lifecycle/sinks/types.js";
 import { transition } from "../../lifecycle/states.js";
 import { LifecycleStore } from "../../lifecycle/store.js";
@@ -1094,7 +1097,7 @@ export function createLifecycleCommand(): Command {
 				// deliberately ignores `sinks`).
 				const config = loadSinksConfig(configPath);
 				let triggers = { processed: 0, enqueued: 0, skippedMigration: 0 };
-				let drain = { delivered: 0, retried: 0, dead: 0, collapsed: 0 };
+				const drains: Array<{ sink: string } & DrainReport> = [];
 				let deadLetters: Array<{
 					id: number;
 					kind: string;
@@ -1109,41 +1112,98 @@ export function createLifecycleCommand(): Command {
 					);
 				} else {
 					triggers = processEventsForSinks(store, config);
+
+					// D2 sink registry: one plan per ENABLED sink block, built here
+					// (not in triggers.ts) because only sync needs live adapters —
+					// the trigger scan only needs each sink's rule config.
+					interface SinkDrainPlan {
+						name: string;
+						tokenEnv: string;
+						runtime: DrainRuntime;
+						createAdapter: (token: string) => SinkAdapter;
+					}
+					const drainPlans: SinkDrainPlan[] = [];
 					const gh = config.sinks.github;
-					if (!opts.dryRun && gh?.enabled) {
+					if (gh?.enabled) {
 						const resolved = resolveGitHubConfig(gh);
-						const token = process.env[resolved.tokenEnv];
-						if (!token) {
-							console.error(
-								`sinks.github is enabled but the ${resolved.tokenEnv} environment variable is not set.`,
-							);
-							process.exitCode = 1;
-							return;
-						}
-						drain = await drainOutbox(
-							store,
-							createGitHubSink({ repo: resolved.repo, token }),
-							{
+						drainPlans.push({
+							name: "github",
+							tokenEnv: resolved.tokenEnv,
+							runtime: {
 								minMillisBetweenCalls: resolved.minMillisBetweenCalls,
 								maxPerDrain: resolved.maxPerDrain,
 								collapseThreshold: resolved.collapseThreshold,
 							},
-						);
+							createAdapter: (token) =>
+								createGitHubSink({ repo: resolved.repo, token }),
+						});
+					}
+					const ado = config.sinks.azureDevOps;
+					if (ado?.enabled) {
+						const resolved = resolveAzureDevOpsConfig(ado);
+						drainPlans.push({
+							name: "azureDevOps",
+							tokenEnv: resolved.tokenEnv,
+							runtime: {
+								minMillisBetweenCalls: resolved.minMillisBetweenCalls,
+								maxPerDrain: resolved.maxPerDrain,
+								collapseThreshold: resolved.collapseThreshold,
+							},
+							createAdapter: (token) =>
+								createAzureDevOpsSink({
+									org: resolved.org,
+									project: resolved.project,
+									workItemType: resolved.workItemType,
+									areaPath: resolved.areaPath,
+									tags: resolved.tags,
+									closedState: resolved.closedState,
+									reopenState: resolved.reopenState,
+									token,
+								}),
+						});
+					}
+
+					if (!opts.dryRun) {
+						for (const plan of drainPlans) {
+							const token = process.env[plan.tokenEnv];
+							if (!token) {
+								// Per-sink token isolation: this sink's drain is skipped
+								// loudly, but the loop continues — a misconfigured sink
+								// must never block another sink's delivery.
+								console.error(
+									`sinks.${plan.name} is enabled but the ${plan.tokenEnv} environment variable is not set — ${plan.name} drain skipped.`,
+								);
+								process.exitCode = 1;
+								continue;
+							}
+							const report = await drainOutbox(
+								store,
+								plan.createAdapter(token),
+								plan.runtime,
+							);
+							drains.push({ sink: plan.name, ...report });
+						}
 					}
 					// Operator observability for dead-lettered rows: lastError is
 					// operator-trusted local data, printed verbatim, but payload is
 					// NEVER surfaced — it may embed profile-derived (attacker-influenceable) text.
-					deadLetters = store.listDeadOutbox("github").map((row) => ({
-						id: row.id,
-						kind: row.kind,
-						dedupeKey: row.dedupeKey,
-						attempts: row.attempts,
-						lastError: row.lastError,
-					}));
+					deadLetters = drainPlans.flatMap((plan) =>
+						store.listDeadOutbox(plan.name).map((row) => ({
+							id: row.id,
+							kind: row.kind,
+							dedupeKey: row.dedupeKey,
+							attempts: row.attempts,
+							lastError: row.lastError,
+						})),
+					);
 				}
 				const summary = {
 					triggers,
-					drain,
+					// SHAPE CHANGE (Task 4 of the multi-sink plan): the old singular
+					// `drain` object is now a per-sink array, one entry per sink that
+					// actually attempted a drain this run (dry-run and token-missing
+					// sinks are absent, not zeroed).
+					drains,
 					dryRun: Boolean(opts.dryRun),
 					deadLetters,
 					captureRequests: {
@@ -1158,10 +1218,14 @@ export function createLifecycleCommand(): Command {
 				}
 				console.log(
 					`Triggers: ${triggers.processed} events processed, ${triggers.enqueued} enqueued, ` +
-						`${triggers.skippedMigration} migration-skipped. ` +
-						`Drain: ${drain.delivered} delivered, ${drain.retried} retried, ${drain.dead} dead, ` +
-						`${drain.collapsed} collapsed.${opts.dryRun ? " (dry run)" : ""}`,
+						`${triggers.skippedMigration} migration-skipped.${opts.dryRun ? " (dry run)" : ""}`,
 				);
+				for (const d of drains) {
+					console.log(
+						`${d.sink}: ${d.delivered} delivered, ${d.retried} retried, ${d.dead} dead, ` +
+							`${d.collapsed} collapsed.`,
+					);
+				}
 				if (captureRequests.created > 0 || captureRequests.expired > 0) {
 					console.log(
 						`Capture requests: ${captureRequests.created} created, ${captureRequests.expired} expired.`,

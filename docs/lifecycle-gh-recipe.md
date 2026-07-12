@@ -130,3 +130,13 @@ Run after each capture batch, or on a timer:
 Then: `al-profile lifecycle sync`. With `autoFile: false` (the default) the
 sink only comments on issues that already exist (filed by you or by this
 recipe) — digest-first, exactly like the recipe.
+
+## Routing to Azure DevOps instead, or as well
+
+Prefer Azure DevOps Work Items, or want both? See
+[docs/lifecycle-ado-recipe.md](lifecycle-ado-recipe.md) — the shared trigger
+config block (`enabled`/`autoFile`/`autoFileMinSeverity`/`autoFileAfterRuns`/
+`autoClose`/`reopenOnRecurrence`) is identical to `sinks.github` above, just
+under `sinks.azureDevOps`. Both blocks can be present in the same
+`lifecycle.config.json` at once — a finding routes to every enabled sink
+independently, and `lifecycle sync` drains each.
