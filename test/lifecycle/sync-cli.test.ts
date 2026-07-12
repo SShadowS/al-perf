@@ -152,6 +152,54 @@ function seedDeadLetter(dbPath: string): void {
 	store.close();
 }
 
+/**
+ * Multi-sink variant of seedPendingDelivery: seeds ONE finding with an
+ * existing issue mapping under EACH named sink, then logs a single
+ * "seen-regressed" event. processEventsForSinks (Task 2's fan-out) evaluates
+ * every enabled sink independently against its own mapping, so this enqueues
+ * one comment-regressed row PER named sink — the minimal fixture that
+ * exercises multi-sink drain without touching autoFile/hysteresis config.
+ */
+function seedPendingDeliveryForSinks(dbPath: string, sinks: string[]): void {
+	const store = new LifecycleStore(dbPath);
+	const id = store.insertFinding(finding());
+	for (const sink of sinks) {
+		store.putIssueMapping({
+			tenant: TENANT,
+			sink,
+			fingerprint: FP,
+			externalId: sink === "github" ? "42" : "1042",
+			createdAt: "2026-07-01T00:00:00Z",
+		});
+	}
+	store.logEvent({
+		findingId: id,
+		event: "seen-regressed",
+		fromState: "open",
+		toState: "regressed",
+		at: "2026-07-05T00:00:00Z",
+	});
+	store.close();
+}
+
+/** A fetch mock that responds 200 with an empty JSON body to every call it sees. */
+function okFetch(calls: unknown[][]): typeof fetch {
+	return (async (...args: unknown[]) => {
+		calls.push(args);
+		return new Response(JSON.stringify({}), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		});
+	}) as typeof fetch;
+}
+
+const ADO_CONFIG = {
+	enabled: true,
+	org: "myorg",
+	project: "myproject",
+	tokenEnv: "AL_PERF_SYNC_TEST_ADO_TOKEN",
+};
+
 describe("lifecycle sync — security boundary", () => {
 	let dir: string;
 	let dbPath: string;
@@ -195,6 +243,8 @@ describe("lifecycle sync — security boundary", () => {
 		logSpy.mockRestore();
 		stdoutSpy.mockRestore();
 		delete process.env.AL_PERF_SYNC_TEST_DECOY;
+		delete process.env.AL_PERF_SYNC_TEST_GH_TOKEN;
+		delete process.env.AL_PERF_SYNC_TEST_ADO_TOKEN;
 		await rmSyncRetrying(dir);
 	});
 
@@ -412,5 +462,179 @@ describe("lifecycle sync — security boundary", () => {
 		const store = new LifecycleStore(dbPath);
 		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
 		store.close();
+	});
+
+	describe("multi-sink fan-out (Task 4)", () => {
+		it("both sinks configured with tokens present: both drain, JSON reports a per-sink drains array", async () => {
+			seedPendingDeliveryForSinks(dbPath, ["github", "azureDevOps"]);
+			process.env.AL_PERF_SYNC_TEST_GH_TOKEN = "gh-token";
+			process.env.AL_PERF_SYNC_TEST_ADO_TOKEN = "ado-token";
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							tokenEnv: "AL_PERF_SYNC_TEST_GH_TOKEN",
+						},
+						azureDevOps: ADO_CONFIG,
+					},
+				}),
+			);
+			globalThis.fetch = okFetch(fetchCalls);
+
+			await runSync(["sync", "-f", "json"]);
+
+			expect(process.exitCode ?? 0).toBe(0);
+			const ghCalls = fetchCalls.filter((c) =>
+				String(c[0]).includes("api.github.com"),
+			);
+			const adoCalls = fetchCalls.filter((c) =>
+				String(c[0]).includes("dev.azure.com"),
+			);
+			expect(ghCalls).toHaveLength(1);
+			expect(adoCalls).toHaveLength(1);
+
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.drains).toHaveLength(2);
+			const gh = summary.drains.find((d: { sink: string }) => d.sink === "github");
+			const ado = summary.drains.find(
+				(d: { sink: string }) => d.sink === "azureDevOps",
+			);
+			expect(gh).toEqual({ sink: "github", delivered: 1, retried: 0, dead: 0, collapsed: 0 });
+			expect(ado).toEqual({
+				sink: "azureDevOps",
+				delivered: 1,
+				retried: 0,
+				dead: 0,
+				collapsed: 0,
+			});
+			expect(output).not.toContain("ado-token");
+			expect(output).not.toContain("gh-token");
+
+			const store = new LifecycleStore(dbPath);
+			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(0);
+			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(0);
+			store.close();
+		});
+
+		it("ADO token missing: ADO drain is skipped loudly (names AZDO env var), github still drains, other sink unaffected", async () => {
+			seedPendingDeliveryForSinks(dbPath, ["github", "azureDevOps"]);
+			process.env.AL_PERF_SYNC_TEST_GH_TOKEN = "gh-token";
+			// Deliberately not setting AL_PERF_SYNC_TEST_ADO_TOKEN.
+			delete process.env.AL_PERF_SYNC_TEST_ADO_TOKEN;
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							tokenEnv: "AL_PERF_SYNC_TEST_GH_TOKEN",
+						},
+						azureDevOps: ADO_CONFIG,
+					},
+				}),
+			);
+			globalThis.fetch = okFetch(fetchCalls);
+
+			await runSync(["sync", "-f", "json"]);
+
+			// One misconfigured sink is an operator error (exitCode 1), but it must
+			// not have prevented the OTHER sink from draining.
+			expect(process.exitCode).toBe(1);
+
+			const ghCalls = fetchCalls.filter((c) =>
+				String(c[0]).includes("api.github.com"),
+			);
+			const adoCalls = fetchCalls.filter((c) =>
+				String(c[0]).includes("dev.azure.com"),
+			);
+			expect(ghCalls).toHaveLength(1);
+			expect(adoCalls).toHaveLength(0);
+
+			const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+			expect(errText).toContain("AL_PERF_SYNC_TEST_ADO_TOKEN");
+
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.drains).toHaveLength(1);
+			expect(summary.drains[0]).toEqual({
+				sink: "github",
+				delivered: 1,
+				retried: 0,
+				dead: 0,
+				collapsed: 0,
+			});
+
+			// The ADO row is still pending — never drained.
+			const store = new LifecycleStore(dbPath);
+			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(1);
+			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(0);
+			store.close();
+		});
+
+		it("github-only config (back-compat): drains is a one-entry array for github, no azureDevOps entry", async () => {
+			seedPendingDelivery(dbPath);
+			process.env.AL_PERF_SYNC_TEST_GH_TOKEN = "gh-token";
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							tokenEnv: "AL_PERF_SYNC_TEST_GH_TOKEN",
+						},
+					},
+				}),
+			);
+			globalThis.fetch = okFetch(fetchCalls);
+
+			await runSync(["sync", "-f", "json"]);
+
+			expect(process.exitCode ?? 0).toBe(0);
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.drains).toEqual([
+				{ sink: "github", delivered: 1, retried: 0, dead: 0, collapsed: 0 },
+			]);
+		});
+
+		it("--dry-run with both sinks configured: enqueues for both, drains nothing, zero fetch calls", async () => {
+			seedPendingDeliveryForSinks(dbPath, ["github", "azureDevOps"]);
+			process.env.AL_PERF_SYNC_TEST_GH_TOKEN = "gh-token";
+			process.env.AL_PERF_SYNC_TEST_ADO_TOKEN = "ado-token";
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							tokenEnv: "AL_PERF_SYNC_TEST_GH_TOKEN",
+						},
+						azureDevOps: ADO_CONFIG,
+					},
+				}),
+			);
+
+			await runSync(["sync", "--dry-run", "-f", "json"]);
+
+			expect(fetchCalls).toHaveLength(0);
+			expect(process.exitCode ?? 0).toBe(0);
+
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.drains).toEqual([]);
+			expect(summary.dryRun).toBe(true);
+
+			const store = new LifecycleStore(dbPath);
+			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(1);
+			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(1);
+			store.close();
+		});
 	});
 });
