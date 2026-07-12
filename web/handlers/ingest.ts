@@ -387,6 +387,12 @@ export async function handleIngest(
 	// per request) so the POC ingest behavior is byte-unchanged by default.
 	// Errors are logged and never fail the ingest: the profile is already
 	// stored and reanalyzable.
+	let lifecycleBlocked: {
+		status: "blocked";
+		reason: "stale-algo";
+		remediation: string;
+	} | null = null;
+
 	if (process.env.AL_PERF_LIFECYCLE === "1") {
 		try {
 			const { getLifecycleStore } = await import("../lifecycle-db.ts");
@@ -419,6 +425,24 @@ export async function handleIngest(
 				lifecycleConfig,
 			);
 		} catch (err) {
+			// StaleAlgoVersionError is operator misconfiguration, not a runtime
+			// evaluation error — the distinction this file already draws for a
+			// malformed config file above. We still don't fail the request (the
+			// profile is stored and reanalyzable, and the guard threw before any
+			// write), but the response must stop claiming plain success:
+			// lifecycle tracking is doing nothing for this tenant on EVERY
+			// ingest until an operator purges, and a stderr line in a headless
+			// service is the weakest signal there is.
+			const { StaleAlgoVersionError } = await import(
+				"../../src/lifecycle/evaluate.ts"
+			);
+			if (err instanceof StaleAlgoVersionError) {
+				lifecycleBlocked = {
+					status: "blocked",
+					reason: "stale-algo",
+					remediation: `lifecycle maintain --purge-stale-fingerprints --tenant ${err.tenant}`,
+				};
+			}
 			console.error(
 				`[lifecycle] evaluation failed for tenant ${tenantCode} activity ${activityId}: ${err}`,
 			);
@@ -429,6 +453,7 @@ export async function handleIngest(
 		id: activityId,
 		status: "stored",
 		keyVersion: Number(KEY_VERSION_POC),
+		...(lifecycleBlocked ? { lifecycle: lifecycleBlocked } : {}),
 	});
 }
 
