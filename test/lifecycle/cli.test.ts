@@ -2200,6 +2200,17 @@ function captureFinding(overrides?: Partial<NewFinding>): NewFinding {
 	};
 }
 
+// `captures health` (below) passes the real wall clock into
+// captureQueueHealth, which counts a row as occupying the queue only while
+// `expiresAt` is still ahead of "now" (see store.ts's atCap filter). A
+// hardcoded calendar date would eventually fall behind the real clock and
+// start reading as expired, quietly breaking every "at cap" assertion below
+// — so derive it from Date.now() with a 50-year offset instead (same fix as
+// test/lifecycle/sync-cli.test.ts's farFutureExpiresAt).
+const FAR_FUTURE_EXPIRES_AT = new Date(
+	Date.now() + 50 * 365 * 24 * 60 * 60 * 1000,
+).toISOString();
+
 /** Seed one pending capture request (with its own backing finding); returns its id. */
 function seedCaptureRequest(
 	store: LifecycleStore,
@@ -2232,7 +2243,7 @@ function seedCaptureRequest(
 		methodName: "postorder",
 		reason: "RT0018: 3 runs, severity warning",
 		requestedAt: "2026-07-01T00:00:00Z",
-		expiresAt: "2026-08-01T00:00:00Z",
+		expiresAt: FAR_FUTURE_EXPIRES_AT,
 		...overrides,
 	});
 	const row = store
@@ -2241,6 +2252,35 @@ function seedCaptureRequest(
 	if (!row)
 		throw new Error(`seedCaptureRequest: no pending row for ${fingerprint}`);
 	return row.id;
+}
+
+/**
+ * Seed a jammed-looking queue for tenant "acme": two pending requests, one
+ * claim stuck since the year 2000 under "dead-executor", and one fresh claim
+ * (claimed_at = now) under "live-executor" so the fresh claim never reads as
+ * stuck regardless of when the test actually runs.
+ */
+function seedJammedAcmeQueue(store: LifecycleStore): void {
+	seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-pending-1",
+		requestedAt: "2026-01-01T00:00:00Z",
+	});
+	seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-pending-2",
+		requestedAt: "2026-01-02T00:00:00Z",
+	});
+	const stuckId = seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-stuck",
+	});
+	store.claimCaptureRequest(stuckId, "dead-executor", "2000-01-01T00:00:00Z");
+	const freshId = seedCaptureRequest(store, {
+		tenant: "acme",
+		fingerprint: "telemetry:acme-fresh",
+	});
+	store.claimCaptureRequest(freshId, "live-executor", new Date().toISOString());
 }
 
 describe("lifecycle captures", () => {
@@ -2326,6 +2366,7 @@ describe("lifecycle captures", () => {
 				"expiresAt",
 				"claimedAt",
 				"claimedBy",
+				"reclaimCount",
 				"fulfilledAt",
 				"fulfilledByProfileId",
 			].sort(),
@@ -2436,6 +2477,122 @@ describe("lifecycle captures", () => {
 		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
 		expect(errText).toContain("999999");
 		expect(errText.toLowerCase()).toContain("no capture request");
+	});
+
+	it("captures health reports depth, stuck claims, and the at-cap state", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedJammedAcmeQueue(store);
+		store.close();
+		// 2 pending + 2 claimed == maxPending 4 — at cap.
+		const configPath = join(dir, "lifecycle.config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				captureRequests: { maxPending: 4, claimTtlMinutes: 60 },
+			}),
+		);
+
+		logSpy.mockClear();
+		await run([
+			"--config",
+			configPath,
+			"captures",
+			"health",
+			"--tenant",
+			"ACME", // mixed case: must normalize
+		]);
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).toContain("acme");
+		expect(printed).toMatch(/stuck/i);
+		expect(printed).toContain("dead-executor");
+		expect(printed).toMatch(/YES/); // at-cap
+	});
+
+	it("captures health -f json emits a bare parseable array on stdout", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedJammedAcmeQueue(store);
+		store.close();
+
+		await run(["captures", "health", "-f", "json"]);
+
+		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const parsed = JSON.parse(output);
+		expect(Array.isArray(parsed)).toBe(true);
+		expect(parsed[0]).toHaveProperty("atCap");
+		// A stray console.log (e.g. a banner) would never reach the
+		// process.stdout.write spy above, but it WOULD break `... | jq` in
+		// production. Guard against that leak explicitly.
+		expect(logSpy).not.toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// lifecycle digest — capture-queue wiring. Every digest test elsewhere calls
+// buildDigest directly, so nothing pins the actual `lifecycle digest` command
+// — the surface the GitHub/ADO recipe pipes into an issue. This drives the
+// real CLI action to prove the `captureRequests:` block passed into
+// buildDigest there actually reaches the rendered output.
+// ---------------------------------------------------------------------------
+describe("lifecycle digest — capture queue CLI wiring", () => {
+	let dir: string;
+	let dbPath: string;
+	let configPath: string;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-digest-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		configPath = join(dir, "lifecycle.config.json");
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	});
+	afterEach(async () => {
+		stdoutSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	async function run(args: string[]): Promise<void> {
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, "--config", configPath, ...args], {
+			from: "user",
+		});
+	}
+
+	it("renders the jammed capture-queue block for a JAMMED queue", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedJammedAcmeQueue(store);
+		store.close();
+		// Same shape seedJammedAcmeQueue is sized for: 2 pending + 2 claimed == maxPending 4 — at cap.
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				captureRequests: { maxPending: 4, claimTtlMinutes: 60 },
+			}),
+		);
+
+		await run(["digest", "--tenant", "acme"]);
+
+		const printed = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		expect(printed).toMatch(/capture queue/i);
+		expect(printed).toMatch(/jammed/i);
+	});
+
+	it("renders NOTHING about the capture queue for a healthy queue", async () => {
+		const store = new LifecycleStore(dbPath);
+		seedCaptureRequest(store, { tenant: "acme" });
+		store.close();
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				captureRequests: { maxPending: 20, claimTtlMinutes: 60 },
+			}),
+		);
+
+		await run(["digest", "--tenant", "acme"]);
+
+		const printed = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		expect(printed).not.toMatch(/capture queue/i);
 	});
 });
 

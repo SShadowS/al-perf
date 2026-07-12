@@ -30,7 +30,15 @@ export interface CaptureTriggerReport {
 	scanned: number;
 	created: number;
 	expired: number;
-	/** Candidates that qualified but were skipped because the tenant was already at maxPending. */
+	/** Stale claims returned to `pending` for another worker (executor died mid-capture). */
+	reclaimed: number;
+	/**
+	 * Candidates that qualified, had NO active capture request of their own,
+	 * and were denied one solely because the tenant was already at maxPending.
+	 * Excludes candidates that already hold an active (pending/claimed)
+	 * request — those aren't starved, they're already queued, so they don't
+	 * count here even while the tenant sits at the cap.
+	 */
 	skippedMaxPending: number;
 }
 
@@ -88,9 +96,18 @@ export function processCaptureTriggers(
 	now: string = new Date().toISOString(),
 ): CaptureTriggerReport {
 	const scan = store.db.transaction((): CaptureTriggerReport => {
-		const expired = store.expireCaptureRequests(now);
-
 		const cfg = config.captureRequests;
+		const expired = store.expireCaptureRequests(now);
+		// Order matters: expireCaptureRequests also matches 'claimed' rows, so
+		// a request past its creation TTL dies either way, regardless of order.
+		// Expiring first means a dying request never touches reclaim_count —
+		// reclaiming it first would flip it to 'pending' and increment
+		// reclaim_count for a row that's about to expire anyway, corrupting the
+		// exact signal reclaim_count exists to carry (a dead executor produces
+		// many requests with one reclaim each; a poison request produces one
+		// request with many reclaims).
+		const reclaimed = store.reclaimStaleClaims(now, cfg.claimTtlMinutes);
+
 		const minRank = SEVERITY_RANK[cfg.minSeverity];
 		const candidates = store
 			.listFindings()
@@ -110,6 +127,14 @@ export function processCaptureTriggers(
 
 			const key = parseRoutineKey(finding.routineKey);
 			if (!key) continue;
+
+			// Already actively requested (this is likely what's occupying the
+			// tenant's cap slot) — not a cap denial, so check this BEFORE the
+			// cap, or the candidate would double-count itself as "skipped"
+			// for a request it already holds.
+			if (store.hasActiveCaptureRequest(finding.tenant, finding.fingerprint)) {
+				continue;
+			}
 
 			if (store.countActiveCaptureRequests(finding.tenant) >= cfg.maxPending) {
 				skippedMaxPending++;
@@ -133,7 +158,13 @@ export function processCaptureTriggers(
 			if (wasCreated) created++;
 		}
 
-		return { scanned: candidates.length, created, expired, skippedMaxPending };
+		return {
+			scanned: candidates.length,
+			created,
+			expired,
+			reclaimed,
+			skippedMaxPending,
+		};
 	});
 
 	return scan();

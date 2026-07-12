@@ -837,9 +837,14 @@ export function createLifecycleCommand(): Command {
 			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				const lifecycleConfig = resolveLifecycleConfig(cmd.opts().config);
 				const digest = buildDigest(store, {
 					tenant,
 					since: opts.since,
+					captureRequests: {
+						claimTtlMinutes: lifecycleConfig.captureRequests.claimTtlMinutes,
+						maxPending: lifecycleConfig.captureRequests.maxPending,
+					},
 				});
 				process.stdout.write(
 					opts.format === "json"
@@ -1146,6 +1151,7 @@ export function createLifecycleCommand(): Command {
 					scanned: 0,
 					created: 0,
 					expired: 0,
+					reclaimed: 0,
 					skippedMaxPending: 0,
 				};
 				if (lifecycleConfig.captureRequests.enabled) {
@@ -1292,6 +1298,7 @@ export function createLifecycleCommand(): Command {
 					captureRequests: {
 						created: captureRequests.created,
 						expired: captureRequests.expired,
+						reclaimed: captureRequests.reclaimed,
 						skippedMaxPending: captureRequests.skippedMaxPending,
 					},
 				};
@@ -1309,9 +1316,24 @@ export function createLifecycleCommand(): Command {
 							`${d.collapsed} collapsed.`,
 					);
 				}
-				if (captureRequests.created > 0 || captureRequests.expired > 0) {
+				const cr = captureRequests;
+				// The guard must include skippedMaxPending. In the starvation state
+				// — executor dead, queue at the cap — created and expired are BOTH
+				// zero, so a guard on those two alone prints nothing, and a jammed
+				// pipeline looks byte-identical to a healthy idle one on stdout.
+				if (
+					cr.created > 0 ||
+					cr.expired > 0 ||
+					cr.reclaimed > 0 ||
+					cr.skippedMaxPending > 0
+				) {
 					console.log(
-						`Capture requests: ${captureRequests.created} created, ${captureRequests.expired} expired.`,
+						`Capture requests: ${cr.created} created, ${cr.expired} expired, ${cr.reclaimed} reclaimed.`,
+					);
+				}
+				if (cr.skippedMaxPending > 0) {
+					console.log(
+						`  WARNING: ${cr.skippedMaxPending} finding(s) qualified but were NOT requested — tenant at the maxPending cap (${lifecycleConfig.captureRequests.maxPending}). The queue may be jammed. Run: lifecycle captures health`,
 					);
 				}
 				if (deadLetters.length > 0) {
@@ -1629,6 +1651,65 @@ export function createLifecycleCommand(): Command {
 					return;
 				}
 				console.log(`Cancelled capture request #${id}`);
+			} finally {
+				store.close();
+			}
+		});
+
+	captures
+		.command("health")
+		.description(
+			"Queue health: depth, oldest pending, stuck claims, at-cap state",
+		)
+		.option("--tenant <tenant>", "Tenant key (all tenants if omitted)")
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action((opts: any) => {
+			if (opts.tenant !== undefined) {
+				const tenant = resolveTenantOpt(opts.tenant);
+				if (tenant === null) return;
+				opts.tenant = tenant;
+			}
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const cfg = resolveLifecycleConfig(cmd.opts().config).captureRequests;
+				const now = new Date().toISOString();
+				const health = store.captureQueueHealth(
+					now,
+					cfg.claimTtlMinutes,
+					cfg.maxPending,
+					opts.tenant,
+				);
+				if (opts.format === "json") {
+					process.stdout.write(JSON.stringify(health, null, 2) + "\n");
+					return;
+				}
+				if (health.length === 0) {
+					console.log("No capture requests.");
+					return;
+				}
+				for (const h of health) {
+					const oldest =
+						h.oldestPendingAt === null
+							? "—"
+							: `${Math.floor((Date.parse(now) - Date.parse(h.oldestPendingAt)) / 3_600_000)}h`;
+					console.log(`Tenant: ${h.tenant}`);
+					console.log(`  pending:  ${h.pending}   oldest: ${oldest}`);
+					console.log(
+						`  claimed:  ${h.claimed}   stuck (claimed > ${cfg.claimTtlMinutes}m): ${h.stuck}${
+							h.stuckHolders.length > 0
+								? `   last held by: ${h.stuckHolders.join(", ")}`
+								: ""
+						}`,
+					);
+					console.log(
+						`  at maxPending cap (${h.maxPending}): ${h.atCap ? "YES" : "no"}`,
+					);
+					if (h.reclaimedEver > 0 && h.mostReclaimed !== null) {
+						console.log(
+							`  reclaimed at least once: ${h.reclaimedEver}   most-reclaimed: #${h.mostReclaimed.id} (${h.mostReclaimed.reclaimCount} times)`,
+						);
+					}
+				}
 			} finally {
 				store.close();
 			}

@@ -205,6 +205,84 @@ describe("processCaptureTriggers", () => {
 		store.close();
 	});
 
+	it("healthy-but-full queue: candidates that already hold their own active request are not counted as skipped", () => {
+		const store = new LifecycleStore(":memory:");
+		const id1 = store.insertFinding(
+			telemetryFinding({ fingerprint: "telemetry:deadbeef00000007" }),
+		);
+		const id2 = store.insertFinding(
+			telemetryFinding({
+				fingerprint: "telemetry:deadbeef00000008",
+				routineKey: "abc123|Codeunit|50200|postcredit",
+			}),
+		);
+		seedOccurrences(store, id1, 3);
+		seedOccurrences(store, id2, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				maxPending: 2,
+			},
+		};
+
+		// First scan: both qualify, both fit under the cap, both get queued.
+		const first = processCaptureTriggers(store, cfg, NOW);
+		expect(first.created).toBe(2);
+		expect(first.skippedMaxPending).toBe(0);
+
+		// Second scan, same instant: the tenant is now AT the cap (2/2), but
+		// both active requests belong to these exact candidates — nothing is
+		// starved. A re-scan must not blame either of them for occupying the
+		// slot they themselves hold.
+		const second = processCaptureTriggers(store, cfg, NOW);
+		expect(second.created).toBe(0);
+		expect(second.skippedMaxPending).toBe(0);
+		expect(store.listCaptureRequests()).toHaveLength(2);
+		store.close();
+	});
+
+	it("a genuinely starved finding is still counted even while other candidates already hold their own requests", () => {
+		const store = new LifecycleStore(":memory:");
+		const id1 = store.insertFinding(
+			telemetryFinding({ fingerprint: "telemetry:deadbeef00000009" }),
+		);
+		const id2 = store.insertFinding(
+			telemetryFinding({
+				fingerprint: "telemetry:deadbeef0000000a",
+				routineKey: "abc123|Codeunit|50200|postcredit",
+			}),
+		);
+		seedOccurrences(store, id1, 3);
+		seedOccurrences(store, id2, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				maxPending: 2,
+			},
+		};
+		expect(processCaptureTriggers(store, cfg, NOW).created).toBe(2);
+
+		// A brand-new qualifying finding with NO active request of its own —
+		// this one really is starved by the full queue.
+		const id3 = store.insertFinding(
+			telemetryFinding({
+				fingerprint: "telemetry:deadbeef0000000b",
+				routineKey: "abc123|Codeunit|50300|postinvoice",
+			}),
+		);
+		seedOccurrences(store, id3, 3);
+
+		const report = processCaptureTriggers(store, cfg, NOW);
+		expect(report.created).toBe(0);
+		expect(report.skippedMaxPending).toBe(1);
+		expect(store.listCaptureRequests()).toHaveLength(2);
+		store.close();
+	});
+
 	it("resolved/closed findings are never candidates", () => {
 		const store = new LifecycleStore(":memory:");
 		const resolvedId = store.insertFinding(
@@ -229,6 +307,67 @@ describe("processCaptureTriggers", () => {
 		expect(report.scanned).toBe(0);
 		expect(report.created).toBe(0);
 		expect(store.listCaptureRequests()).toHaveLength(0);
+		store.close();
+	});
+
+	it("expiry runs BEFORE reclaim — a request past its creation TTL never records a spurious reclaim, even though it also clears the claim TTL", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(telemetryFinding());
+		seedOccurrences(store, id, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				claimTtlMinutes: 60,
+			},
+		};
+		expect(processCaptureTriggers(store, cfg, NOW).created).toBe(1);
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", NOW);
+
+		// Past BOTH the 14-day creation TTL and the 60-minute claim TTL. The
+		// row dies either way (expireCaptureRequests matches 'claimed' rows
+		// directly) — what the order actually protects is reclaim_count: if
+		// reclaim ran first it would flip this row to 'pending' and increment
+		// reclaim_count on a request that's about to expire anyway, corrupting
+		// the exact signal reclaim_count exists to carry.
+		const pastBoth = new Date(Date.parse(NOW) + 15 * 86_400_000).toISOString();
+		const report = processCaptureTriggers(store, cfg, pastBoth);
+
+		expect(report.expired).toBe(1);
+		expect(report.reclaimed).toBe(0);
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("expired");
+		expect(after.reclaimCount).toBe(0);
+		store.close();
+	});
+
+	it("a stale claim inside its creation TTL is reclaimed and reported", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(telemetryFinding());
+		seedOccurrences(store, id, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				claimTtlMinutes: 60,
+			},
+		};
+		expect(processCaptureTriggers(store, cfg, NOW).created).toBe(1);
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", NOW);
+
+		// Past the 60-minute claim TTL, well inside the 14-day creation TTL.
+		const pastClaimTtlOnly = new Date(
+			Date.parse(NOW) + 61 * 60_000,
+		).toISOString();
+		const report = processCaptureTriggers(store, cfg, pastClaimTtlOnly);
+
+		expect(report.reclaimed).toBe(1);
+		expect(report.expired).toBe(0);
+		expect(store.listCaptureRequests()[0].status).toBe("pending");
 		store.close();
 	});
 });

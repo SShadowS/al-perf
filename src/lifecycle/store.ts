@@ -256,6 +256,16 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		        (SELECT COALESCE(MAX(id), 0) FROM finding_events WHERE sink_processed = 1)
 		 FROM sink_issue_map`,
 	],
+	[
+		// Purely additive — no table rebuild, no FK-toggle complications.
+		//
+		// Counts how many times a request has been reclaimed from a stale claim.
+		// This is what separates two failure modes that look identical from the
+		// outside: an executor that DIED (many requests, one reclaim each) versus a
+		// POISON request that kills whatever picks it up (one request, many
+		// reclaims). `captures health` surfaces it; nothing acts on it automatically.
+		`ALTER TABLE capture_requests ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -388,8 +398,28 @@ export interface CaptureRequestRow {
 	expiresAt: string;
 	claimedAt: string | null;
 	claimedBy: string | null;
+	reclaimCount: number;
 	fulfilledAt: string | null;
 	fulfilledByProfileId: string | null;
+}
+
+export interface CaptureQueueHealth {
+	tenant: string;
+	pending: number;
+	claimed: number;
+	/** Claimed longer than claimTtlMinutes — an executor that has not reported back. */
+	stuck: number;
+	/** Distinct executors holding stuck claims. */
+	stuckHolders: string[];
+	/** true when the tenant is at maxPending — the state in which new requests stop being filed. */
+	atCap: boolean;
+	maxPending: number;
+	/** ISO timestamp of the oldest pending request, or null when none are pending. */
+	oldestPendingAt: string | null;
+	/** Requests reclaimed at least once. */
+	reclaimedEver: number;
+	/** The single most-reclaimed request, or null when none have been reclaimed. */
+	mostReclaimed: { id: number; reclaimCount: number } | null;
 }
 
 export interface UnprocessedEvent {
@@ -1418,6 +1448,7 @@ export class LifecycleStore {
 			expiresAt: row.expires_at as string,
 			claimedAt: (row.claimed_at as string | null) ?? null,
 			claimedBy: (row.claimed_by as string | null) ?? null,
+			reclaimCount: (row.reclaim_count as number | null) ?? 0,
 			fulfilledAt: (row.fulfilled_at as string | null) ?? null,
 			fulfilledByProfileId:
 				(row.fulfilled_by_profile_id as string | null) ?? null,
@@ -1438,6 +1469,7 @@ export class LifecycleStore {
 			| "status"
 			| "claimedAt"
 			| "claimedBy"
+			| "reclaimCount"
 			| "fulfilledAt"
 			| "fulfilledByProfileId"
 		>,
@@ -1494,6 +1526,103 @@ export class LifecycleStore {
 		return row?.n ?? 0;
 	}
 
+	/**
+	 * Mirrors idx_capture_requests_active's predicate exactly (tenant +
+	 * fingerprint, status IN pending/claimed) — this is the same identity
+	 * `createCaptureRequest`'s INSERT OR IGNORE dedupes on. Lets a caller tell
+	 * "already actively requested" apart from "denied by the maxPending cap"
+	 * BEFORE consulting the cap, so a candidate that already holds the slot
+	 * it's occupying is never counted as skipped because of it.
+	 */
+	hasActiveCaptureRequest(tenant: string, fingerprint: string): boolean {
+		const row = this.db
+			.query<{ n: number }, [string, string]>(
+				"SELECT count(*) AS n FROM capture_requests WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+			)
+			.get(tenant, fingerprint);
+		return (row?.n ?? 0) > 0;
+	}
+
+	/**
+	 * Queue health per tenant. Reports FACTS, not verdicts — no "the executor is
+	 * dead" heuristic; the operator draws that conclusion from `stuck` and
+	 * `stuckHolders`. `atCap` is the exception, and it is not a heuristic: it is
+	 * literally the state in which processCaptureTriggers stops filing new
+	 * requests, so it is the one crisp definition of a jammed queue.
+	 *
+	 * `processCaptureTriggers` always sweeps expired requests (`expireCaptureRequests`)
+	 * BEFORE consulting `countActiveCaptureRequests` against `maxPending` — so a
+	 * pending/claimed row whose `expiresAt` has already passed will be reaped by
+	 * the very next trigger scan before the cap is ever checked. `atCap` here
+	 * excludes those rows, so it matches what the next trigger run will actually see.
+	 */
+	captureQueueHealth(
+		now: string,
+		claimTtlMinutes: number,
+		maxPending: number,
+		tenant?: string,
+	): CaptureQueueHealth[] {
+		const rows = this.listCaptureRequests(tenant);
+		const cutoff = Date.parse(now) - claimTtlMinutes * 60_000;
+
+		const byTenant = new Map<string, CaptureRequestRow[]>();
+		for (const r of rows) {
+			const bucket = byTenant.get(r.tenant);
+			if (bucket) bucket.push(r);
+			else byTenant.set(r.tenant, [r]);
+		}
+
+		return [...byTenant.entries()]
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([t, rs]) => {
+				const pending = rs.filter((r) => r.status === "pending");
+				const claimed = rs.filter((r) => r.status === "claimed");
+				const stuck = claimed.filter(
+					(r) => r.claimedAt !== null && Date.parse(r.claimedAt) <= cutoff,
+				);
+				const reclaimed = rs.filter((r) => r.reclaimCount > 0);
+				const worst = reclaimed.reduce<CaptureRequestRow | null>(
+					(acc, r) =>
+						acc === null || r.reclaimCount > acc.reclaimCount ? r : acc,
+					null,
+				);
+				const oldestPendingAt = pending.reduce<string | null>(
+					(acc, r) =>
+						acc === null || r.requestedAt < acc ? r.requestedAt : acc,
+					null,
+				);
+				return {
+					tenant: t,
+					pending: pending.length,
+					claimed: claimed.length,
+					stuck: stuck.length,
+					stuckHolders: [
+						...new Set(
+							stuck
+								.map((r) => r.claimedBy)
+								.filter((b): b is string => b !== null),
+						),
+					].sort(),
+					// Same denominator processCaptureTriggers uses against maxPending,
+					// evaluated over rows that would survive an expiry sweep first —
+					// processCaptureTriggers always sweeps before checking the cap.
+					// Plain string compare, not Date.parse: expireCaptureRequests
+					// sweeps with `expires_at <= ?` as SQL TEXT (byte-wise), so this
+					// must be that comparison's exact complement to stay in sync.
+					atCap:
+						[...pending, ...claimed].filter((r) => r.expiresAt > now).length >=
+						maxPending,
+					maxPending,
+					oldestPendingAt,
+					reclaimedEver: reclaimed.length,
+					mostReclaimed:
+						worst === null
+							? null
+							: { id: worst.id, reclaimCount: worst.reclaimCount },
+				};
+			});
+	}
+
 	claimCaptureRequest(id: number, claimedBy: string, now: string): boolean {
 		const res = this.db.run(
 			`UPDATE capture_requests SET status = 'claimed', claimed_by = ?, claimed_at = ?
@@ -1517,6 +1646,38 @@ export class LifecycleStore {
 			`UPDATE capture_requests SET status = 'expired'
 			 WHERE status IN ('pending','claimed') AND expires_at <= ?`,
 			[now],
+		);
+		return res.changes;
+	}
+
+	/**
+	 * Return claims older than `claimTtlMinutes` to `pending` so another worker
+	 * can take them — the engine-side backstop for an executor that died
+	 * mid-capture (nothing else ever moves a row out of `claimed`).
+	 *
+	 * `claimed_at` MUST be nulled: a `pending` row carrying a `claimed_at` is a
+	 * lie. The column means "when the current holder claimed this", and a
+	 * pending request has no holder — leaving stale data there corrupts any
+	 * consumer that reasons about claim age (the `status = 'claimed'` guard
+	 * above already keeps this row from being re-reclaimed on the next scan).
+	 *
+	 * `claimed_by` is deliberately KEPT. It is odd on a `pending` row, but it is
+	 * the only breadcrumb naming which executor dropped the request — without it
+	 * the evidence of a dead executor evaporates at the exact moment the sweep
+	 * runs. `claimCaptureRequest` overwrites it on the next claim, so read it as
+	 * "last claimed by".
+	 */
+	reclaimStaleClaims(now: string, claimTtlMinutes: number): number {
+		const cutoff = new Date(
+			Date.parse(now) - claimTtlMinutes * 60_000,
+		).toISOString();
+		const res = this.db.run(
+			`UPDATE capture_requests
+			 SET status = 'pending',
+			     claimed_at = NULL,
+			     reclaim_count = reclaim_count + 1
+			 WHERE status = 'claimed' AND claimed_at IS NOT NULL AND claimed_at <= ?`,
+			[cutoff],
 		);
 		return res.changes;
 	}

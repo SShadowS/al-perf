@@ -220,3 +220,95 @@ describe("renderDigestMarkdown", () => {
 		store.close();
 	});
 });
+
+describe("digest — capture queue", () => {
+	// Capture requests need a finding to attach to; the tenant's identity on
+	// that finding is what drives captureQueueHealth's tenant grouping.
+	function seedCaptureRequest(
+		store: LifecycleStore,
+		findingId: number,
+		fingerprint: string,
+	): void {
+		store.createCaptureRequest({
+			tenant: "acme",
+			fingerprint,
+			findingId,
+			appId: "abc123",
+			appName: "My App",
+			objectType: "codeunit",
+			objectId: 50100,
+			methodName: "postorder",
+			reason: "RT0018 x 5 runs",
+			requestedAt: "2026-07-11T00:00:00Z",
+			expiresAt: "2026-07-18T00:00:00Z",
+		});
+	}
+
+	it("includes a capture-queue warning when the queue is JAMMED (at cap)", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = seed(store, "new", { tenant: "acme" });
+		// maxPending: 1 — a single pending request already saturates the cap.
+		seedCaptureRequest(store, findingId, "telemetry:acme-jam-0001");
+
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			now: "2026-07-12T00:00:00Z",
+			captureRequests: { claimTtlMinutes: 60, maxPending: 1 },
+		});
+		expect(digest.captureQueue).not.toBeNull();
+		expect(digest.captureQueue?.atCap).toBe(true);
+
+		const md = renderDigestMarkdown(digest);
+		expect(md).toMatch(/capture queue/i);
+		expect(md).toMatch(/jammed/i);
+		store.close();
+	});
+
+	it("includes it when claims are STUCK, even below the cap", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = seed(store, "new", { tenant: "acme" });
+		seedCaptureRequest(store, findingId, "telemetry:acme-stuck-0001");
+		const [row] = store.listCaptureRequests("acme", "pending");
+		store.claimCaptureRequest(row.id, "dead-executor", "2026-07-11T00:00:00Z");
+
+		// 2 hours later, with a 60-minute claim TTL — well under maxPending: 20.
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			now: "2026-07-11T02:00:00Z",
+			captureRequests: { claimTtlMinutes: 60, maxPending: 20 },
+		});
+		expect(digest.captureQueue?.atCap).toBe(false);
+		expect(digest.captureQueue?.stuck).toBeGreaterThan(0);
+		expect(renderDigestMarkdown(digest)).toMatch(/capture queue/i);
+		store.close();
+	});
+
+	it("renders NOTHING about the queue when it is healthy", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = seed(store, "new", { tenant: "acme" });
+		seedCaptureRequest(store, findingId, "telemetry:acme-healthy-0001");
+
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			now: "2026-07-12T00:00:00Z",
+			captureRequests: { claimTtlMinutes: 60, maxPending: 20 },
+		});
+		expect(digest.captureQueue).not.toBeNull();
+		expect(digest.captureQueue?.atCap).toBe(false);
+		expect(digest.captureQueue?.stuck).toBe(0);
+		const md = renderDigestMarkdown(digest);
+		expect(md).not.toMatch(/capture queue/i);
+		store.close();
+	});
+
+	it("renders nothing about the queue when the tenant has no requests at all", () => {
+		const store = new LifecycleStore(":memory:");
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			captureRequests: { claimTtlMinutes: 60, maxPending: 20 },
+		});
+		expect(digest.captureQueue).toBeNull();
+		expect(renderDigestMarkdown(digest)).not.toMatch(/capture queue/i);
+		store.close();
+	});
+});

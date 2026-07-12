@@ -658,6 +658,340 @@ describe("LifecycleStore capture requests", () => {
 	});
 });
 
+describe("reclaimStaleClaims", () => {
+	const T0 = "2026-07-01T00:00:00Z";
+
+	it("returns a stale claim to pending, nulls claimed_at, KEEPS claimed_by, counts the reclaim", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		expect(store.claimCaptureRequest(row.id, "executor-1", T0)).toBe(true);
+
+		// 61 minutes later, with a 60-minute claim TTL.
+		const reclaimed = store.reclaimStaleClaims("2026-07-01T01:01:00Z", 60);
+		expect(reclaimed).toBe(1);
+
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("pending");
+		expect(after.claimedAt).toBeNull();
+		expect(after.claimedBy).toBe("executor-1"); // the breadcrumb survives
+		expect(after.reclaimCount).toBe(1);
+		store.close();
+	});
+
+	it("leaves a FRESH claim alone", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", T0);
+
+		// 59 minutes later — inside the 60-minute TTL.
+		expect(store.reclaimStaleClaims("2026-07-01T00:59:00Z", 60)).toBe(0);
+
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("claimed");
+		expect(after.claimedAt).not.toBeNull();
+		expect(after.reclaimCount).toBe(0);
+		store.close();
+	});
+
+	it("reclaims the same row again after it is re-claimed and goes stale a second time, incrementing reclaim_count", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", T0);
+
+		expect(store.reclaimStaleClaims("2026-07-01T01:01:00Z", 60)).toBe(1);
+
+		// A second executor picks up the reclaimed row, then also dies.
+		store.claimCaptureRequest(row.id, "executor-2", "2026-07-01T01:05:00Z");
+		expect(store.reclaimStaleClaims("2026-07-01T02:06:00Z", 60)).toBe(1);
+
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("pending");
+		expect(after.claimedBy).toBe("executor-2");
+		expect(after.reclaimCount).toBe(2);
+		store.close();
+	});
+
+	it("leaves a pending row (never claimed) alone", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		// Left pending, never claimed — excluded by `claimed_at IS NOT NULL`,
+		// not by the `status = 'claimed'` guard exercised below.
+		expect(store.reclaimStaleClaims("2026-08-01T00:00:00Z", 60)).toBe(0);
+		expect(store.listCaptureRequests()[0].status).toBe("pending");
+		store.close();
+	});
+
+	it("only touches claimed rows — fulfilled/expired/cancelled requests keep their status and reclaim_count, even though claimed_at is still set and stale", () => {
+		const store = new LifecycleStore(":memory:");
+		const CLAIM_AT = "2026-07-01T00:00:00Z";
+		const SWEEP_AT = "2026-07-01T01:01:00Z"; // 61 min later, 60-min TTL
+
+		// Fulfilled: claimed, then fulfilled. fulfillMatchingCaptureRequests
+		// does not touch claimed_at, so it stays set on a terminal row.
+		const f1 = store.insertFinding(baseFinding());
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
+		);
+		const [fulfilledRow] = store.listCaptureRequests("t1", "pending");
+		store.claimCaptureRequest(fulfilledRow.id, "executor-1", CLAIM_AT);
+		store.fulfillMatchingCaptureRequests(
+			"t1",
+			new Set(["abc123|codeunit|50100|postorder"]),
+			"profile-1",
+			"2026-07-01T00:30:00Z",
+		);
+
+		// Expired: claimed, then past its TTL. expireCaptureRequests does not
+		// touch claimed_at either.
+		const f2 = store.insertFinding(baseFinding({ fingerprint: "pattern:bbb" }));
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f2,
+				fingerprint: "telemetry:bbb",
+				methodName: "postshipment",
+				expiresAt: "2026-07-01T00:30:00Z",
+			}),
+		);
+		const [expiredRow] = store.listCaptureRequests("t1", "pending");
+		store.claimCaptureRequest(expiredRow.id, "executor-1", CLAIM_AT);
+		store.expireCaptureRequests("2026-07-01T00:30:00Z");
+
+		// Cancelled: claimed, then cancelled.
+		const f3 = store.insertFinding(baseFinding({ fingerprint: "pattern:ccc" }));
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f3,
+				fingerprint: "telemetry:ccc",
+				methodName: "postinvoice",
+			}),
+		);
+		const [cancelledRow] = store.listCaptureRequests("t1", "pending");
+		store.claimCaptureRequest(cancelledRow.id, "executor-1", CLAIM_AT);
+		store.cancelCaptureRequest(cancelledRow.id);
+
+		// Sanity: all three rows are in a terminal state but still carry a
+		// stale claimed_at old enough to pass the TTL cutoff — if the guard
+		// were missing, the sweep below would resurrect them to pending.
+		const before = store.listCaptureRequests("t1");
+		expect(before.map((r) => r.status).sort()).toEqual(
+			["cancelled", "expired", "fulfilled"].sort(),
+		);
+		for (const row of before) {
+			expect(row.claimedAt).toBe(CLAIM_AT);
+		}
+
+		expect(store.reclaimStaleClaims(SWEEP_AT, 60)).toBe(0);
+
+		const after = store.listCaptureRequests("t1");
+		expect(after.find((r) => r.id === fulfilledRow.id)?.status).toBe(
+			"fulfilled",
+		);
+		expect(after.find((r) => r.id === expiredRow.id)?.status).toBe("expired");
+		expect(after.find((r) => r.id === cancelledRow.id)?.status).toBe(
+			"cancelled",
+		);
+		for (const row of after) {
+			expect(row.reclaimCount).toBe(0);
+		}
+		store.close();
+	});
+});
+
+describe("captureQueueHealth", () => {
+	const NOW = "2026-07-10T00:00:00Z";
+
+	it("reports depth, stuck claims with their holders, at-cap, oldest pending, and reclaims", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:acme-source" }),
+		);
+
+		// Two pending requests — one old (the oldest pending), one newer.
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-pending-old",
+				requestedAt: "2026-07-01T00:00:00Z",
+			}),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-pending-new",
+				requestedAt: "2026-07-09T00:00:00Z",
+			}),
+		);
+
+		// Claimed long ago by "dead-executor" — stuck (well past the 60-minute TTL).
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-stuck",
+			}),
+		);
+		const stuckRow = store
+			.listCaptureRequests("acme", "pending")
+			.find((r) => r.fingerprint === "telemetry:acme-stuck");
+		if (!stuckRow) throw new Error("seed: stuck row missing");
+		store.claimCaptureRequest(
+			stuckRow.id,
+			"dead-executor",
+			"2026-07-08T00:00:00Z",
+		);
+
+		// Claimed, reclaimed three times (three different executors each go
+		// stale in turn), then re-claimed just now by "live-executor" — the
+		// most-reclaimed row, and NOT stuck (its current claim is fresh).
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-reclaimed",
+			}),
+		);
+		const reclaimedRow = store
+			.listCaptureRequests("acme", "pending")
+			.find((r) => r.fingerprint === "telemetry:acme-reclaimed");
+		if (!reclaimedRow) throw new Error("seed: reclaimed row missing");
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"executor-a",
+			"2026-07-05T00:00:00Z",
+		);
+		store.reclaimStaleClaims("2026-07-05T01:01:00Z", 60);
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"executor-b",
+			"2026-07-06T00:00:00Z",
+		);
+		store.reclaimStaleClaims("2026-07-06T01:01:00Z", 60);
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"executor-c",
+			"2026-07-07T00:00:00Z",
+		);
+		store.reclaimStaleClaims("2026-07-07T01:01:00Z", 60);
+		store.claimCaptureRequest(
+			reclaimedRow.id,
+			"live-executor",
+			"2026-07-09T23:55:00Z",
+		);
+
+		const [health] = store.captureQueueHealth(NOW, 60, 4, "acme");
+
+		expect(health.tenant).toBe("acme");
+		expect(health.pending).toBe(2);
+		expect(health.claimed).toBe(2);
+		expect(health.stuck).toBe(1);
+		expect(health.stuckHolders).toEqual(["dead-executor"]);
+		expect(health.atCap).toBe(true); // 2 pending + 2 claimed == maxPending 4
+		expect(health.maxPending).toBe(4);
+		expect(health.oldestPendingAt).toBe("2026-07-01T00:00:00Z");
+		expect(health.reclaimedEver).toBe(1);
+		expect(health.mostReclaimed).toEqual({
+			id: expect.any(Number),
+			reclaimCount: 3,
+		});
+		store.close();
+	});
+
+	it("a healthy queue reports atCap false, no stuck claims, no reclaims", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:acme-healthy" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-healthy",
+			}),
+		);
+
+		const [health] = store.captureQueueHealth(NOW, 60, 20, "acme");
+		expect(health.atCap).toBe(false);
+		expect(health.stuck).toBe(0);
+		expect(health.stuckHolders).toEqual([]);
+		expect(health.reclaimedEver).toBe(0);
+		expect(health.mostReclaimed).toBeNull();
+		store.close();
+	});
+
+	it("does not report atCap for pending/claimed rows that have already expired but haven't been swept yet", () => {
+		// processCaptureTriggers always calls expireCaptureRequests(now) BEFORE
+		// consulting countActiveCaptureRequests against maxPending. So a request
+		// whose expires_at is already past NOW will be reaped by the very next
+		// trigger scan before maxPending is ever checked — captureQueueHealth
+		// must not count it as occupying a queue slot, or atCap lies about the
+		// state processCaptureTriggers is actually about to be in.
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:acme-expired" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-expired-1",
+				requestedAt: "2026-07-01T00:00:00Z",
+				expiresAt: "2026-07-08T00:00:00Z", // already before NOW
+			}),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-expired-2",
+				requestedAt: "2026-07-01T00:00:00Z",
+				expiresAt: "2026-07-08T00:00:00Z", // already before NOW
+			}),
+		);
+
+		const [health] = store.captureQueueHealth(NOW, 60, 2, "acme");
+		expect(health.pending).toBe(2);
+		expect(health.atCap).toBe(false);
+		store.close();
+	});
+
+	it("returns one entry per tenant when no tenant is given", () => {
+		const store = new LifecycleStore(":memory:");
+		const acmeFindingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:multi-acme" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId: acmeFindingId,
+				fingerprint: "telemetry:multi-acme",
+			}),
+		);
+		const betaFindingId = store.insertFinding(
+			baseFinding({ tenant: "beta", fingerprint: "pattern:multi-beta" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "beta",
+				findingId: betaFindingId,
+				fingerprint: "telemetry:multi-beta",
+			}),
+		);
+
+		const all = store.captureQueueHealth(NOW, 60, 20);
+		expect(all.map((h) => h.tenant)).toEqual(["acme", "beta"]);
+		store.close();
+	});
+});
+
 describe("stale algo-version findings", () => {
 	function seed(
 		store: LifecycleStore,

@@ -132,6 +132,52 @@ function seedQualifyingTelemetryFinding(
 	store.close();
 }
 
+/**
+ * Occupy a tenant's entire capture-request capacity with one active
+ * (pending) request against its own finding — the "queue already full"
+ * half of the starvation fixture. Paired with `maxPending: 1` in config and
+ * one MORE qualifying finding (seedQualifyingTelemetryFinding), this
+ * reproduces the exact state where an executor has died: nothing can be
+ * created (already at cap) and nothing is due to expire (expiresAt is far in
+ * the future), yet a qualifying finding is skipped every scan.
+ *
+ * `expiresAt` is derived from the real clock at seed time (not a hardcoded
+ * calendar date) — `processCaptureTriggers` compares it against
+ * `new Date().toISOString()` with no test hook to override "now", so a fixed
+ * future date would eventually become the past and the occupant would start
+ * expiring, quietly turning this into a non-starvation fixture. A 50-year
+ * offset keeps it in the future regardless of when the suite runs.
+ */
+const OCCUPANT_FP = "telemetry:sync000000000cap0";
+function seedTenantAtCaptureCapacity(dbPath: string): void {
+	const store = new LifecycleStore(dbPath);
+	const findingId = store.insertFinding(
+		finding({
+			fingerprint: OCCUPANT_FP,
+			source: "telemetry",
+			patternId: "telemetry-rt0018",
+			routineKey: "abc123|Codeunit|50100|postvoid",
+		}),
+	);
+	const farFutureExpiresAt = new Date(
+		Date.now() + 50 * 365 * 24 * 60 * 60 * 1000,
+	).toISOString();
+	store.createCaptureRequest({
+		tenant: TENANT,
+		fingerprint: OCCUPANT_FP,
+		findingId,
+		appId: "abc123",
+		appName: null,
+		objectType: "Codeunit",
+		objectId: 50100,
+		methodName: "postvoid",
+		reason: "pre-seeded occupant filling maxPending cap",
+		requestedAt: "2026-07-01T00:00:00Z",
+		expiresAt: farFutureExpiresAt,
+	});
+	store.close();
+}
+
 /** Seed a dead-lettered outbox row directly (no live drain needed). */
 const DEAD_FP = "pattern:sync0000000000dead";
 function seedDeadLetter(dbPath: string): void {
@@ -457,7 +503,69 @@ describe("lifecycle sync — security boundary", () => {
 		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
 		const summary = JSON.parse(output);
 		expect(summary.captureRequests.created).toBe(1);
+		expect(summary.captureRequests.reclaimed).toBe(0);
 		expect(summary.captureRequests.skippedMaxPending).toBe(1);
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
+		store.close();
+	});
+
+	it("sync warns when findings were skipped at the maxPending cap (the queue is jammed)", async () => {
+		// Seed: tenant at maxPending with active requests, plus one MORE qualifying
+		// finding that will be skipped. No new requests can be created and nothing
+		// is due to expire — created == 0 && expired == 0 && skippedMaxPending > 0.
+		seedTenantAtCaptureCapacity(dbPath);
+		seedQualifyingTelemetryFinding(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({ captureRequests: { maxPending: 1 } }),
+		);
+
+		logSpy.mockClear();
+		await runSync(["sync"]);
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		// Pins the starvation state itself (created == 0, expired == 0,
+		// reclaimed == 0), not just the warning it produces — without this, the
+		// fixture could silently decay (e.g. the occupant's expiresAt lapsing)
+		// into a scenario where `expired` is nonzero and the OLD guard
+		// (`created > 0 || expired > 0`) would have printed the counts line too,
+		// leaving this test green for the wrong reason.
+		expect(printed).toContain(
+			"Capture requests: 0 created, 0 expired, 0 reclaimed.",
+		);
+		expect(printed).toMatch(/NOT requested/i);
+		expect(printed).toContain("maxPending");
+		expect(printed).toContain("captures health");
+	});
+
+	it("sync does NOT warn when the full queue holds only findings already requested (nothing starved)", async () => {
+		// A single qualifying finding, cap of 1. First sync files the request
+		// and fills the cap with that SAME finding's own row — not a jam, just
+		// a queue of one doing exactly what it should.
+		seedQualifyingTelemetryFinding(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({ captureRequests: { maxPending: 1 } }),
+		);
+
+		await runSync(["sync"]);
+		const firstRun = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(firstRun).toContain(
+			"Capture requests: 1 created, 0 expired, 0 reclaimed.",
+		);
+		expect(firstRun).not.toMatch(/NOT requested/i);
+
+		// Second sync, same instant: the tenant is now at the cap, but the only
+		// active request belongs to the very finding still being scanned —
+		// nothing is starved. This must stay quiet, not cry wolf.
+		logSpy.mockClear();
+		await runSync(["sync"]);
+		const secondRun = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(secondRun).not.toMatch(/NOT requested/i);
+		expect(secondRun).not.toContain("WARNING");
+		expect(secondRun).not.toContain("maxPending cap");
 
 		const store = new LifecycleStore(dbPath);
 		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
