@@ -89,10 +89,11 @@ describe("schema v2", () => {
 			expect(store.getActiveFinding("t1", "pattern:v1row")).not.toBeNull();
 
 			// The pre-existing event's backfilled sink_processed reads back as 0
-			// (an integer), not NULL — a NULL would fail the "= 0" comparison in
-			// listUnprocessedEvents' WHERE clause and silently vanish from the
-			// list instead of erroring, so both checks matter.
-			const afterUpgrade = store.listUnprocessedEvents();
+			// (an integer), not NULL — that column is no longer read by
+			// listUnprocessedEvents (v6 replaced it with a per-sink watermark
+			// table), but it stays in the schema as migration v6's seed source,
+			// so its backfilled value still matters.
+			const afterUpgrade = store.listUnprocessedEvents("github");
 			expect(afterUpgrade.map((e) => e.event)).toContain("pre-migration-event");
 			const rawBackfill = store.db
 				.query<{ sink_processed: number }, [string]>(
@@ -101,7 +102,7 @@ describe("schema v2", () => {
 				.get("pre-migration-event");
 			expect(rawBackfill?.sink_processed).toBe(0);
 
-			// New column also defaults to unprocessed for rows inserted after migration.
+			// A sink with no watermark row sees rows inserted after migration too.
 			store.logEvent({
 				findingId: store.getActiveFinding("t1", "pattern:v1row")?.id ?? -1,
 				event: "seen-normal",
@@ -109,7 +110,7 @@ describe("schema v2", () => {
 				toState: "open",
 				at: "2026-07-01T00:00:00Z",
 			});
-			expect(store.listUnprocessedEvents()).toHaveLength(2);
+			expect(store.listUnprocessedEvents("github")).toHaveLength(2);
 			store.close();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -232,7 +233,7 @@ describe("outbox methods", () => {
 });
 
 describe("event scanning", () => {
-	it("listUnprocessedEvents returns oldest-first and markEventsProcessed clears them", () => {
+	it("listUnprocessedEvents returns oldest-first and advanceSinkProgress clears them", () => {
 		const store = new LifecycleStore(":memory:");
 		const id = store.insertFinding(finding("pattern:a"));
 		for (const event of ["first-seen", "seen-regressed"]) {
@@ -244,13 +245,13 @@ describe("event scanning", () => {
 				at: "2026-07-01T00:00:00Z",
 			});
 		}
-		const events = store.listUnprocessedEvents();
+		const events = store.listUnprocessedEvents("github");
 		expect(events.map((e) => e.event)).toEqual([
 			"first-seen",
 			"seen-regressed",
 		]);
-		store.markEventsProcessed(events.map((e) => e.id));
-		expect(store.listUnprocessedEvents()).toHaveLength(0);
+		store.advanceSinkProgress("github", events[events.length - 1].id);
+		expect(store.listUnprocessedEvents("github")).toHaveLength(0);
 		store.close();
 	});
 });

@@ -146,7 +146,7 @@ describe("processEventsForSinks — auto-file", () => {
 		const report = processEventsForSinks(store, config(), NOW);
 		expect(report.enqueued).toBe(0);
 		expect(report.processed).toBeGreaterThan(0);
-		expect(store.listUnprocessedEvents()).toHaveLength(0);
+		expect(store.listUnprocessedEvents("github")).toHaveLength(0);
 		store.close();
 	});
 
@@ -296,7 +296,7 @@ describe("processEventsForSinks — comments and close", () => {
 		const id = seedFinding(store);
 		withMapping(store);
 		seedEvent(store, id, "filed-fresh");
-		const [event] = store.listUnprocessedEvents();
+		const [event] = store.listUnprocessedEvents("github");
 		expect(processEventsForSinks(store, config(), NOW).enqueued).toBe(1);
 		const rows = store.listPendingOutbox("github", "comment-recurred");
 		expect(rows).toHaveLength(1);
@@ -323,7 +323,7 @@ describe("processEventsForSinks — comments and close", () => {
 		const id = seedFinding(store);
 		withMapping(store);
 		seedEvent(store, id, "filed-fresh");
-		const [event] = store.listUnprocessedEvents();
+		const [event] = store.listUnprocessedEvents("github");
 		const report = processEventsForSinks(
 			store,
 			config({ reopenOnRecurrence: true }),
@@ -402,7 +402,7 @@ describe("processEventsForSinks — comments and close", () => {
 		expect(report.enqueued).toBe(0);
 		expect(report.skippedMigration).toBe(15);
 		expect(report.processed).toBe(15);
-		expect(store.listUnprocessedEvents()).toHaveLength(0);
+		expect(store.listUnprocessedEvents("github")).toHaveLength(0);
 		expect(store.listPendingOutbox("github")).toHaveLength(0);
 		store.close();
 	});
@@ -417,7 +417,7 @@ describe("processEventsForSinks — comments and close", () => {
 			NOW,
 		);
 		expect(report.processed).toBe(0);
-		expect(store.listUnprocessedEvents()).toHaveLength(1);
+		expect(store.listUnprocessedEvents("github")).toHaveLength(1);
 		store.close();
 	});
 });
@@ -487,7 +487,7 @@ describe("processEventsForSinks — golden snapshot (D5, github backward-compat)
 		seedEvent(store, recurredId, "filed-fresh");
 
 		const eventByFinding = new Map(
-			store.listUnprocessedEvents().map((e) => [e.findingId, e]),
+			store.listUnprocessedEvents("github").map((e) => [e.findingId, e]),
 		);
 		const createEvent = eventByFinding.get(createId);
 		const regressedEvent = eventByFinding.get(regressedId);
@@ -673,8 +673,9 @@ describe("processEventsForSinks — golden snapshot (D5, github backward-compat)
 /**
  * Task 2 step 3 — new multi-sink behavior: both sink blocks enabled, each
  * evaluated with its OWN SinkTriggerConfig, fanned out from a single scan
- * that stays one transaction (markEventsProcessed fires once regardless of
- * how many sinks are enabled).
+ * that stays one transaction (each enabled sink's own watermark advances
+ * exactly once per scan, and TriggerReport.processed counts distinct events,
+ * not event-sink pairs).
  */
 describe("processEventsForSinks — multi-sink fan-out", () => {
 	function withMapping(
@@ -784,7 +785,7 @@ describe("processEventsForSinks — multi-sink fan-out", () => {
 		store.close();
 	});
 
-	it("the whole scan stays one transaction: markEventsProcessed counts events, not event-sink pairs", () => {
+	it("the whole scan stays one transaction: each enabled sink's watermark advances, processed counts distinct events", () => {
 		const store = new LifecycleStore(":memory:");
 		const id = seedFinding(store);
 		seedEvent(store, id, "seen-normal");
@@ -793,7 +794,8 @@ describe("processEventsForSinks — multi-sink fan-out", () => {
 		const report = processEventsForSinks(store, cfg, NOW);
 		expect(report.processed).toBe(1); // one event, not one per enabled sink
 		expect(report.enqueued).toBe(0);
-		expect(store.listUnprocessedEvents()).toHaveLength(0);
+		expect(store.listUnprocessedEvents("github")).toHaveLength(0);
+		expect(store.listUnprocessedEvents("azureDevOps")).toHaveLength(0);
 		store.close();
 	});
 

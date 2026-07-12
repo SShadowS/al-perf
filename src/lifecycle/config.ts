@@ -76,4 +76,4 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 };
 
 /** Current lifecycle SQLite schema version (PRAGMA user_version target). See store.ts LIFECYCLE_MIGRATIONS. */
-export const LIFECYCLE_SCHEMA_VERSION = 5;
+export const LIFECYCLE_SCHEMA_VERSION = 6;
