@@ -35,6 +35,7 @@ import {
 	applyIdentityUpgrades,
 	type EvaluationOutcome,
 	evaluateRun,
+	staleAlgoRemediation,
 } from "../../lifecycle/evaluate.js";
 import { FINGERPRINT_ALGO_VERSION } from "../../lifecycle/fingerprint.js";
 import { createAzureDevOpsSink } from "../../lifecycle/sinks/azuredevops.js";
@@ -867,15 +868,19 @@ export function createLifecycleCommand(): Command {
 				// naming the count, the versions, and the remedy — so an operator
 				// polling status learns lifecycle tracking is doing nothing for
 				// this tenant instead of just seeing a quiet, possibly-empty list.
-				const staleForTenant = store
-					.listStaleAlgoTenants(FINGERPRINT_ALGO_VERSION)
-					.find((t) => t.tenant === tenant);
-				const staleWarning = staleForTenant
-					? `Warning: tenant '${tenant}' is blocked by the stale-algo guard — ` +
-						`${staleForTenant.count} active finding(s) fingerprinted by algorithm ` +
-						`v${staleForTenant.versions.join("/v")}, current v${FINGERPRINT_ALGO_VERSION}. ` +
-						`Remedy: lifecycle maintain --purge-stale-fingerprints --tenant ${tenant}`
-					: null;
+				// countStaleAlgoFindings is already tenant-scoped — no need to list
+				// every tenant and search for this one.
+				const staleForTenant = store.countStaleAlgoFindings(
+					tenant,
+					FINGERPRINT_ALGO_VERSION,
+				);
+				const staleWarning =
+					staleForTenant.count > 0
+						? `Warning: tenant '${tenant}' is blocked by the stale-algo guard — ` +
+							`${staleForTenant.count} active finding(s) fingerprinted by algorithm ` +
+							`v${staleForTenant.versions.join("/v")}, current v${FINGERPRINT_ALGO_VERSION}. ` +
+							`Remedy: ${staleAlgoRemediation(tenant)}`
+						: null;
 
 				const rows = store.listFindings({
 					tenant,

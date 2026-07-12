@@ -440,7 +440,7 @@ export async function handleIngest(
 				lifecycleBlocked = {
 					status: "blocked",
 					reason: "stale-algo",
-					remediation: `lifecycle maintain --purge-stale-fingerprints --tenant ${err.tenant}`,
+					remediation: err.remediation,
 				};
 			}
 			console.error(

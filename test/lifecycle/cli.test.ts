@@ -2118,15 +2118,24 @@ describe("lifecycle status — stale-algo guard visibility", () => {
 
 		await run(["status", "--tenant", "acme"]);
 
-		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		const calls = logSpy.mock.calls.map((c) => String(c[0]));
+		const printed = calls.join("\n");
 		expect(printed).toContain("acme");
 		expect(printed).toContain(`v${FINGERPRINT_ALGO_VERSION + 1}`);
 		expect(printed).toContain(
 			`lifecycle maintain --purge-stale-fingerprints --tenant acme`,
 		);
-		// stdout must still be untouched by the warning — table format prints
-		// everything via console.log (which this test spies separately).
-		expect(stdoutSpy.mock.calls).toHaveLength(0);
+		// Pin "above the table" (the test's own claim): the banner call must
+		// precede the table's console.log call, not just land somewhere in the
+		// combined output. table format never touches process.stdout directly
+		// (both banner and table go through console.log), so a stdout-call-count
+		// assertion here would hold even if the banner were dropped entirely —
+		// this ordering check on the console.log capture is what actually fails
+		// if the banner is misrouted or omitted.
+		const bannerIndex = calls.findIndex((c) => c.includes("acme"));
+		const tableIndex = calls.findIndex((c) => c.includes("Stale finding"));
+		expect(bannerIndex).toBeGreaterThanOrEqual(0);
+		expect(tableIndex).toBeGreaterThan(bannerIndex);
 	});
 
 	it("--format json: warning goes to stderr; stdout stays a bare parseable JSON array", async () => {

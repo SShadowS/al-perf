@@ -152,6 +152,10 @@ describe("ingest lifecycle hook (AL_PERF_LIFECYCLE)", () => {
 		expect(res.status).toBe(202);
 		const body = (await res.json()) as { status: string };
 		expect(body.status).toBe("stored");
+		// A generic evaluation error must NOT be mistaken for the stale-algo
+		// guard — the "lifecycle" key is only ever added for a caught
+		// StaleAlgoVersionError (see the ingest handler's catch block).
+		expect(body).not.toHaveProperty("lifecycle");
 	});
 
 	it("AL_PERF_LIFECYCLE=1 with a malformed AL_PERF_LIFECYCLE_CONFIG: fails before the keyversion marker, not swallowed like a runtime evaluation error", async () => {

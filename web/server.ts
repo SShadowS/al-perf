@@ -980,6 +980,17 @@ export const server = Bun.serve({
 			}
 		}
 
+		// ACCEPTED RISK (knowingly left as-is, not a fix-later TODO): this route
+		// has no authentication — no bearer check, no admin gate — unlike
+		// /api/record-next-batch below, which IS admin-gated even though it's
+		// dev-only. Before this stale-algo visibility work, that meant no tenant
+		// data leaked here at all. Now `staleAlgoTenants` publishes customer
+		// tenant codes to anyone who can reach this endpoint. That has been
+		// consciously accepted for now — do NOT quietly "fix" it by gating or
+		// aggregating without discussing it first. But before this server is
+		// ever reachable from an untrusted network, this route MUST be either
+		// gated behind an admin bearer token or reduced to aggregate counts
+		// (e.g. total stale-algo tenant count, no names).
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
 			const aiEnabled =
 				process.env.AI_DISABLED !== "1" && !!process.env.ANTHROPIC_API_KEY;

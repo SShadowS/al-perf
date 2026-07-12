@@ -292,6 +292,15 @@ export function applyIdentityUpgrades(
 }
 
 /**
+ * The operator remedy for a StaleAlgoVersionError, built once so the error
+ * message, the ingest handler, and the CLI status warning can never drift
+ * apart into three hand-written copies of the same command line.
+ */
+export function staleAlgoRemediation(tenant: string): string {
+	return `lifecycle maintain --purge-stale-fingerprints --tenant ${tenant}`;
+}
+
+/**
  * Thrown when the store holds active findings whose fingerprints were minted by
  * a different FINGERPRINT_ALGO_VERSION than the one now in force. Their history
  * cannot be carried across the change — the fingerprints simply no longer match
@@ -305,6 +314,7 @@ export class StaleAlgoVersionError extends Error {
 	readonly currentVersion: number;
 	readonly staleVersions: number[];
 	readonly count: number;
+	readonly remediation: string;
 
 	constructor(
 		tenant: string,
@@ -312,17 +322,19 @@ export class StaleAlgoVersionError extends Error {
 		staleVersions: number[],
 		count: number,
 	) {
+		const remediation = staleAlgoRemediation(tenant);
 		super(
 			`${count} active finding(s) for tenant '${tenant}' were fingerprinted by algorithm ` +
 				`v${staleVersions.join("/v")}, but v${currentVersion} is now in force. Their history ` +
 				`cannot be carried across a fingerprint algorithm change. Discard them with:\n` +
-				`  lifecycle maintain --purge-stale-fingerprints --tenant ${tenant}`,
+				`  ${remediation}`,
 		);
 		this.name = "StaleAlgoVersionError";
 		this.tenant = tenant;
 		this.currentVersion = currentVersion;
 		this.staleVersions = staleVersions;
 		this.count = count;
+		this.remediation = remediation;
 	}
 }
 
