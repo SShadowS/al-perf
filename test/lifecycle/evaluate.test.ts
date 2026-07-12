@@ -7,8 +7,13 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { evaluateRun, type RunMetadata } from "../../src/lifecycle/evaluate.js";
-import { LifecycleStore } from "../../src/lifecycle/store.js";
+import {
+	evaluateRun,
+	type RunMetadata,
+	StaleAlgoVersionError,
+} from "../../src/lifecycle/evaluate.js";
+import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
+import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 import type { AnalysisResult } from "../../src/output/types.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
 import type { DetectedPattern } from "../../src/types/patterns.js";
@@ -751,6 +756,80 @@ describe("evaluateRun — tenant normalization (debt-closure plan D1)", () => {
 		expect(() =>
 			evaluateRun(store, makeResult(), makeRun({ tenant: "   " }), CFG),
 		).toThrow(/tenant/);
+		store.close();
+	});
+});
+
+describe("evaluateRun — stale algo-version guard", () => {
+	it("refuses to run when active findings carry a different algo version", () => {
+		const store = new LifecycleStore(":memory:");
+		store.insertFinding({
+			tenant: "acme",
+			fingerprint: "pattern:deadbeefdeadbeef",
+			algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Stale finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+
+		expect(() =>
+			evaluateRun(store, makeResult(), makeRun({ tenant: "acme" })),
+		).toThrow(StaleAlgoVersionError);
+
+		try {
+			evaluateRun(store, makeResult(), makeRun({ tenant: "acme" }));
+		} catch (err) {
+			const e = err as StaleAlgoVersionError;
+			expect(e.count).toBe(1);
+			expect(e.currentVersion).toBe(FINGERPRINT_ALGO_VERSION);
+			expect(e.staleVersions).toEqual([FINGERPRINT_ALGO_VERSION + 1]);
+			expect(e.message).toContain("--purge-stale-fingerprints");
+			expect(e.message).toContain("--tenant acme");
+		}
+		store.close();
+	});
+
+	it("does not fire when every finding is at the current version", () => {
+		const store = new LifecycleStore(":memory:");
+		expect(() =>
+			evaluateRun(store, makeResult(), makeRun({ tenant: "acme" })),
+		).not.toThrow();
+		store.close();
+	});
+
+	it("is tenant-scoped: another tenant's stale rows do not block this one", () => {
+		const store = new LifecycleStore(":memory:");
+		store.insertFinding({
+			tenant: "other",
+			fingerprint: "pattern:deadbeefdeadbeef",
+			algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Stale finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+		expect(() =>
+			evaluateRun(store, makeResult(), makeRun({ tenant: "acme" })),
+		).not.toThrow();
 		store.close();
 	});
 });

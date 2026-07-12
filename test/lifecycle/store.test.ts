@@ -657,3 +657,87 @@ describe("LifecycleStore capture requests", () => {
 		store.close();
 	});
 });
+
+describe("stale algo-version findings", () => {
+	function seed(
+		store: LifecycleStore,
+		tenant: string,
+		fp: string,
+		algo: number,
+	) {
+		return store.insertFinding({
+			tenant,
+			fingerprint: fp,
+			algoVersion: algo,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: `Finding ${fp}`,
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+	}
+
+	it("counts only active findings at a different algo version", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "acme", "pattern:aaaaaaaaaaaaaaa1", 1);
+		seed(store, "acme", "pattern:aaaaaaaaaaaaaaa2", 1);
+		seed(store, "acme", "pattern:aaaaaaaaaaaaaaa3", 2);
+		const stale = store.countStaleAlgoFindings("acme", 2);
+		expect(stale.count).toBe(2);
+		expect(stale.versions).toEqual([1]);
+		store.close();
+	});
+
+	it("purge is tenant-scoped and deletes every state", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "acme", "pattern:bbbbbbbbbbbbbbb1", 1);
+		seed(store, "other", "pattern:bbbbbbbbbbbbbbb2", 1);
+		const deleted = store.purgeStaleAlgoFindings("acme", 2);
+		expect(deleted).toBe(1);
+		expect(store.listFindings({ tenant: "acme" }).length).toBe(0);
+		expect(store.listFindings({ tenant: "other" }).length).toBe(1);
+		store.close();
+	});
+
+	it("purge removes dependent rows so no orphans survive", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seed(store, "acme", "pattern:ccccccccccccccc1", 1);
+		store.putIssueMapping({
+			tenant: "acme",
+			sink: "github",
+			fingerprint: "pattern:ccccccccccccccc1",
+			externalId: "42",
+			createdAt: "2026-07-01T00:00:00Z",
+		});
+		store.createCaptureRequest({
+			tenant: "acme",
+			fingerprint: "pattern:ccccccccccccccc1",
+			findingId: id,
+			appId: "",
+			appName: null,
+			objectType: "codeunit",
+			objectId: 50000,
+			methodName: "processline",
+			reason: "test",
+			requestedAt: "2026-07-01T00:00:00Z",
+			expiresAt: "2026-07-15T00:00:00Z",
+		});
+
+		store.purgeStaleAlgoFindings("acme", 2);
+
+		expect(
+			store.getIssueMapping("acme", "github", "pattern:ccccccccccccccc1"),
+		).toBeNull();
+		const violations = store.db.query("PRAGMA foreign_key_check").all();
+		expect(violations).toEqual([]);
+		store.close();
+	});
+});

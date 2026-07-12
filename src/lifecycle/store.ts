@@ -733,6 +733,80 @@ export class LifecycleStore {
 		return row ? this.rowToFinding(row) : null;
 	}
 
+	/**
+	 * Active (non-closed) findings whose fingerprint was minted by a different
+	 * algorithm version than the one now in force. Non-empty means an algo bump
+	 * happened without a purge: every live problem is about to re-file as
+	 * first-seen and every row here is about to strand in `resolved` forever.
+	 * evaluateRun refuses to run while this is non-empty.
+	 */
+	countStaleAlgoFindings(
+		tenant: string,
+		currentVersion: number,
+	): { count: number; versions: number[] } {
+		const rows = this.db
+			.query<{ algo_version: number; n: number }, [string, number]>(
+				`SELECT algo_version, COUNT(*) AS n FROM findings
+				 WHERE tenant = ? AND state != 'closed' AND algo_version != ?
+				 GROUP BY algo_version ORDER BY algo_version`,
+			)
+			.all(tenant, currentVersion);
+		return {
+			count: rows.reduce((sum, r) => sum + r.n, 0),
+			versions: rows.map((r) => r.algo_version),
+		};
+	}
+
+	/**
+	 * Delete every finding for `tenant` minted at a different algorithm version,
+	 * in any state, along with its dependent rows. This is the escape hatch the
+	 * stale-algo guard points at: history cannot be carried across a fingerprint
+	 * algorithm change, so it is discarded deliberately rather than left to rot
+	 * as un-closable `resolved` rows. Returns the number of findings deleted.
+	 */
+	purgeStaleAlgoFindings(tenant: string, currentVersion: number): number {
+		const purge = this.db.transaction((): number => {
+			const doomed = this.db
+				.query<{ id: number; fingerprint: string }, [string, number]>(
+					"SELECT id, fingerprint FROM findings WHERE tenant = ? AND algo_version != ?",
+				)
+				.all(tenant, currentVersion);
+			if (doomed.length === 0) return 0;
+
+			const ids = doomed.map((r) => r.id);
+			const idList = ids.join(",");
+			const fpPlaceholders = doomed.map(() => "?").join(",");
+			const fingerprints = doomed.map((r) => r.fingerprint);
+
+			// Children first, then the findings themselves. `supersedes` is a
+			// self-reference, so any surviving row pointing at a doomed one must be
+			// detached before the delete or foreign_key_check trips.
+			this.db.run(`DELETE FROM outbox WHERE finding_id IN (${idList})`);
+			this.db.run(
+				`DELETE FROM capture_requests WHERE finding_id IN (${idList})`,
+			);
+			this.db.run(`DELETE FROM occurrences WHERE finding_id IN (${idList})`);
+			this.db.run(`DELETE FROM finding_events WHERE finding_id IN (${idList})`);
+			this.db.run(
+				`DELETE FROM sink_issue_map WHERE tenant = ? AND fingerprint IN (${fpPlaceholders})`,
+				[tenant, ...fingerprints],
+			);
+			this.db.run(
+				`DELETE FROM fingerprint_migrations
+				 WHERE tenant = ?
+				   AND (from_fingerprint IN (${fpPlaceholders})
+				     OR to_fingerprint IN (${fpPlaceholders}))`,
+				[tenant, ...fingerprints, ...fingerprints],
+			);
+			this.db.run(
+				`UPDATE findings SET supersedes = NULL WHERE supersedes IN (${idList})`,
+			);
+			this.db.run(`DELETE FROM findings WHERE id IN (${idList})`);
+			return doomed.length;
+		});
+		return purge();
+	}
+
 	getFinding(id: number): FindingRow | null {
 		const row = this.db
 			.query<Record<string, unknown>, [number]>(

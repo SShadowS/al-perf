@@ -22,6 +22,7 @@ import {
 	DEFAULT_DB_PATH,
 } from "../../src/cli/commands/lifecycle.js";
 import { DEFAULT_API_KEY_ENV } from "../../src/lifecycle/appinsights.js";
+import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
 import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 
 /**
@@ -2318,5 +2319,65 @@ describe("lifecycle captures", () => {
 		const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
 		expect(errText).toContain("999999");
 		expect(errText.toLowerCase()).toContain("no capture request");
+	});
+});
+
+describe("lifecycle maintain --purge-stale-fingerprints", () => {
+	let dir: string;
+	let dbPath: string;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-purge-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(async () => {
+		logSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	it("purges the tenant's stale-algo findings and reports the count", async () => {
+		const store = new LifecycleStore(dbPath);
+		store.insertFinding({
+			tenant: "acme",
+			fingerprint: "pattern:1111111111111111",
+			algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Stale",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+		store.close();
+
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(
+			[
+				"--db",
+				dbPath,
+				"maintain",
+				"--purge-stale-fingerprints",
+				"--tenant",
+				"ACME",
+			],
+			{ from: "user" },
+		);
+
+		const after = new LifecycleStore(dbPath);
+		expect(after.listFindings({ tenant: "acme" }).length).toBe(0);
+		after.close();
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).toContain("1");
 	});
 });
