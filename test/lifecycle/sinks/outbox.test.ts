@@ -5,7 +5,6 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { sha256Hex16 } from "../../../src/lifecycle/fingerprint.js";
 import {
 	backoffAt,
 	drainOutbox,
@@ -294,10 +293,12 @@ describe("drainOutbox", () => {
 			});
 		}
 
-		await drainOutbox(store, fakeAdapter([{ ok: true, externalId: "1" }]), {
-			...RUNTIME,
-			maxPerDrain: 1,
-		});
+		await drainOutbox(
+			store,
+			fakeAdapter([{ ok: true, externalId: "1" }]),
+			{ ...RUNTIME, maxPerDrain: 1 },
+			{ now: NOW, sleep: async () => {} },
+		);
 
 		const epic = store.db
 			.query<{ dedupe_key: string }, []>(
@@ -309,10 +310,53 @@ describe("drainOutbox", () => {
 		store.close();
 	});
 
-	it("the epic dedupe key is a property of the row set, not its order", () => {
-		const key = (ids: number[]) =>
-			`github:epic:t1:${sha256Hex16(ids.sort((a, b) => a - b).map(String))}`;
-		expect(key([3, 1, 2])).toBe(key([1, 2, 3]));
-		expect(key([1, 2, 3])).not.toBe(key([1, 2, 4]));
+	it("the epic dedupe key is a property of the row set, not its order", async () => {
+		function epicDedupeKey(store: LifecycleStore): string {
+			const row = store.db
+				.query<{ dedupe_key: string }, []>(
+					"SELECT dedupe_key FROM outbox WHERE kind = 'create-epic'",
+				)
+				.get();
+			if (!row) throw new Error("expected a create-epic row");
+			return row.dedupe_key;
+		}
+
+		// Store A: natural row order out of listPendingOutbox.
+		const storeA = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 5; n++) enqueueCreate(storeA, n);
+		await drainOutbox(
+			storeA,
+			fakeAdapter([{ ok: true, externalId: "1" }]),
+			RUNTIME,
+			{
+				now: NOW,
+				sleep: async () => {},
+			},
+		);
+		const keyNaturalOrder = epicDedupeKey(storeA);
+		storeA.close();
+
+		// Store B: identical rows, but listPendingOutbox is wrapped to hand
+		// collapseCreates the SAME rows in reverse. If collapseCreates ever
+		// drops its `.sort(...)` before hashing, this key diverges from
+		// storeA's — the row-SET is identical, only the scan order differs.
+		const storeB = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 5; n++) enqueueCreate(storeB, n);
+		const originalListPendingOutbox = storeB.listPendingOutbox.bind(storeB);
+		storeB.listPendingOutbox = (sink: string, kind?: string) =>
+			originalListPendingOutbox(sink, kind).reverse();
+		await drainOutbox(
+			storeB,
+			fakeAdapter([{ ok: true, externalId: "1" }]),
+			RUNTIME,
+			{
+				now: NOW,
+				sleep: async () => {},
+			},
+		);
+		const keyReversedOrder = epicDedupeKey(storeB);
+		storeB.close();
+
+		expect(keyReversedOrder).toBe(keyNaturalOrder);
 	});
 });
