@@ -230,7 +230,7 @@ export function parseFingerprint(s: string): FindingFingerprint {
 
 const TOKEN_SEP = "\u001f";
 
-function sha256Hex16(tokens: readonly string[]): string {
+export function sha256Hex16(tokens: readonly string[]): string {
 	return createHash("sha256")
 		.update(tokens.join(TOKEN_SEP))
 		.digest("hex")

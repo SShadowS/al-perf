@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { sha256Hex16 } from "../../../src/lifecycle/fingerprint.js";
 import {
 	backoffAt,
 	drainOutbox,
@@ -275,5 +276,43 @@ describe("drainOutbox", () => {
 		expect(report.delivered).toBe(1);
 		expect(store.listPendingOutbox("github")).toHaveLength(0);
 		store.close();
+	});
+
+	it("a large storm's epic dedupe key stays bounded", async () => {
+		const store = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 300; n++) {
+			const id = seedFinding(store, n);
+			store.enqueueOutbox({
+				tenant: "t1",
+				sink: "github",
+				kind: "create-issue",
+				findingId: id,
+				payload: JSON.stringify({ finding: contextFor(n), labels: [] }),
+				dedupeKey: `github:create:t1:${n}`,
+				nextAttemptAt: NOW,
+				createdAt: NOW,
+			});
+		}
+
+		await drainOutbox(store, fakeAdapter([{ ok: true, externalId: "1" }]), {
+			...RUNTIME,
+			maxPerDrain: 1,
+		});
+
+		const epic = store.db
+			.query<{ dedupe_key: string }, []>(
+				"SELECT dedupe_key FROM outbox WHERE kind = 'create-epic'",
+			)
+			.get();
+		expect(epic).not.toBeNull();
+		expect((epic as { dedupe_key: string }).dedupe_key.length).toBeLessThan(80);
+		store.close();
+	});
+
+	it("the epic dedupe key is a property of the row set, not its order", () => {
+		const key = (ids: number[]) =>
+			`github:epic:t1:${sha256Hex16(ids.sort((a, b) => a - b).map(String))}`;
+		expect(key([3, 1, 2])).toBe(key([1, 2, 3]));
+		expect(key([1, 2, 3])).not.toBe(key([1, 2, 4]));
 	});
 });

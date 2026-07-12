@@ -14,6 +14,7 @@
  * pending for the next `lifecycle sync`.
  */
 
+import { sha256Hex16 } from "../fingerprint.js";
 import type { LifecycleStore, OutboxRow } from "../store.js";
 import type {
 	SinkAdapter,
@@ -112,7 +113,17 @@ function collapseCreates(
 				kind: "create-epic",
 				findingId: rows[0].findingId,
 				payload: JSON.stringify(epic),
-				dedupeKey: `${sink}:epic:${tenant}:${rows.map((r) => r.id).join(",")}`,
+				// Hash, not concatenate: a 300-finding storm produced a ~2 KB key
+				// in a UNIQUE TEXT column. Sorted so the key is a property of the
+				// row-SET, not of the order listPendingOutbox happened to return.
+				// Still row-set-scoped, so two separate storms in one tenant still
+				// mint two distinct epics.
+				dedupeKey: `${sink}:epic:${tenant}:${sha256Hex16(
+					rows
+						.map((r) => r.id)
+						.sort((a, b) => a - b)
+						.map(String),
+				)}`,
 				nextAttemptAt: now,
 				createdAt: now,
 			});
