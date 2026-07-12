@@ -283,6 +283,41 @@ describe("processEventsForSinks — comments and close", () => {
 		store.close();
 	});
 
+	it("reopenOnRecurrence default false: filed-fresh with a mapping enqueues ONLY comment-recurred (today's behavior byte-unchanged)", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		withMapping(store);
+		seedEvent(store, id, "filed-fresh");
+		const report = processEventsForSinks(store, config(), NOW);
+		expect(report.enqueued).toBe(1);
+		expect(store.listPendingOutbox("github", "comment-recurred")).toHaveLength(
+			1,
+		);
+		expect(store.listPendingOutbox("github", "reopen-issue")).toHaveLength(0);
+		store.close();
+	});
+
+	it("reopenOnRecurrence true: filed-fresh with a mapping ALSO enqueues reopen-issue alongside comment-recurred", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seedFinding(store);
+		withMapping(store);
+		seedEvent(store, id, "filed-fresh");
+		const [event] = store.listUnprocessedEvents();
+		const report = processEventsForSinks(
+			store,
+			config({ reopenOnRecurrence: true }),
+			NOW,
+		);
+		expect(report.enqueued).toBe(2);
+		expect(store.listPendingOutbox("github", "comment-recurred")).toHaveLength(
+			1,
+		);
+		const reopenRows = store.listPendingOutbox("github", "reopen-issue");
+		expect(reopenRows).toHaveLength(1);
+		expect(reopenRows[0].dedupeKey).toBe(`github:reopen:${event.id}`);
+		store.close();
+	});
+
 	it("filed-fresh WITHOUT a mapping enqueues nothing when autoFile is off", () => {
 		const store = new LifecycleStore(":memory:");
 		const id = seedFinding(store);

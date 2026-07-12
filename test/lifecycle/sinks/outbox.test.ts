@@ -199,6 +199,41 @@ describe("drainOutbox", () => {
 		store.close();
 	});
 
+	it("two separate collapse storms produce two distinct epics (dedupe key is row-set-scoped, not just tenant); a single storm still produces one", async () => {
+		const store = new LifecycleStore(":memory:");
+		const adapter = fakeAdapter([{ ok: true, externalId: "1" }]);
+
+		// Storm A: 5 pending creates for t1, collapsed+delivered in one drain.
+		for (let n = 1; n <= 5; n++) enqueueCreate(store, n);
+		const reportA = await drainOutbox(store, adapter, RUNTIME, {
+			now: NOW,
+			sleep: async () => {},
+		});
+		expect(reportA.collapsed).toBe(1); // one storm -> one epic
+
+		// Storm B: 5 MORE pending creates for the SAME tenant, arriving after
+		// storm A already drained clean (no rows from A still pending).
+		for (let n = 6; n <= 10; n++) enqueueCreate(store, n);
+		const reportB = await drainOutbox(store, adapter, RUNTIME, {
+			now: NOW,
+			sleep: async () => {},
+		});
+		expect(reportB.collapsed).toBe(1); // second storm -> its own epic
+
+		const epicRows = store.db
+			.query<{ dedupe_key: string }, []>(
+				"SELECT dedupe_key FROM outbox WHERE kind = 'create-epic' ORDER BY id",
+			)
+			.all();
+		// Distinct storms produce distinct epic rows, not one collapsed-together
+		// row: the dedupe key embeds the collapsed rows' own ids, so storm A's
+		// key and storm B's key can never collide even though both are the same
+		// tenant/sink pair.
+		expect(epicRows).toHaveLength(2);
+		expect(new Set(epicRows.map((r) => r.dedupe_key)).size).toBe(2);
+		store.close();
+	});
+
 	it("collapse is atomic: a crash mid-batch rolls back the whole collapse; a clean re-drain collapses once", async () => {
 		const store = new LifecycleStore(":memory:");
 		for (let n = 1; n <= 5; n++) enqueueCreate(store, n);

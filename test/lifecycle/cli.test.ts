@@ -233,6 +233,87 @@ describe("lifecycle telemetry (local batch evaluate)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// lifecycle --tenant normalization (debt-closure plan D1): `--tenant Pilot2`
+// and `--tenant pilot2` used to create two case-distinct SQLite tenants that
+// silently split a finding's history.
+// ---------------------------------------------------------------------------
+
+describe("lifecycle --tenant normalization", () => {
+	let dir: string;
+	let dbPath: string;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+	let errorSpy: ReturnType<typeof spyOn<Console, "error">>;
+	let originalExitCode: number | string | null | undefined;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-tenant-norm-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		originalExitCode = process.exitCode;
+		process.exitCode = 0;
+	});
+	afterEach(async () => {
+		logSpy.mockRestore();
+		errorSpy.mockRestore();
+		process.exitCode = originalExitCode ?? 0;
+		await rmSyncRetrying(dir);
+	});
+
+	async function run(args: string[]): Promise<void> {
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, ...args], { from: "user" });
+	}
+
+	it("two --tenant casings land on one finding, not two", async () => {
+		const batchPath = join(dir, "batch.json");
+		writeFileSync(batchPath, JSON.stringify(telemetryBatchFixture()));
+
+		await run([
+			"telemetry",
+			batchPath,
+			"--tenant",
+			"ACME",
+			"--profile-id",
+			"p1",
+		]);
+		await run([
+			"telemetry",
+			batchPath,
+			"--tenant",
+			"acme",
+			"--profile-id",
+			"p2",
+		]);
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "acme" });
+		expect(findings.length).toBe(1);
+		expect(store.getActiveFinding("ACME", findings[0].fingerprint)).toBeNull();
+		store.close();
+	});
+
+	it("existing lowercase --tenant invocations are byte-unchanged", async () => {
+		const batchPath = join(dir, "batch.json");
+		writeFileSync(batchPath, JSON.stringify(telemetryBatchFixture()));
+
+		await run(["telemetry", batchPath, "--tenant", "local"]);
+
+		const store = new LifecycleStore(dbPath);
+		const findings = store.listFindings({ tenant: "local" });
+		expect(findings.length).toBe(1);
+		store.close();
+	});
+
+	it("rejects a blank --tenant as a CLI usage error (exit 2)", async () => {
+		await run(["status", "--tenant", "   "]);
+		expect(process.exitCode).toBe(2);
+		expect(errorSpy).toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
 // lifecycle --config (telemetry-config-clienttype plan Task 2): the parent
 // --config flag threads mergeLifecycleConfig(DEFAULT, loadLifecycleConfigFile)
 // into evaluate/telemetry/pull-telemetry/sync.
@@ -1934,7 +2015,7 @@ describe("lifecycle captures", () => {
 		const cancelId = seedCaptureRequest(store, {
 			fingerprint: "telemetry:deadbeef00000003",
 		});
-		store.cancelCaptureRequest(cancelId, "2026-07-02T00:00:00Z");
+		store.cancelCaptureRequest(cancelId);
 		store.close();
 
 		await run(["captures", "list", "-f", "json", "--status", "pending"]);
@@ -2003,7 +2084,7 @@ describe("lifecycle captures", () => {
 	it("cancel on an already-cancelled row exits 1 and names the current status", async () => {
 		const store = new LifecycleStore(dbPath);
 		const id = seedCaptureRequest(store);
-		store.cancelCaptureRequest(id, "2026-07-02T00:00:00Z");
+		store.cancelCaptureRequest(id);
 		store.close();
 
 		await run(["captures", "cancel", String(id)]);

@@ -45,6 +45,7 @@ import {
 import { transition } from "../../lifecycle/states.js";
 import { LifecycleStore } from "../../lifecycle/store.js";
 import { evaluateTelemetryBatch } from "../../lifecycle/telemetry.js";
+import { normalizeTenantCode } from "../../lifecycle/tenant.js";
 import {
 	renderTriageAgentSummary,
 	runTriageAgent,
@@ -123,6 +124,30 @@ function resolveLifecycleConfig(configPath: string): LifecycleConfig {
 		DEFAULT_LIFECYCLE_CONFIG,
 		loadLifecycleConfigFile(configPath) ?? {},
 	);
+}
+
+/**
+ * Normalize `--tenant` at the CLI boundary (debt-closure plan D1), before it
+ * reaches any store call — `evaluateRun` also normalizes internally (for
+ * programmatic/non-CLI callers), so this is belt-and-suspenders for the
+ * subcommands that route through it, and the ONLY normalization point for
+ * the subcommands that talk to the store directly (status/close/triage/
+ * triage-agent/digest/captures list). `normalizeTenantCode` throws on
+ * blank input; caught here and reported as a plain usage error (exit 2, no
+ * stack trace) — same shape as this file's other CLI-side validation
+ * failures (see `listTenantsConflict`). Returns `null` on failure; callers
+ * must return immediately without opening a store.
+ */
+function resolveTenantOpt(raw: string): string | null {
+	try {
+		return normalizeTenantCode(raw);
+	} catch (err) {
+		console.error(
+			`--tenant: ${err instanceof Error ? err.message : String(err)}`,
+		);
+		process.exitCode = 2;
+		return null;
+	}
 }
 
 /**
@@ -212,15 +237,11 @@ function printEvaluationOutcome(
  * D4: `<out-without-ext>.<tenant>.<sanitized-stream>.json` — stream
  * characters outside `[A-Za-z0-9-]` become `_` (a raw `environmentName` is
  * untrusted and would otherwise land in a path segment, e.g. `"Prod/EU"`).
- * `tenant` is lowercased for the filename only (mapped `tenantMap` values
- * are already lowercased at config-load time; the raw `--tenant` flag used
- * as the fleet bucket isn't — without this, a fleet-bucketed "Acme" group
- * and a mapped "acme" group on the same stream produce case-distinct paths
- * that collide and silently overwrite on a case-insensitive filesystem like
- * NTFS). This is scoped to the filename only — the `tenant` field in the
- * written-files summary, and every non-`--out` code path, still carry the
- * value as-authored; broader `--tenant` case normalization is a tracked
- * follow-up, not this fix's scope).
+ * `--tenant` is now normalized (lowercased+trimmed) at the CLI boundary
+ * before it reaches this function, so the `.toLowerCase()` on `tenant`
+ * below is redundant defense-in-depth, not the primary safeguard — kept
+ * because it's harmless and guards any future caller that passes a raw,
+ * unnormalized tenant string directly.
  */
 function splitOutPath(outPath: string, tenant: string, stream: string): string {
 	const ext = extname(outPath);
@@ -701,6 +722,8 @@ export function createLifecycleCommand(): Command {
 		.option("--resolve-after <n>", "Absent runs before a finding resolves")
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action(async (profilePath: string, opts: any) => {
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const result = await analyzeProfile(profilePath, {
@@ -726,7 +749,7 @@ export function createLifecycleCommand(): Command {
 					store,
 					result,
 					{
-						tenant: opts.tenant,
+						tenant,
 						stream: opts.stream,
 						profileId,
 						captureKind: result.meta.captureKind ?? result.meta.profileType,
@@ -747,10 +770,12 @@ export function createLifecycleCommand(): Command {
 		.option("--since <iso>", "Only activity at/after this time")
 		.option("-f, --format <format>", "Output format: markdown|json", "markdown")
 		.action((opts: any) => {
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const digest = buildDigest(store, {
-					tenant: opts.tenant,
+					tenant,
 					since: opts.since,
 				});
 				process.stdout.write(
@@ -772,10 +797,12 @@ export function createLifecycleCommand(): Command {
 		.option("-n, --limit <n>", "Maximum findings to show", "50")
 		.option("-f, --format <format>", "Output format: table|json", "table")
 		.action((opts: any) => {
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const rows = store.listFindings({
-					tenant: opts.tenant,
+					tenant,
 					state: opts.state,
 					needsTriage: opts.triage ? true : undefined,
 					limit: parseInt(opts.limit, 10),
@@ -834,11 +861,13 @@ export function createLifecycleCommand(): Command {
 		.description("Close a RESOLVED finding (human confirmation)")
 		.option("--tenant <tenant>", "Tenant key", "local")
 		.action((fingerprint: string, opts: any) => {
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const res = applyClose(
 					store,
-					opts.tenant,
+					tenant,
 					fingerprint,
 					new Date().toISOString(),
 				);
@@ -859,9 +888,11 @@ export function createLifecycleCommand(): Command {
 		.option("--tenant <tenant>", "Tenant key", "local")
 		.option("--clear", "Clear the flag instead of setting it")
 		.action((fingerprint: string, opts: any) => {
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
-				const row = store.getActiveFinding(opts.tenant, fingerprint);
+				const row = store.getActiveFinding(tenant, fingerprint);
 				if (!row) {
 					console.error(`No active finding for ${fingerprint}`);
 					process.exitCode = 1;
@@ -923,6 +954,8 @@ export function createLifecycleCommand(): Command {
 				process.exitCode = 1;
 				return;
 			}
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const model = MODEL_IDS[opts.model === "opus" ? "opus" : ("sonnet" as ExplainModel)];
 			const client = wrapAnthropicClient(new Anthropic({ apiKey }));
 			const store = new LifecycleStore(cmd.opts().db);
@@ -932,7 +965,7 @@ export function createLifecycleCommand(): Command {
 				const result = await runTriageAgent(
 					store,
 					{
-						tenant: opts.tenant,
+						tenant,
 						reportDir: opts.reportDir,
 						maxFindings: parseInt(opts.maxFindings, 10),
 						maxTurnsPerFinding: parseInt(opts.maxTurns, 10),
@@ -1108,6 +1141,8 @@ export function createLifecycleCommand(): Command {
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action((batchPath: string, opts: any) => {
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const raw = readFileSync(batchPath, "utf8");
@@ -1120,7 +1155,7 @@ export function createLifecycleCommand(): Command {
 					store,
 					batchJson,
 					{
-						tenant: opts.tenant,
+						tenant,
 						stream: opts.stream,
 						profileId,
 					},
@@ -1185,6 +1220,15 @@ export function createLifecycleCommand(): Command {
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action(async (opts: any, pullCommand: Command) => {
+			// Normalized once here, in place: runSplitByCustomer reads opts.tenant
+			// directly (D1's fleet-bucket value, TENANT_CODE_RE check) and so does
+			// the main non-split evaluate path below — mutating opts.tenant here
+			// means every downstream branch sees the normalized value without a
+			// separate normalization call at each read site.
+			const tenant = resolveTenantOpt(opts.tenant);
+			if (tenant === null) return;
+			opts.tenant = tenant;
+
 			if (opts.listTenants) {
 				const conflict = listTenantsConflict(opts, pullCommand);
 				if (conflict) {
@@ -1289,6 +1333,13 @@ export function createLifecycleCommand(): Command {
 		)
 		.option("-f, --format <format>", "Output format: text|json", "text")
 		.action((opts: any) => {
+			// --tenant is optional here (all tenants if omitted) — only normalize
+			// when the operator actually passed one.
+			if (opts.tenant !== undefined) {
+				const tenant = resolveTenantOpt(opts.tenant);
+				if (tenant === null) return;
+				opts.tenant = tenant;
+			}
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const rows = store.listCaptureRequests(opts.tenant, opts.status);
@@ -1372,8 +1423,7 @@ export function createLifecycleCommand(): Command {
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
 				const id = parseInt(idArg, 10);
-				const now = new Date().toISOString();
-				const ok = store.cancelCaptureRequest(id, now);
+				const ok = store.cancelCaptureRequest(id);
 				if (!ok) {
 					console.error(captureRequestFailureMessage(store, id, "cancelled"));
 					process.exitCode = 1;

@@ -22,6 +22,10 @@ describe("SINK_DEFAULTS", () => {
 		expect(SINK_DEFAULTS.autoFileMinSeverity).toBe("critical");
 		expect(SINK_DEFAULTS.tokenEnv).toBe("GITHUB_TOKEN");
 	});
+
+	it("reopenOnRecurrence is OFF by default (comment-recurred-only stays today's behavior)", () => {
+		expect(SINK_DEFAULTS.reopenOnRecurrence).toBe(false);
+	});
 });
 
 describe("resolveGitHubConfig", () => {
@@ -90,6 +94,28 @@ describe("loadSinksConfig — shape validation (fail closed)", () => {
 				}),
 			);
 			expect(() => loadSinksConfig(file)).toThrow(/autoFile/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a quoted boolean naming reopenOnRecurrence (same quoted-boolean trap as the other trust-posture flags)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-sink-cfg-shape-"));
+		try {
+			const file = join(dir, "quoted-bool-reopen.json");
+			writeFileSync(
+				file,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							reopenOnRecurrence: "true",
+						},
+					},
+				}),
+			);
+			expect(() => loadSinksConfig(file)).toThrow(/reopenOnRecurrence/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -186,6 +212,7 @@ describe("loadSinksConfig — shape validation (fail closed)", () => {
 							minMillisBetweenCalls: 2000,
 							maxPerDrain: 10,
 							collapseThreshold: 4,
+							reopenOnRecurrence: true,
 						},
 					},
 				}),
@@ -193,6 +220,7 @@ describe("loadSinksConfig — shape validation (fail closed)", () => {
 			const cfg = loadSinksConfig(file);
 			expect(cfg?.sinks.github?.autoFile).toBe(true);
 			expect(cfg?.sinks.github?.autoFileMinSeverity).toBe("warning");
+			expect(cfg?.sinks.github?.reopenOnRecurrence).toBe(true);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

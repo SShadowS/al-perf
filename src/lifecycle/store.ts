@@ -1292,7 +1292,7 @@ export class LifecycleStore {
 		return res.changes > 0;
 	}
 
-	cancelCaptureRequest(id: number, now: string): boolean {
+	cancelCaptureRequest(id: number): boolean {
 		const res = this.db.run(
 			`UPDATE capture_requests SET status = 'cancelled'
 			 WHERE id = ? AND status IN ('pending','claimed')`,
