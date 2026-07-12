@@ -147,6 +147,42 @@ function splitOutPath(outPath: string, tenant: string, stream: string): string {
 }
 
 /**
+ * Mirrors `TENANT_CODE_RE` in src/lifecycle/config-file.ts, duplicated per
+ * that module's own precedent (cross-module tenant-shape checks are copied,
+ * not imported, so each boundary stays self-contained). Mapped `tenantMap`
+ * values are already validated at config-load time; only the raw `--tenant`
+ * flag value is unchecked, and it only needs checking here — where it can
+ * land in a written filename as the fleet-policy bucket (D3/D4).
+ */
+const TENANT_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,39}$/;
+
+/**
+ * Two distinct groups can sanitize to the same `<tenant>.<stream>` filename
+ * (e.g. streams `"Prod/EU"` and `"Prod_EU"` both become `Prod_EU`) — assign
+ * each colliding group after the first a `-2`, `-3`, ... suffix rather than
+ * silently overwriting an earlier group's file.
+ */
+function assignUniqueOutPaths(
+	outPath: string,
+	groups: PullSplitResult["groups"],
+): Array<{ group: PullSplitResult["groups"][number]; path: string }> {
+	const assigned = new Set<string>();
+	return groups.map((group) => {
+		const basePath = splitOutPath(outPath, group.tenant, group.stream);
+		const ext = extname(basePath);
+		const stem = ext ? basePath.slice(0, -ext.length) : basePath;
+		let path = basePath;
+		let suffix = 2;
+		while (assigned.has(path)) {
+			path = `${stem}-${suffix}${ext}`;
+			suffix++;
+		}
+		assigned.add(path);
+		return { group, path };
+	});
+}
+
+/**
  * One summary line for tenants skipped by the "skip" unmapped-tenant policy.
  * CONTROLLER-PINNED (Task 2 review): an empty `aadTenantId` (on-prem/
  * old-schema rows that never carried an AAD tenant id) must render visibly
@@ -194,6 +230,21 @@ async function runSplitByCustomer(cmd: Command, opts: any): Promise<void> {
 		return;
 	}
 
+	// The fleet-policy bucket is --tenant verbatim; in --out mode that value
+	// lands in a written filename (splitOutPath), so it needs the same shape
+	// check tenantMap VALUES already get at config-load time. Only checked in
+	// --out mode (evaluate mode passes it through to the store as an ordinary
+	// tenant key, same as every other subcommand's unchecked --tenant).
+	if (opts.out && !TENANT_CODE_RE.test(opts.tenant)) {
+		console.error(
+			`pull-telemetry --split-by-customer --out: --tenant value ${JSON.stringify(opts.tenant)} ` +
+				`is not a valid tenant code (must match ${TENANT_CODE_RE}) — it can end up ` +
+				"in a written filename as the fleet-policy bucket.",
+		);
+		process.exitCode = 2;
+		return;
+	}
+
 	let splitResult: PullSplitResult;
 	try {
 		const signals = String(opts.signals)
@@ -227,16 +278,17 @@ async function runSplitByCustomer(cmd: Command, opts: any): Promise<void> {
 	);
 
 	if (opts.out) {
-		const written = splitResult.groups.map((group) => {
-			const path = splitOutPath(opts.out, group.tenant, group.stream);
-			writeFileSync(path, JSON.stringify(group.batch, null, 2) + "\n");
-			return {
-				tenant: group.tenant,
-				stream: group.stream,
-				path,
-				signalCount: group.batch.signals.length,
-			};
-		});
+		const written = assignUniqueOutPaths(opts.out, splitResult.groups).map(
+			({ group, path }) => {
+				writeFileSync(path, JSON.stringify(group.batch, null, 2) + "\n");
+				return {
+					tenant: group.tenant,
+					stream: group.stream,
+					path,
+					signalCount: group.batch.signals.length,
+				};
+			},
+		);
 		if (opts.format === "json") {
 			process.stdout.write(
 				JSON.stringify(
@@ -258,41 +310,72 @@ async function runSplitByCustomer(cmd: Command, opts: any): Promise<void> {
 
 	const store = new LifecycleStore(cmd.opts().db);
 	try {
-		const groups = splitResult.groups.map((group) => {
+		// Per-group isolation: one customer's poison batch (e.g. a bad row that
+		// fails telemetry-batch validation) must not block every OTHER
+		// customer's evaluation in the same pull — that's exactly the
+		// cross-tenant coupling this plan exists to remove. A failing group is
+		// recorded and the loop continues; the run still exits nonzero so the
+		// failure isn't silently swallowed.
+		const groups: Array<{
+			tenant: string;
+			stream: string;
+			aadTenantId: string;
+			environmentName: string | null;
+			outcome: EvaluationOutcome;
+		}> = [];
+		const failedGroups: Array<{
+			tenant: string;
+			stream: string;
+			error: string;
+		}> = [];
+		for (const group of splitResult.groups) {
 			const profileId = createHash("sha256")
 				.update(JSON.stringify(group.batch))
 				.digest("hex")
 				.slice(0, 32);
-			const outcome = evaluateTelemetryBatch(
-				store,
-				group.batch,
-				{ tenant: group.tenant, stream: group.stream, profileId },
-				config,
-			);
-			return {
-				tenant: group.tenant,
-				stream: group.stream,
-				aadTenantId: group.aadTenantId,
-				environmentName: group.environmentName,
-				outcome,
-			};
-		});
+			try {
+				const outcome = evaluateTelemetryBatch(
+					store,
+					group.batch,
+					{ tenant: group.tenant, stream: group.stream, profileId },
+					config,
+				);
+				groups.push({
+					tenant: group.tenant,
+					stream: group.stream,
+					aadTenantId: group.aadTenantId,
+					environmentName: group.environmentName,
+					outcome,
+				});
+				if (opts.format !== "json") {
+					console.log(
+						`${group.tenant}/${group.stream}: ${outcome.findingsSeen} findings seen`,
+					);
+				}
+			} catch (err) {
+				const error = err instanceof Error ? err.message : String(err);
+				failedGroups.push({
+					tenant: group.tenant,
+					stream: group.stream,
+					error,
+				});
+				if (opts.format !== "json") {
+					console.log(`${group.tenant}/${group.stream}: failed — ${error}`);
+				}
+			}
+		}
 		if (opts.format === "json") {
 			process.stdout.write(
 				JSON.stringify(
-					{ groups, skippedTenants: splitResult.skippedTenants },
+					{ groups, skippedTenants: splitResult.skippedTenants, failedGroups },
 					null,
 					2,
 				) + "\n",
 			);
-		} else {
-			for (const g of groups) {
-				console.log(
-					`${g.tenant}/${g.stream}: ${g.outcome.findingsSeen} findings seen`,
-				);
-			}
-			if (skippedSummary) console.log(skippedSummary);
+		} else if (skippedSummary) {
+			console.log(skippedSummary);
 		}
+		if (failedGroups.length > 0) process.exitCode = 1;
 	} finally {
 		store.close();
 	}
