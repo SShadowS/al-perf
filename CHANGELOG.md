@@ -1,5 +1,63 @@
 # Changelog
 
+## 3.0.0 — 2026-07-12
+
+The release that turns al-perf from a profile analyzer into a performance observability platform. A profile analyzer answers "why was this run slow?" and forgets. This release adds a **finding lifecycle engine**: findings get a stable identity, are tracked across runs, and are driven out to the places you already look — GitHub, Azure DevOps, App Insights telemetry.
+
+Two breaking changes; both have a mechanical fix. See below.
+
+### Breaking
+
+- **`lifecycle sync --config` moved to the parent command.** Use `lifecycle --config <path> sync ...` instead of `lifecycle sync --config <path> ...`. The default path and value semantics are unchanged, so documented invocations still work once the flag moves before the subcommand name.
+- **Web ingest no longer accepts the shared secret by default.** Clients hitting `/api/ingest` and `/api/profiles` must re-register to obtain a per-tenant token, or the server must be started with `AL_PERF_ALLOW_SHARED_SECRET=1`. The old behavior let any holder of one secret write as any tenant.
+
+The library API is purely additive — no exports were removed or changed.
+
+### Added — finding lifecycle engine
+
+- **Durable findings across runs.** Every finding gets a stable fingerprint and a state machine (`new → open → regressed / improving → resolved → closed`). SQLite-backed, at `.al-perf/lifecycle.db`. A problem that persists is one finding with a history, not a fresh row every run.
+- **`lifecycle evaluate`** — analyze a profile and advance finding state.
+- **`lifecycle status` / `digest`** — what's open, what regressed, what needs triage.
+- **Baselines and absence tracking** — a finding that stops appearing auto-resolves after `resolveAfterRuns` (default 3), so a fixed problem closes itself.
+
+### Added — sinks
+
+- **GitHub sink** — files findings as issues, comments on regression and recurrence, closes on resolution. Configured per-tenant with its own trigger rules.
+- **Azure DevOps sink** — the same, as work items.
+- **Multi-sink fan-out** — both can run at once, each with independent rules. A sink enabled after a tenant already has history replays that history and picks up the live backlog on its first `sync` (dormant findings included; long-dead ones correctly skipped).
+- **Epic collapse** — a storm of new findings collapses into one parent issue rather than flooding the tracker.
+- **`lifecycle sync`** — drains every configured sink. Config at `.al-perf/lifecycle.config.json`; each sink's token comes from the env var named by its `tokenEnv`.
+
+### Added — telemetry as a trigger layer
+
+- **App Insights ingestion** (`lifecycle telemetry`, `lifecycle pull-telemetry`) — Business Central telemetry becomes findings, so a slow routine surfaces from production signal rather than waiting for someone to capture a profile.
+- **Multi-tenant** — `--split-by-customer` fans a pull out across tenants. Every `--tenant` value is normalized to lowercase at the CLI boundary and in `evaluateRun`.
+
+### Added — deep-capture request queue
+
+- Recurring telemetry findings are coarse: they say a routine is slow, not why. The engine now **files a deep-capture request** — a queue an external executor services (poll → claim → capture → ship), auto-fulfilled when the resulting profile arrives.
+- **`lifecycle captures list / claim / cancel / health`** — operate the queue. `health` reports depth, oldest pending, stuck claims and who holds them, and whether you're at the cap.
+- **Self-correcting.** A request claimed by an executor that then dies is reclaimed after `claimTtlMinutes` (default 60) and handed to another worker. A `reclaim_count` distinguishes a dead executor from a poison request that kills whatever picks it up.
+- **It says so when it jams.** When the executor dies the queue fills to `maxPending` and new requests stop being filed — `sync` warns, `captures health` shows it, and the digest carries a jammed-queue block (only when actually jammed, so the healthy case stays quiet).
+
+### Added — agentic triage
+
+- **`lifecycle triage-agent`** — an optional scheduled LLM pass over needs-triage findings, with allow-listed tools and injection-hardened prompting. The one agentic step in an otherwise deterministic pipeline.
+
+### Added — ir-json ingestion
+
+- Accepts `ir-json`, the lossless per-invocation instrumentation format from `bc-mdc-converter`. Hit counts become **exact invocation counts** rather than statistical inference, so `repeated-siblings` and `high-hit-count` stop guessing. Format is sniffed from content, not extension.
+
+### Added — al-sem source fusion
+
+- Optional correlation against the al-sem semantic engine upgrades a finding's identity from a fallback key to a stable routine anchor, and carries its history across the change rather than forking it.
+
+### Fixed
+
+- **Algorithm-version bumps no longer orphan every finding.** Changing `FINGERPRINT_ALGO_VERSION` changes every fingerprint by design — but it used to silently re-file every live problem as new and strand every existing row in `resolved` forever. `evaluateRun` now refuses to run, naming `lifecycle maintain --purge-stale-fingerprints` as the way forward.
+- **`/api/debug/status` reports aggregate counts, not tenant names.** The endpoint is unauthenticated; it now exposes `staleAlgoTenantCount` / `staleAlgoFindingCount` and never a customer identifier.
+- **Web ingest stopped claiming success while doing nothing.** A stale-algo tenant used to get one stderr line and a `202 {status:"stored"}`, every ingest, forever. The response now carries `lifecycle: {status:"blocked", reason, remediation}` when the guard fires.
+
 ## 2.3.3 — 2026-06-01
 
 ### Fixed
