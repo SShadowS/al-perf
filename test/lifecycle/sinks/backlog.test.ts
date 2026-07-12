@@ -97,17 +97,26 @@ function seedOccurrences(
  * Config-literal helper, copied in shape from triggers.test.ts's
  * config()/adoConfig()/multiConfig() — parameterized here by which sinks are
  * enabled since the backlog tests turn sinks on and off across scans. github
- * stays digest-first default (autoFile off) throughout, matching every other
- * github fixture in this suite; azureDevOps opts into autoFile so the
- * backlog-replay test has a sink that actually files on the backlog.
+ * stays digest-first default (autoFile off) unless `githubAutoFile` is set,
+ * matching every other github fixture in this suite; azureDevOps opts into
+ * autoFile so the backlog-replay test has a sink that actually files on the
+ * backlog.
  */
 function sinksConfig(opts: {
 	github?: boolean;
+	githubAutoFile?: boolean;
 	azureDevOps?: boolean;
 }): LifecycleSinksConfig {
 	const sinks: LifecycleSinksConfig["sinks"] = {};
 	if (opts.github) {
-		sinks.github = { enabled: true, repo: "owner/repo" };
+		sinks.github = opts.githubAutoFile
+			? {
+					enabled: true,
+					repo: "owner/repo",
+					autoFile: true,
+					autoFileAfterRuns: 2,
+				}
+			: { enabled: true, repo: "owner/repo" };
 	}
 	if (opts.azureDevOps) {
 		sinks.azureDevOps = {
@@ -190,8 +199,17 @@ describe("a sink enabled after the tenant has history", () => {
 		processEventsForSinks(store, ghOnly, NOW);
 		expect(store.listUnprocessedEvents("github").length).toBe(0);
 
-		// Now enable azureDevOps. Its watermark is still 0, so it replays.
-		const both = sinksConfig({ github: true, azureDevOps: true });
+		// Now enable azureDevOps AND flip github into auto-file mode too. If
+		// github's watermark had NOT actually advanced past the backlog above,
+		// this scan would find the "live" event unprocessed again and, with
+		// autoFile now on, file it — so the trailing assertion below is no
+		// longer trivially true just because github's autoFile happened to be
+		// off (it wasn't testing the watermark at all before this change).
+		const both = sinksConfig({
+			github: true,
+			githubAutoFile: true,
+			azureDevOps: true,
+		});
 		const report = processEventsForSinks(store, both, NOW);
 		expect(report.processed).toBeGreaterThan(0);
 
@@ -201,7 +219,8 @@ describe("a sink enabled after the tenant has history", () => {
 		expect(adoCreates).toContain(live);
 		expect(adoCreates).not.toContain(dead);
 
-		// github, already caught up, enqueued nothing new.
+		// github, already caught up (no unprocessed events left even with
+		// autoFile now on), enqueued nothing new.
 		expect(store.listPendingOutbox("github", "create-issue").length).toBe(0);
 
 		store.close();
@@ -277,6 +296,115 @@ describe("lifecycle sync — backlog drain", () => {
 
 			const store = new LifecycleStore(dbPath);
 			expect(store.listUnprocessedEvents("github").length).toBe(0);
+			store.close();
+		} finally {
+			globalThis.fetch = originalFetch;
+			process.exitCode = originalExitCode ?? 0;
+			errorSpy.mockRestore();
+			logSpy.mockRestore();
+			stdoutSpy.mockRestore();
+			await rmSyncRetrying(dir);
+		}
+	});
+
+	it("reports the union of distinct events across scans, not the sum of per-scan totals, when sinks sit at different watermarks", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-backlog-union-"));
+		const dbPath = join(dir, "lifecycle.sqlite");
+		const configPath = join(dir, "lifecycle.config.json");
+		const originalFetch = globalThis.fetch;
+		const originalExitCode = process.exitCode;
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const logSpy = spyOn(console, "log").mockImplementation(() => {});
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(
+			() => true,
+		);
+		try {
+			// 600 distinct events. github has already scanned the first 400
+			// (simulating a sink enabled well before azureDevOps); azureDevOps
+			// starts fresh at watermark 0 and must replay the whole backlog.
+			// With the 500-event batch cap, scan 1 has github cover ids 401-600
+			// (200 events) while azureDevOps covers ids 1-500 (500 events) — a
+			// union of all 600 in that single scan, since both are counted in
+			// the same processEventsForSinks call. Scan 2 then has azureDevOps
+			// pick up its remaining ids 501-600 (100 events) to finish, which
+			// github already covered in scan 1. Summing each scan's distinct
+			// count (600 + 100 = 700) double-counts that 501-600 overlap;
+			// unioning the id sets across scans correctly reports 600.
+			const seed = new LifecycleStore(dbPath);
+			for (let i = 0; i < 600; i++) {
+				const id = seed.insertFinding({
+					tenant: "t1",
+					fingerprint: `pattern:union${String(i).padStart(4, "0")}`,
+					algoVersion: 1,
+					state: "open",
+					source: "pattern",
+					patternId: "calcfields-in-loop",
+					title: `Union finding ${i}`,
+					severity: "info",
+					appId: "",
+					appName: "",
+					routineKey: "",
+					firstSeenAt: NOW,
+					lastSeenAt: NOW,
+					lastEventAt: NOW,
+					observedKinds: ["sampling"],
+					observedStreams: ["nightly"],
+				} satisfies NewFinding);
+				seed.logEvent({
+					findingId: id,
+					event: "seen-normal",
+					fromState: "open",
+					toState: "open",
+					at: NOW,
+				});
+			}
+			seed.advanceSinkProgress("github", 400);
+			seed.close();
+
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: { enabled: true, repo: "owner/repo" },
+						azureDevOps: {
+							enabled: true,
+							org: "myorg",
+							project: "myproj",
+						},
+					},
+				}),
+			);
+
+			// Severity "info" against the default autoFileMinSeverity
+			// ("critical") means digest-first defaults on both sinks never
+			// auto-file any of these — no delivery should ever be attempted.
+			globalThis.fetch = (async (...args: unknown[]) => {
+				throw new Error(`unexpected fetch call: ${JSON.stringify(args[0])}`);
+			}) as typeof fetch;
+
+			const cmd = createLifecycleCommand();
+			cmd.exitOverride();
+			await cmd.parseAsync(
+				[
+					"--db",
+					dbPath,
+					"--config",
+					configPath,
+					"sync",
+					"--dry-run",
+					"-f",
+					"json",
+				],
+				{ from: "user" },
+			);
+
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.triggers.processed).toBe(600);
+
+			const store = new LifecycleStore(dbPath);
+			expect(store.listUnprocessedEvents("github").length).toBe(0);
+			expect(store.listUnprocessedEvents("azureDevOps").length).toBe(0);
 			store.close();
 		} finally {
 			globalThis.fetch = originalFetch;

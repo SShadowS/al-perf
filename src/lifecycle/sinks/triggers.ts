@@ -105,6 +105,14 @@ const PRESENCE_EVENTS = new Set([
 
 export interface TriggerReport {
 	processed: number;
+	/**
+	 * The distinct event ids counted in `processed`, sorted ascending. A
+	 * caller draining a backlog over several scans (each capped at a batch
+	 * per sink) must union these across scans rather than sum `processed` —
+	 * sinks at different watermarks can each see the same event in
+	 * successive scans, so summing double-counts it.
+	 */
+	processedIds: number[];
 	enqueued: number;
 	skippedMigration: number;
 }
@@ -154,7 +162,7 @@ export function processEventsForSinks(
 		// No enabled sink: nothing to scan and no watermark to advance. Each
 		// sink's watermark is its own, so a sink enabled later still sees the
 		// backlog — that no longer depends on leaving events unprocessed.
-		return { processed: 0, enqueued: 0, skippedMigration: 0 };
+		return { processed: 0, processedIds: [], enqueued: 0, skippedMigration: 0 };
 	}
 
 	const enqueue = (
@@ -320,6 +328,7 @@ export function processEventsForSinks(
 
 		return {
 			processed: processedIds.size,
+			processedIds: [...processedIds].sort((a, b) => a - b),
 			enqueued,
 			skippedMigration: skippedIds.size,
 		};

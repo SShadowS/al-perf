@@ -824,6 +824,86 @@ function openV4FixtureWithOneFinding(): {
 	return { store, dir, findingId };
 }
 
+/**
+ * Builds a genuine v5 database on disk: runs the real v1..v5 migration
+ * statements directly against a raw bun:sqlite connection (bypassing
+ * LifecycleStore, whose constructor would otherwise upgrade straight past
+ * v5 to whatever the ladder's current head is), maps one finding to github
+ * via `sink_issue_map` (proof that github has already filed something for
+ * this tenant, not merely an enabled-but-idle config block), and inserts
+ * `total` `finding_events` rows of which the first `processed` already carry
+ * the OLD global `sink_processed = 1` bit. Reopening the DB through
+ * LifecycleStore then exercises the real v5 -> v6 migration step on open —
+ * specifically the `sink_progress` seed, which decides once and
+ * irreversibly, on every existing production store, whether each sink
+ * resumes where it left off or replays its whole history.
+ * Caller must `rmSync(dir, ...)` when done.
+ */
+function openV5FixtureWithSinkHistory(
+	total: number,
+	processed: number,
+): { store: LifecycleStore; dir: string } {
+	const dir = mkdtempSync(join(tmpdir(), "alperf-migrations-v6-"));
+	const dbPath = join(dir, "lifecycle.sqlite");
+	const v5 = new Database(dbPath, { create: true });
+	for (const stmts of LIFECYCLE_MIGRATIONS.slice(0, 5)) {
+		for (const stmt of stmts) v5.run(stmt);
+	}
+	v5.run("PRAGMA user_version = 5");
+	v5.run(
+		`INSERT INTO findings (tenant, fingerprint, algo_version, state, source, pattern_id, title, severity, first_seen_at, last_seen_at, last_event_at)
+		 VALUES ('t', 'pattern:v6seedhistory01', 1, 'open', 'pattern', 'x', 'x', 'warning', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+	);
+	const findingId = v5
+		.query<{ id: number }, []>(
+			"SELECT id FROM findings WHERE fingerprint = 'pattern:v6seedhistory01'",
+		)
+		.get()?.id as number;
+	v5.run(
+		`INSERT INTO sink_issue_map (tenant, sink, fingerprint, external_id, created_at)
+		 VALUES ('t', 'github', 'pattern:v6seedhistory01', '42', '2026-07-01T00:00:00.000Z')`,
+	);
+	for (let i = 0; i < total; i++) {
+		v5.run(
+			`INSERT INTO finding_events (finding_id, event, from_state, to_state, at, sink_processed)
+			 VALUES (?, 'seen-normal', 'open', 'open', '2026-07-01T00:00:00.000Z', ?)`,
+			[findingId, i < processed ? 1 : 0],
+		);
+	}
+	v5.close();
+	const store = new LifecycleStore(dbPath); // runs the real ladder from user_version 5 onward
+	return { store, dir };
+}
+
+describe("schema v6 (per-sink watermark seed)", () => {
+	it("resumes a sink that has already filed at the last event it scanned under the old global bit, and leaves an unmapped sink at 0", () => {
+		// N=10 events, the first M=6 already flagged sink_processed=1 under the
+		// old global bit. This straddles both failure modes a broken seed can
+		// take: seeding past event 6 silently drops events 7-10 forever (the
+		// seed runs exactly once, so a dropped event is never redelivered);
+		// seeding at 0 instead of 6 replays events 1-6 that github already
+		// handled.
+		const TOTAL = 10;
+		const ALREADY_PROCESSED = 6;
+		const { store, dir } = openV5FixtureWithSinkHistory(
+			TOTAL,
+			ALREADY_PROCESSED,
+		);
+		try {
+			expect(
+				store.db
+					.query<{ user_version: number }, []>("PRAGMA user_version")
+					.get()?.user_version,
+			).toBe(LIFECYCLE_SCHEMA_VERSION);
+			expect(store.getSinkProgress("github")).toBe(ALREADY_PROCESSED);
+			expect(store.getSinkProgress("azureDevOps")).toBe(0);
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("schema v5 (triage notes)", () => {
 	it("v5 adds triage_note/triaged_at/triaged_by; v4 data survives, no dangling FKs, DB lands on the current schema head", () => {
 		const { store, dir, findingId } = openV4FixtureWithOneFinding();
