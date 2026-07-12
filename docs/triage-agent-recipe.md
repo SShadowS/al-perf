@@ -38,7 +38,16 @@ For one tenant, one run:
    completely untouched — once cumulative token usage crosses
    `--budget-tokens`. A single finding that loops without ever calling
    `record_triage` is skipped once `--max-turns` is exhausted, with an audit
-   note; the run continues to the next finding.
+   note; the run continues to the next finding. A "poison" finding that
+   hits `--max-turns` every time re-consumes up to `--max-turns` worth of
+   budget on EVERY scheduled run, indefinitely — it's skipped, not
+   triaged, so `needs_triage` stays set and it reappears next run. This
+   doesn't block other findings (the run continues past it) and the total
+   per-run cost is still capped by `--budget-tokens`, but a finding that
+   never clears across several runs is worth a look: triage it manually
+   with `lifecycle triage <fingerprint> --clear`, close it once resolved
+   (`lifecycle close`), or raise `--max-turns` if it's a genuinely complex
+   investigation rather than a trapped loop.
 5. Writes an append-only JSONL audit log and, optionally, human-readable
    report files, to `--report-dir`.
 
@@ -54,6 +63,13 @@ al-profile lifecycle triage-agent \
 
 `-f json` prints the run result as JSON instead of the text summary (N
 triaged, M skipped with reasons, tokens used, audit log path).
+`findingsTriaged` counts `record_triage` calls that succeeded
+**structurally** — including a `--dry-run` call (which makes zero writes by
+design) and the rare case where a human triages the same finding between
+the agent reading it and calling `record_triage` (D2's race guard makes that
+a no-op, not an overwrite) — not literal rows written. The database and the
+audit log's per-tool `resultSummary` are the authoritative record of what
+actually got written.
 
 ## The tool surface — exactly five tools, allow-listed
 

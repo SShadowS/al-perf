@@ -35,6 +35,17 @@ export interface AuditRunEndInfo {
 	findingsSkipped: number;
 	tokenUsage: { inputTokens: number; outputTokens: number };
 	stoppedReason?: string;
+	/**
+	 * Task 3 review fix: distinguishes a clean stop from a crash —
+	 * `"completed"` | `"budget-stopped"` | `"error: <message>"`. Optional
+	 * here (this module is caller-agnostic); `runTriageAgent` always sets it,
+	 * via a try/finally that guarantees `logRunEnd` fires on every exit path,
+	 * including a thrown API error mid-run — without it, an operator reading
+	 * the audit JSONL couldn't tell "the run finished (however it ended)"
+	 * from "the process was killed mid-flight and never got to write a
+	 * footer at all."
+	 */
+	outcome?: string;
 }
 
 export interface TriageAuditLogOptions {

@@ -357,6 +357,95 @@ describe("runTriageAgent — budget", () => {
 			expect(store.getFinding(idC)?.needsTriage).toBe(false);
 			expect(store.getFinding(idB)?.needsTriage).toBe(false);
 			expect(store.getFinding(idA)?.needsTriage).toBe(true);
+
+			// The audit footer's outcome field distinguishes this clean
+			// budget-stop from a crash (Task 3 review fix).
+			const auditLines = readFileSync(result.auditPath, "utf8")
+				.trim()
+				.split("\n")
+				.map((l) => JSON.parse(l));
+			const runEnd = auditLines.find((l) => l.kind === "run-end");
+			expect(runEnd.outcome).toBe("budget-stopped");
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("runTriageAgent — audit footer always writes (Task 3 review fix)", () => {
+	it("writes a run-end entry with an error outcome when the client throws mid-run, and keeps already-triaged findings durable", async () => {
+		const store = makeStore();
+		const dir = tmpReportDir();
+		try {
+			const idA = store.insertFinding(
+				baseFinding({ fingerprint: "f-a", lastSeenAt: "2026-07-01T10:00:00Z" }),
+			);
+			const idB = store.insertFinding(
+				baseFinding({ fingerprint: "f-b", lastSeenAt: "2026-07-02T10:00:00Z" }),
+			);
+
+			// listFindings orders last_seen_at DESC, so B is processed first (and
+			// succeeds); the API call for A (second finding) throws — simulating
+			// a live network/API failure mid-run.
+			let call = 0;
+			const client: TriageClient = {
+				messages: {
+					create: async (params: TriageClientCreateParams) => {
+						call++;
+						if (call === 2) {
+							throw new Error("simulated API failure");
+						}
+						return {
+							content: [
+								toolUseBlock("t1", "record_triage", {
+									id: findingIdFromParams(params),
+									assessment: "fine",
+									recommendation: "no action needed",
+								}),
+							],
+							stop_reason: "tool_use",
+							usage: usage(),
+						};
+					},
+				},
+			};
+
+			await expect(
+				runTriageAgent(
+					store,
+					{
+						tenant: "t1",
+						reportDir: dir,
+						maxFindings: 5,
+						maxTurnsPerFinding: 4,
+						budgetTokens: 1_000_000,
+						model: "claude-sonnet-5",
+						dryRun: false,
+					},
+					{ now: fixedNow(), runId: "run-crash" },
+					client,
+				),
+			).rejects.toThrow("simulated API failure");
+
+			// B (processed first) is durable — its DB write landed before A's
+			// turn ever threw.
+			expect(store.getFinding(idB)?.needsTriage).toBe(false);
+			expect(store.getFinding(idB)?.triageNote).toContain("fine");
+			// A never got its record_triage call.
+			expect(store.getFinding(idA)?.needsTriage).toBe(true);
+
+			// The audit footer STILL fired (this is the fix under test) and
+			// distinguishes "crashed" from "process killed with no footer at
+			// all" via the outcome field.
+			const auditPath = join(dir, "audit-run-crash.jsonl");
+			const lines = readFileSync(auditPath, "utf8").trim().split("\n");
+			const entries = lines.map((l) => JSON.parse(l));
+			const runEnd = entries.find((e) => e.kind === "run-end");
+			expect(runEnd).toBeDefined();
+			expect(runEnd.outcome).toBe("error: simulated API failure");
+			expect(runEnd.findingsTriaged).toBe(1);
+			expect(runEnd.findingsSkipped).toBe(0);
 		} finally {
 			store.close();
 			rmSync(dir, { recursive: true, force: true });

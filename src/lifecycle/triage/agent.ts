@@ -510,48 +510,72 @@ export async function runTriageAgent(
 	const maxTokensPerTurn =
 		options.maxTokensPerTurn ?? DEFAULT_MAX_TOKENS_PER_TURN;
 
-	for (const row of candidates) {
-		// D3: budget is checked BEFORE starting a finding, using cumulative
-		// usage so far — a finding already in progress is allowed to finish;
-		// remaining findings after the cutoff are left completely untouched
-		// (not even attempted, let alone counted as skipped).
-		if (inputTokens + outputTokens >= config.budgetTokens) {
-			stoppedForBudget = true;
-			break;
-		}
+	// Task 3 review fix (robustness): the finding loop can throw — most
+	// notably a live API error mid-run (client.messages.create rejecting).
+	// Without this try/finally, logRunEnd would never fire, leaving the
+	// audit JSONL with no footer at all — an operator couldn't tell "the run
+	// stopped cleanly, however it ended" from "the process was killed
+	// mid-flight." Already-recorded triages are unaffected either way
+	// (record_triage writes land in the DB synchronously, on the turn that
+	// called it, before any LATER turn's error could happen) and the CLI's
+	// own store.close() (its finally) still runs regardless — this only
+	// closes the audit trail's completeness gap. The caught error is
+	// re-thrown after the footer is written, so runTriageAgent's promise
+	// still rejects exactly as it did before this fix.
+	let runError: unknown;
+	try {
+		for (const row of candidates) {
+			// D3: budget is checked BEFORE starting a finding, using cumulative
+			// usage so far — a finding already in progress is allowed to finish;
+			// remaining findings after the cutoff are left completely untouched
+			// (not even attempted, let alone counted as skipped).
+			if (inputTokens + outputTokens >= config.budgetTokens) {
+				stoppedForBudget = true;
+				break;
+			}
 
-		const outcome = await triageOneFinding(
-			row,
-			tools,
-			auditLog,
-			client,
-			config,
-			maxTokensPerTurn,
-			nonce,
-		);
-		inputTokens += outcome.usage.inputTokens;
-		outputTokens += outcome.usage.outputTokens;
+			const outcome = await triageOneFinding(
+				row,
+				tools,
+				auditLog,
+				client,
+				config,
+				maxTokensPerTurn,
+				nonce,
+			);
+			inputTokens += outcome.usage.inputTokens;
+			outputTokens += outcome.usage.outputTokens;
 
-		if (outcome.triaged) {
-			triagedCount++;
-		} else {
-			const reason = outcome.skipReason ?? "no-action";
-			skipped.push({ findingId: row.id, reason });
-			auditLog.logToolCall({
-				findingId: row.id,
-				tool: "_agent",
-				input: {},
-				resultSummary: `skipped: ${reason}`,
-			});
+			if (outcome.triaged) {
+				triagedCount++;
+			} else {
+				const reason = outcome.skipReason ?? "no-action";
+				skipped.push({ findingId: row.id, reason });
+				auditLog.logToolCall({
+					findingId: row.id,
+					tool: "_agent",
+					input: {},
+					resultSummary: `skipped: ${reason}`,
+				});
+			}
 		}
+	} catch (err) {
+		runError = err;
+	} finally {
+		auditLog.logRunEnd({
+			findingsTriaged: triagedCount,
+			findingsSkipped: skipped.length,
+			tokenUsage: { inputTokens, outputTokens },
+			stoppedReason: stoppedForBudget ? "budget" : undefined,
+			outcome: runError
+				? `error: ${runError instanceof Error ? runError.message : String(runError)}`
+				: stoppedForBudget
+					? "budget-stopped"
+					: "completed",
+		});
 	}
 
-	auditLog.logRunEnd({
-		findingsTriaged: triagedCount,
-		findingsSkipped: skipped.length,
-		tokenUsage: { inputTokens, outputTokens },
-		stoppedReason: stoppedForBudget ? "budget" : undefined,
-	});
+	if (runError) throw runError;
 
 	return {
 		tenant: config.tenant,
