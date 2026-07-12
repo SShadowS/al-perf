@@ -2326,6 +2326,7 @@ describe("lifecycle captures", () => {
 				"expiresAt",
 				"claimedAt",
 				"claimedBy",
+				"reclaimCount",
 				"fulfilledAt",
 				"fulfilledByProfileId",
 			].sort(),

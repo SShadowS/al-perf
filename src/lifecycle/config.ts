@@ -44,6 +44,15 @@ export interface LifecycleConfig {
 		ttlDays: number;
 		/** Per-tenant cap on ACTIVE (pending/claimed) requests — further candidates are skipped, not queued. */
 		maxPending: number;
+		/**
+		 * Minutes after which a CLAIMED request whose executor never reported back
+		 * is returned to `pending` for another worker. The claim is advisory (see
+		 * docs/capture-request-contract.md); this is the engine-side backstop for
+		 * an executor that died mid-capture. Generous by default: a slow-but-alive
+		 * executor that gets reclaimed causes a duplicate capture — wasteful, not
+		 * corrupting, since both fulfil the same finding.
+		 */
+		claimTtlMinutes: number;
 	};
 }
 
@@ -72,8 +81,9 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 		minSeverity: "warning" as "critical" | "warning" | "info",
 		ttlDays: 14,
 		maxPending: 20,
+		claimTtlMinutes: 60,
 	},
 };
 
 /** Current lifecycle SQLite schema version (PRAGMA user_version target). See store.ts LIFECYCLE_MIGRATIONS. */
-export const LIFECYCLE_SCHEMA_VERSION = 6;
+export const LIFECYCLE_SCHEMA_VERSION = 7;

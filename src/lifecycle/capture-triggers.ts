@@ -30,6 +30,8 @@ export interface CaptureTriggerReport {
 	scanned: number;
 	created: number;
 	expired: number;
+	/** Stale claims returned to `pending` for another worker (executor died mid-capture). */
+	reclaimed: number;
 	/** Candidates that qualified but were skipped because the tenant was already at maxPending. */
 	skippedMaxPending: number;
 }
@@ -88,9 +90,12 @@ export function processCaptureTriggers(
 	now: string = new Date().toISOString(),
 ): CaptureTriggerReport {
 	const scan = store.db.transaction((): CaptureTriggerReport => {
-		const expired = store.expireCaptureRequests(now);
-
 		const cfg = config.captureRequests;
+		const expired = store.expireCaptureRequests(now);
+		// Order matters: a request past its CREATION ttl must die, not be recycled.
+		// Expire first, then reclaim whatever survived.
+		const reclaimed = store.reclaimStaleClaims(now, cfg.claimTtlMinutes);
+
 		const minRank = SEVERITY_RANK[cfg.minSeverity];
 		const candidates = store
 			.listFindings()
@@ -133,7 +138,13 @@ export function processCaptureTriggers(
 			if (wasCreated) created++;
 		}
 
-		return { scanned: candidates.length, created, expired, skippedMaxPending };
+		return {
+			scanned: candidates.length,
+			created,
+			expired,
+			reclaimed,
+			skippedMaxPending,
+		};
 	});
 
 	return scan();

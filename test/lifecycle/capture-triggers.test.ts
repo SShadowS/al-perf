@@ -231,4 +231,60 @@ describe("processCaptureTriggers", () => {
 		expect(store.listCaptureRequests()).toHaveLength(0);
 		store.close();
 	});
+
+	it("expiry runs BEFORE reclaim — a past-TTL claimed request expires, it is not recycled", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(telemetryFinding());
+		seedOccurrences(store, id, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				claimTtlMinutes: 60,
+			},
+		};
+		expect(processCaptureTriggers(store, cfg, NOW).created).toBe(1);
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", NOW);
+
+		// Past BOTH the 14-day creation TTL and the 60-minute claim TTL. If
+		// reclaim ran first it would go back to pending; the correct outcome
+		// is `expired`.
+		const pastBoth = new Date(Date.parse(NOW) + 15 * 86_400_000).toISOString();
+		const report = processCaptureTriggers(store, cfg, pastBoth);
+
+		expect(report.expired).toBe(1);
+		expect(report.reclaimed).toBe(0);
+		expect(store.listCaptureRequests()[0].status).toBe("expired");
+		store.close();
+	});
+
+	it("a stale claim inside its creation TTL is reclaimed and reported", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = store.insertFinding(telemetryFinding());
+		seedOccurrences(store, id, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				claimTtlMinutes: 60,
+			},
+		};
+		expect(processCaptureTriggers(store, cfg, NOW).created).toBe(1);
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", NOW);
+
+		// Past the 60-minute claim TTL, well inside the 14-day creation TTL.
+		const pastClaimTtlOnly = new Date(
+			Date.parse(NOW) + 61 * 60_000,
+		).toISOString();
+		const report = processCaptureTriggers(store, cfg, pastClaimTtlOnly);
+
+		expect(report.reclaimed).toBe(1);
+		expect(report.expired).toBe(0);
+		expect(store.listCaptureRequests()[0].status).toBe("pending");
+		store.close();
+	});
 });

@@ -1146,6 +1146,7 @@ export function createLifecycleCommand(): Command {
 					scanned: 0,
 					created: 0,
 					expired: 0,
+					reclaimed: 0,
 					skippedMaxPending: 0,
 				};
 				if (lifecycleConfig.captureRequests.enabled) {

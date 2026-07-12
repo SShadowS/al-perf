@@ -658,6 +658,71 @@ describe("LifecycleStore capture requests", () => {
 	});
 });
 
+describe("reclaimStaleClaims", () => {
+	const T0 = "2026-07-01T00:00:00Z";
+
+	it("returns a stale claim to pending, nulls claimed_at, KEEPS claimed_by, counts the reclaim", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		expect(store.claimCaptureRequest(row.id, "executor-1", T0)).toBe(true);
+
+		// 61 minutes later, with a 60-minute claim TTL.
+		const reclaimed = store.reclaimStaleClaims("2026-07-01T01:01:00Z", 60);
+		expect(reclaimed).toBe(1);
+
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("pending");
+		expect(after.claimedAt).toBeNull();
+		expect(after.claimedBy).toBe("executor-1"); // the breadcrumb survives
+		expect(after.reclaimCount).toBe(1);
+		store.close();
+	});
+
+	it("leaves a FRESH claim alone", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", T0);
+
+		// 59 minutes later — inside the 60-minute TTL.
+		expect(store.reclaimStaleClaims("2026-07-01T00:59:00Z", 60)).toBe(0);
+
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("claimed");
+		expect(after.claimedAt).not.toBeNull();
+		expect(after.reclaimCount).toBe(0);
+		store.close();
+	});
+
+	it("does not re-reclaim on the next sweep (claimed_at was nulled)", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		const [row] = store.listCaptureRequests();
+		store.claimCaptureRequest(row.id, "executor-1", T0);
+
+		expect(store.reclaimStaleClaims("2026-07-01T01:01:00Z", 60)).toBe(1);
+		// Immediately sweep again. A row left with claimed_at set would be
+		// reclaimed a second time, and every scan thereafter, forever.
+		expect(store.reclaimStaleClaims("2026-07-01T01:02:00Z", 60)).toBe(0);
+		expect(store.listCaptureRequests()[0].reclaimCount).toBe(1);
+		store.close();
+	});
+
+	it("only touches claimed rows — pending/fulfilled/expired/cancelled are inert", () => {
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(baseFinding());
+		store.createCaptureRequest(baseCaptureRequest({ findingId }));
+		// Left pending, never claimed.
+		expect(store.reclaimStaleClaims("2026-08-01T00:00:00Z", 60)).toBe(0);
+		expect(store.listCaptureRequests()[0].status).toBe("pending");
+		store.close();
+	});
+});
+
 describe("stale algo-version findings", () => {
 	function seed(
 		store: LifecycleStore,

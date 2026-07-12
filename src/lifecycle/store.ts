@@ -256,6 +256,16 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		        (SELECT COALESCE(MAX(id), 0) FROM finding_events WHERE sink_processed = 1)
 		 FROM sink_issue_map`,
 	],
+	[
+		// Purely additive — no table rebuild, no FK-toggle complications.
+		//
+		// Counts how many times a request has been reclaimed from a stale claim.
+		// This is what separates two failure modes that look identical from the
+		// outside: an executor that DIED (many requests, one reclaim each) versus a
+		// POISON request that kills whatever picks it up (one request, many
+		// reclaims). `captures health` surfaces it; nothing acts on it automatically.
+		`ALTER TABLE capture_requests ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -388,6 +398,7 @@ export interface CaptureRequestRow {
 	expiresAt: string;
 	claimedAt: string | null;
 	claimedBy: string | null;
+	reclaimCount: number;
 	fulfilledAt: string | null;
 	fulfilledByProfileId: string | null;
 }
@@ -1418,6 +1429,7 @@ export class LifecycleStore {
 			expiresAt: row.expires_at as string,
 			claimedAt: (row.claimed_at as string | null) ?? null,
 			claimedBy: (row.claimed_by as string | null) ?? null,
+			reclaimCount: (row.reclaim_count as number | null) ?? 0,
 			fulfilledAt: (row.fulfilled_at as string | null) ?? null,
 			fulfilledByProfileId:
 				(row.fulfilled_by_profile_id as string | null) ?? null,
@@ -1438,6 +1450,7 @@ export class LifecycleStore {
 			| "status"
 			| "claimedAt"
 			| "claimedBy"
+			| "reclaimCount"
 			| "fulfilledAt"
 			| "fulfilledByProfileId"
 		>,
@@ -1517,6 +1530,35 @@ export class LifecycleStore {
 			`UPDATE capture_requests SET status = 'expired'
 			 WHERE status IN ('pending','claimed') AND expires_at <= ?`,
 			[now],
+		);
+		return res.changes;
+	}
+
+	/**
+	 * Return claims older than `claimTtlMinutes` to `pending` so another worker
+	 * can take them — the engine-side backstop for an executor that died
+	 * mid-capture (nothing else ever moves a row out of `claimed`).
+	 *
+	 * `claimed_at` MUST be nulled: leave it set and the next sweep re-reclaims the
+	 * row it just reclaimed, on every scan, forever.
+	 *
+	 * `claimed_by` is deliberately KEPT. It is odd on a `pending` row, but it is
+	 * the only breadcrumb naming which executor dropped the request — without it
+	 * the evidence of a dead executor evaporates at the exact moment the sweep
+	 * runs. `claimCaptureRequest` overwrites it on the next claim, so read it as
+	 * "last claimed by".
+	 */
+	reclaimStaleClaims(now: string, claimTtlMinutes: number): number {
+		const cutoff = new Date(
+			Date.parse(now) - claimTtlMinutes * 60_000,
+		).toISOString();
+		const res = this.db.run(
+			`UPDATE capture_requests
+			 SET status = 'pending',
+			     claimed_at = NULL,
+			     reclaim_count = reclaim_count + 1
+			 WHERE status = 'claimed' AND claimed_at IS NOT NULL AND claimed_at <= ?`,
+			[cutoff],
 		);
 		return res.changes;
 	}
