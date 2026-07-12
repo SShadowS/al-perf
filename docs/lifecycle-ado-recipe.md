@@ -134,6 +134,17 @@ is delivery infrastructure, not a policy decision.
   code — while the other sink still drains fully. One misconfigured sink
   never blocks the other.
 
+**Adding Azure DevOps to an already-running GitHub tenant:** the trigger
+scan marks each lifecycle event processed once, globally — not per sink —
+so ADO does not replay history that was already scanned while only GitHub
+was enabled. Live/recurring findings still get filed: the create gate fires
+on any presence event with no ADO mapping yet, so a finding files to ADO on
+its next occurrence after you enable the sink. Only findings that stay
+dormant (never recur, never regress) after that point remain ADO-invisible.
+To capture the full existing backlog in ADO from day one, enable it before
+the GitHub tenant accrues history — otherwise ADO starts fresh and catches
+up as findings recur.
+
 ```json
 {
 	"sinks": {
