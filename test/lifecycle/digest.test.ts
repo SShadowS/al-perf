@@ -269,12 +269,12 @@ describe("digest — capture queue", () => {
 		const findingId = seed(store, "new", { tenant: "acme" });
 		seedCaptureRequest(store, findingId, "telemetry:acme-stuck-0001");
 		const [row] = store.listCaptureRequests("acme", "pending");
-		store.claimCaptureRequest(row.id, "dead-executor", "2026-07-01T00:00:00Z");
+		store.claimCaptureRequest(row.id, "dead-executor", "2026-07-11T00:00:00Z");
 
 		// 2 hours later, with a 60-minute claim TTL — well under maxPending: 20.
 		const digest = buildDigest(store, {
 			tenant: "acme",
-			now: "2026-07-01T02:00:00Z",
+			now: "2026-07-11T02:00:00Z",
 			captureRequests: { claimTtlMinutes: 60, maxPending: 20 },
 		});
 		expect(digest.captureQueue?.atCap).toBe(false);

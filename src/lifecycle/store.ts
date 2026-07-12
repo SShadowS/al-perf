@@ -1589,10 +1589,12 @@ export class LifecycleStore {
 					// Same denominator processCaptureTriggers uses against maxPending,
 					// evaluated over rows that would survive an expiry sweep first —
 					// processCaptureTriggers always sweeps before checking the cap.
+					// Plain string compare, not Date.parse: expireCaptureRequests
+					// sweeps with `expires_at <= ?` as SQL TEXT (byte-wise), so this
+					// must be that comparison's exact complement to stay in sync.
 					atCap:
-						[...pending, ...claimed].filter(
-							(r) => Date.parse(r.expiresAt) > Date.parse(now),
-						).length >= maxPending,
+						[...pending, ...claimed].filter((r) => r.expiresAt > now).length >=
+						maxPending,
 					maxPending,
 					oldestPendingAt,
 					reclaimedEver: reclaimed.length,
