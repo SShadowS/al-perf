@@ -666,6 +666,34 @@ describe("loadLifecycleConfigFile", () => {
 			});
 		});
 
+		it("rejects a non-positive-integer claimTtlMinutes", () => {
+			withTmpDir("alperf-lc-cfg-", (dir) => {
+				const file = join(dir, "bad-claim-ttl.json");
+				writeFileSync(
+					file,
+					JSON.stringify({ captureRequests: { claimTtlMinutes: 0 } }),
+				);
+				expect(() => loadLifecycleConfigFile(file)).toThrow(/claimTtlMinutes/);
+			});
+		});
+
+		it("a claimTtlMinutes value set in the config file reaches the resolved LifecycleConfig", () => {
+			withTmpDir("alperf-lc-cfg-", (dir) => {
+				const file = join(dir, "claim-ttl.json");
+				writeFileSync(
+					file,
+					JSON.stringify({ captureRequests: { claimTtlMinutes: 15 } }),
+				);
+				const patch = loadLifecycleConfigFile(file);
+				expect(patch?.captureRequests?.claimTtlMinutes).toBe(15);
+				const resolved = mergeLifecycleConfig(
+					DEFAULT_LIFECYCLE_CONFIG,
+					patch ?? {},
+				);
+				expect(resolved.captureRequests.claimTtlMinutes).toBe(15);
+			});
+		});
+
 		it("ignores unknown keys inside the captureRequests block", () => {
 			withTmpDir("alperf-lc-cfg-", (dir) => {
 				const file = join(dir, "unknown-cr-key.json");
@@ -704,6 +732,7 @@ describe("loadLifecycleConfigFile", () => {
 						minSeverity: "critical",
 						ttlDays: 7,
 						maxPending: 10,
+						claimTtlMinutes: 30,
 					},
 					sinks: { github: { enabled: true, repo: "owner/repo" } },
 				}),
@@ -727,6 +756,7 @@ describe("loadLifecycleConfigFile", () => {
 					minSeverity: "critical",
 					ttlDays: 7,
 					maxPending: 10,
+					claimTtlMinutes: 30,
 				},
 			});
 		});

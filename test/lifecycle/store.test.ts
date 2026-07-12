@@ -697,7 +697,7 @@ describe("reclaimStaleClaims", () => {
 		store.close();
 	});
 
-	it("does not re-reclaim on the next sweep (claimed_at was nulled)", () => {
+	it("reclaims the same row again after it is re-claimed and goes stale a second time, incrementing reclaim_count", () => {
 		const store = new LifecycleStore(":memory:");
 		const findingId = store.insertFinding(baseFinding());
 		store.createCaptureRequest(baseCaptureRequest({ findingId }));
@@ -705,20 +705,101 @@ describe("reclaimStaleClaims", () => {
 		store.claimCaptureRequest(row.id, "executor-1", T0);
 
 		expect(store.reclaimStaleClaims("2026-07-01T01:01:00Z", 60)).toBe(1);
-		// Immediately sweep again. A row left with claimed_at set would be
-		// reclaimed a second time, and every scan thereafter, forever.
-		expect(store.reclaimStaleClaims("2026-07-01T01:02:00Z", 60)).toBe(0);
-		expect(store.listCaptureRequests()[0].reclaimCount).toBe(1);
+
+		// A second executor picks up the reclaimed row, then also dies.
+		store.claimCaptureRequest(row.id, "executor-2", "2026-07-01T01:05:00Z");
+		expect(store.reclaimStaleClaims("2026-07-01T02:06:00Z", 60)).toBe(1);
+
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("pending");
+		expect(after.claimedBy).toBe("executor-2");
+		expect(after.reclaimCount).toBe(2);
 		store.close();
 	});
 
-	it("only touches claimed rows — pending/fulfilled/expired/cancelled are inert", () => {
+	it("leaves a pending row (never claimed) alone", () => {
 		const store = new LifecycleStore(":memory:");
 		const findingId = store.insertFinding(baseFinding());
 		store.createCaptureRequest(baseCaptureRequest({ findingId }));
-		// Left pending, never claimed.
+		// Left pending, never claimed — excluded by `claimed_at IS NOT NULL`,
+		// not by the `status = 'claimed'` guard exercised below.
 		expect(store.reclaimStaleClaims("2026-08-01T00:00:00Z", 60)).toBe(0);
 		expect(store.listCaptureRequests()[0].status).toBe("pending");
+		store.close();
+	});
+
+	it("only touches claimed rows — fulfilled/expired/cancelled requests keep their status and reclaim_count, even though claimed_at is still set and stale", () => {
+		const store = new LifecycleStore(":memory:");
+		const CLAIM_AT = "2026-07-01T00:00:00Z";
+		const SWEEP_AT = "2026-07-01T01:01:00Z"; // 61 min later, 60-min TTL
+
+		// Fulfilled: claimed, then fulfilled. fulfillMatchingCaptureRequests
+		// does not touch claimed_at, so it stays set on a terminal row.
+		const f1 = store.insertFinding(baseFinding());
+		store.createCaptureRequest(
+			baseCaptureRequest({ findingId: f1, fingerprint: "telemetry:aaa" }),
+		);
+		const [fulfilledRow] = store.listCaptureRequests("t1", "pending");
+		store.claimCaptureRequest(fulfilledRow.id, "executor-1", CLAIM_AT);
+		store.fulfillMatchingCaptureRequests(
+			"t1",
+			new Set(["abc123|codeunit|50100|postorder"]),
+			"profile-1",
+			"2026-07-01T00:30:00Z",
+		);
+
+		// Expired: claimed, then past its TTL. expireCaptureRequests does not
+		// touch claimed_at either.
+		const f2 = store.insertFinding(baseFinding({ fingerprint: "pattern:bbb" }));
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f2,
+				fingerprint: "telemetry:bbb",
+				methodName: "postshipment",
+				expiresAt: "2026-07-01T00:30:00Z",
+			}),
+		);
+		const [expiredRow] = store.listCaptureRequests("t1", "pending");
+		store.claimCaptureRequest(expiredRow.id, "executor-1", CLAIM_AT);
+		store.expireCaptureRequests("2026-07-01T00:30:00Z");
+
+		// Cancelled: claimed, then cancelled.
+		const f3 = store.insertFinding(baseFinding({ fingerprint: "pattern:ccc" }));
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				findingId: f3,
+				fingerprint: "telemetry:ccc",
+				methodName: "postinvoice",
+			}),
+		);
+		const [cancelledRow] = store.listCaptureRequests("t1", "pending");
+		store.claimCaptureRequest(cancelledRow.id, "executor-1", CLAIM_AT);
+		store.cancelCaptureRequest(cancelledRow.id);
+
+		// Sanity: all three rows are in a terminal state but still carry a
+		// stale claimed_at old enough to pass the TTL cutoff — if the guard
+		// were missing, the sweep below would resurrect them to pending.
+		const before = store.listCaptureRequests("t1");
+		expect(before.map((r) => r.status).sort()).toEqual(
+			["cancelled", "expired", "fulfilled"].sort(),
+		);
+		for (const row of before) {
+			expect(row.claimedAt).toBe(CLAIM_AT);
+		}
+
+		expect(store.reclaimStaleClaims(SWEEP_AT, 60)).toBe(0);
+
+		const after = store.listCaptureRequests("t1");
+		expect(after.find((r) => r.id === fulfilledRow.id)?.status).toBe(
+			"fulfilled",
+		);
+		expect(after.find((r) => r.id === expiredRow.id)?.status).toBe("expired");
+		expect(after.find((r) => r.id === cancelledRow.id)?.status).toBe(
+			"cancelled",
+		);
+		for (const row of after) {
+			expect(row.reclaimCount).toBe(0);
+		}
 		store.close();
 	});
 });

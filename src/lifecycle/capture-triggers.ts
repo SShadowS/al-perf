@@ -92,8 +92,14 @@ export function processCaptureTriggers(
 	const scan = store.db.transaction((): CaptureTriggerReport => {
 		const cfg = config.captureRequests;
 		const expired = store.expireCaptureRequests(now);
-		// Order matters: a request past its CREATION ttl must die, not be recycled.
-		// Expire first, then reclaim whatever survived.
+		// Order matters: expireCaptureRequests also matches 'claimed' rows, so
+		// a request past its creation TTL dies either way, regardless of order.
+		// Expiring first means a dying request never touches reclaim_count —
+		// reclaiming it first would flip it to 'pending' and increment
+		// reclaim_count for a row that's about to expire anyway, corrupting the
+		// exact signal reclaim_count exists to carry (a dead executor produces
+		// many requests with one reclaim each; a poison request produces one
+		// request with many reclaims).
 		const reclaimed = store.reclaimStaleClaims(now, cfg.claimTtlMinutes);
 
 		const minRank = SEVERITY_RANK[cfg.minSeverity];

@@ -232,7 +232,7 @@ describe("processCaptureTriggers", () => {
 		store.close();
 	});
 
-	it("expiry runs BEFORE reclaim — a past-TTL claimed request expires, it is not recycled", () => {
+	it("expiry runs BEFORE reclaim — a request past its creation TTL never records a spurious reclaim, even though it also clears the claim TTL", () => {
 		const store = new LifecycleStore(":memory:");
 		const id = store.insertFinding(telemetryFinding());
 		seedOccurrences(store, id, 3);
@@ -248,15 +248,20 @@ describe("processCaptureTriggers", () => {
 		const [row] = store.listCaptureRequests();
 		store.claimCaptureRequest(row.id, "executor-1", NOW);
 
-		// Past BOTH the 14-day creation TTL and the 60-minute claim TTL. If
-		// reclaim ran first it would go back to pending; the correct outcome
-		// is `expired`.
+		// Past BOTH the 14-day creation TTL and the 60-minute claim TTL. The
+		// row dies either way (expireCaptureRequests matches 'claimed' rows
+		// directly) — what the order actually protects is reclaim_count: if
+		// reclaim ran first it would flip this row to 'pending' and increment
+		// reclaim_count on a request that's about to expire anyway, corrupting
+		// the exact signal reclaim_count exists to carry.
 		const pastBoth = new Date(Date.parse(NOW) + 15 * 86_400_000).toISOString();
 		const report = processCaptureTriggers(store, cfg, pastBoth);
 
 		expect(report.expired).toBe(1);
 		expect(report.reclaimed).toBe(0);
-		expect(store.listCaptureRequests()[0].status).toBe("expired");
+		const [after] = store.listCaptureRequests();
+		expect(after.status).toBe("expired");
+		expect(after.reclaimCount).toBe(0);
 		store.close();
 	});
 

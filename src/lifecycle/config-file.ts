@@ -281,6 +281,15 @@ function validateCaptureRequestsBlock(
 		result.minSeverity = cr.minSeverity as "critical" | "warning" | "info";
 	}
 
+	if (cr.claimTtlMinutes !== undefined) {
+		if (!isPositiveInteger(cr.claimTtlMinutes)) {
+			throw new Error(
+				`${path}: captureRequests.claimTtlMinutes must be a positive integer (got ${JSON.stringify(cr.claimTtlMinutes)})`,
+			);
+		}
+		result.claimTtlMinutes = cr.claimTtlMinutes;
+	}
+
 	return result;
 }
 

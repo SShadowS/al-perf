@@ -875,6 +875,81 @@ function openV5FixtureWithSinkHistory(
 	return { store, dir };
 }
 
+/**
+ * Builds a genuine v6 database on disk with one finding and one
+ * capture_requests row inserted directly (v6 predates the reclaim_count
+ * column, so the raw INSERT can't set it). Reopening through LifecycleStore
+ * exercises the real v6 -> v7 migration step: the additive
+ * `ALTER TABLE capture_requests ADD COLUMN reclaim_count INTEGER NOT NULL
+ * DEFAULT 0`. Caller must `rmSync(dir, ...)` when done.
+ */
+function openV6FixtureWithCaptureRequest(): {
+	store: LifecycleStore;
+	dir: string;
+	captureRequestId: number;
+} {
+	const dir = mkdtempSync(join(tmpdir(), "alperf-migrations-v7-"));
+	const dbPath = join(dir, "lifecycle.sqlite");
+	const v6 = new Database(dbPath, { create: true });
+	for (const stmts of LIFECYCLE_MIGRATIONS.slice(0, 6)) {
+		for (const stmt of stmts) v6.run(stmt);
+	}
+	v6.run("PRAGMA user_version = 6");
+	v6.run(
+		`INSERT INTO findings (tenant, fingerprint, algo_version, state, needs_triage, source, pattern_id, title, severity, first_seen_at, last_seen_at, last_event_at)
+		 VALUES ('t', 'telemetry:existingfinding03', 1, 'open', 0, 'telemetry', 'x', 'x', 'warning', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+	);
+	const findingId = v6
+		.query<{ id: number }, []>(
+			"SELECT id FROM findings WHERE fingerprint = 'telemetry:existingfinding03'",
+		)
+		.get()?.id as number;
+	v6.run(
+		`INSERT INTO capture_requests (tenant, fingerprint, finding_id, app_id, app_name, object_type, object_id, method_name, reason, requested_at, expires_at)
+		 VALUES ('t', 'telemetry:existingfinding03', ?, 'abc123', 'My App', 'codeunit', 50100, 'postorder', 'RT0018 x 5 runs', '2026-07-01T00:00:00.000Z', '2026-07-18T00:00:00.000Z')`,
+		[findingId],
+	);
+	const captureRequestId = v6
+		.query<{ id: number }, []>(
+			"SELECT id FROM capture_requests WHERE fingerprint = 'telemetry:existingfinding03'",
+		)
+		.get()?.id as number;
+	v6.close();
+	const store = new LifecycleStore(dbPath); // runs the real ladder from user_version 6 onward
+	return { store, dir, captureRequestId };
+}
+
+describe("schema v7 (capture request reclaim_count)", () => {
+	it("v7 adds reclaim_count to existing capture_requests rows as 0, not NULL; v6 data survives, no dangling FKs, DB lands on the current schema head", () => {
+		const { store, dir, captureRequestId } = openV6FixtureWithCaptureRequest();
+		try {
+			expect(
+				store.db
+					.query<{ user_version: number }, []>("PRAGMA user_version")
+					.get()?.user_version,
+			).toBe(LIFECYCLE_SCHEMA_VERSION);
+			// rowToCaptureRequest coalesces reclaim_count with `?? 0`, which would
+			// mask a NULL — assert on the raw column via a direct query instead,
+			// so a broken migration (ADD COLUMN without DEFAULT 0) can't hide.
+			const raw = store.db
+				.query<{ reclaim_count: number | null }, [number]>(
+					"SELECT reclaim_count FROM capture_requests WHERE id = ?",
+				)
+				.get(captureRequestId);
+			expect(raw?.reclaim_count).toBe(0);
+			// pre-migration row survived untouched
+			expect(
+				store.listCaptureRequests().find((r) => r.id === captureRequestId)
+					?.fingerprint,
+			).toBe("telemetry:existingfinding03");
+			expect(store.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("schema v6 (per-sink watermark seed)", () => {
 	it("resumes a sink that has already filed at the last event it scanned under the old global bit, and leaves an unmapped sink at 0", () => {
 		// N=10 events, the first M=6 already flagged sink_processed=1 under the

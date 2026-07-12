@@ -1539,8 +1539,11 @@ export class LifecycleStore {
 	 * can take them — the engine-side backstop for an executor that died
 	 * mid-capture (nothing else ever moves a row out of `claimed`).
 	 *
-	 * `claimed_at` MUST be nulled: leave it set and the next sweep re-reclaims the
-	 * row it just reclaimed, on every scan, forever.
+	 * `claimed_at` MUST be nulled: a `pending` row carrying a `claimed_at` is a
+	 * lie. The column means "when the current holder claimed this", and a
+	 * pending request has no holder — leaving stale data there corrupts any
+	 * consumer that reasons about claim age (the `status = 'claimed'` guard
+	 * above already keeps this row from being re-reclaimed on the next scan).
 	 *
 	 * `claimed_by` is deliberately KEPT. It is odd on a `pending` row, but it is
 	 * the only breadcrumb naming which executor dropped the request — without it
