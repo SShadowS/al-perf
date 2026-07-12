@@ -132,6 +132,42 @@ function seedQualifyingTelemetryFinding(
 	store.close();
 }
 
+/**
+ * Occupy a tenant's entire capture-request capacity with one active
+ * (pending) request against its own finding — the "queue already full"
+ * half of the starvation fixture. Paired with `maxPending: 1` in config and
+ * one MORE qualifying finding (seedQualifyingTelemetryFinding), this
+ * reproduces the exact state where an executor has died: nothing can be
+ * created (already at cap) and nothing is due to expire (expiresAt is far in
+ * the future), yet a qualifying finding is skipped every scan.
+ */
+const OCCUPANT_FP = "telemetry:sync000000000cap0";
+function seedTenantAtCaptureCapacity(dbPath: string): void {
+	const store = new LifecycleStore(dbPath);
+	const findingId = store.insertFinding(
+		finding({
+			fingerprint: OCCUPANT_FP,
+			source: "telemetry",
+			patternId: "telemetry-rt0018",
+			routineKey: "abc123|Codeunit|50100|postvoid",
+		}),
+	);
+	store.createCaptureRequest({
+		tenant: TENANT,
+		fingerprint: OCCUPANT_FP,
+		findingId,
+		appId: "abc123",
+		appName: null,
+		objectType: "Codeunit",
+		objectId: 50100,
+		methodName: "postvoid",
+		reason: "pre-seeded occupant filling maxPending cap",
+		requestedAt: "2026-07-01T00:00:00Z",
+		expiresAt: "2030-01-01T00:00:00Z",
+	});
+	store.close();
+}
+
 /** Seed a dead-lettered outbox row directly (no live drain needed). */
 const DEAD_FP = "pattern:sync0000000000dead";
 function seedDeadLetter(dbPath: string): void {
@@ -462,6 +498,27 @@ describe("lifecycle sync — security boundary", () => {
 		const store = new LifecycleStore(dbPath);
 		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
 		store.close();
+	});
+
+	it("sync warns when findings were skipped at the maxPending cap (the queue is jammed)", async () => {
+		// Seed: tenant at maxPending with active requests, plus one MORE qualifying
+		// finding that will be skipped. No new requests can be created and nothing
+		// is due to expire — created == 0 && expired == 0 && skippedMaxPending > 0.
+		seedTenantAtCaptureCapacity(dbPath);
+		seedQualifyingTelemetryFinding(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({ captureRequests: { maxPending: 1 } }),
+		);
+
+		logSpy.mockClear();
+		await runSync(["sync"]);
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).toContain("Capture requests:");
+		expect(printed).toMatch(/NOT requested/i);
+		expect(printed).toContain("maxPending");
+		expect(printed).toContain("captures health");
 	});
 
 	describe("multi-sink fan-out (Task 4)", () => {

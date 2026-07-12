@@ -1293,6 +1293,7 @@ export function createLifecycleCommand(): Command {
 					captureRequests: {
 						created: captureRequests.created,
 						expired: captureRequests.expired,
+						reclaimed: captureRequests.reclaimed,
 						skippedMaxPending: captureRequests.skippedMaxPending,
 					},
 				};
@@ -1310,9 +1311,24 @@ export function createLifecycleCommand(): Command {
 							`${d.collapsed} collapsed.`,
 					);
 				}
-				if (captureRequests.created > 0 || captureRequests.expired > 0) {
+				const cr = captureRequests;
+				// The guard must include skippedMaxPending. In the starvation state
+				// — executor dead, queue at the cap — created and expired are BOTH
+				// zero, so a guard on those two alone prints nothing, and a jammed
+				// pipeline looks byte-identical to a healthy idle one on stdout.
+				if (
+					cr.created > 0 ||
+					cr.expired > 0 ||
+					cr.reclaimed > 0 ||
+					cr.skippedMaxPending > 0
+				) {
 					console.log(
-						`Capture requests: ${captureRequests.created} created, ${captureRequests.expired} expired.`,
+						`Capture requests: ${cr.created} created, ${cr.expired} expired, ${cr.reclaimed} reclaimed.`,
+					);
+				}
+				if (cr.skippedMaxPending > 0) {
+					console.log(
+						`  WARNING: ${cr.skippedMaxPending} finding(s) qualified but were NOT requested — tenant at the maxPending cap (${lifecycleConfig.captureRequests.maxPending}). The queue may be jammed. Run: lifecycle captures health`,
 					);
 				}
 				if (deadLetters.length > 0) {
