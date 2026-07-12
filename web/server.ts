@@ -983,6 +983,26 @@ export const server = Bun.serve({
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
 			const aiEnabled =
 				process.env.AI_DISABLED !== "1" && !!process.env.ANTHROPIC_API_KEY;
+			// Only query the lifecycle store when lifecycle tracking is actually
+			// on — opening one just to answer this status query would create a
+			// lifecycle DB on a deployment that never uses lifecycle at all.
+			let staleAlgoTenants: Array<{
+				tenant: string;
+				count: number;
+				versions: number[];
+			}> = [];
+			if (process.env.AL_PERF_LIFECYCLE === "1") {
+				const { getLifecycleStore } = await import("./lifecycle-db.ts");
+				const { FINGERPRINT_ALGO_VERSION } = await import(
+					"../src/lifecycle/fingerprint.ts"
+				);
+				// Read env per-request so tests can override the data dir after import.
+				const dataDir =
+					process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
+				staleAlgoTenants = getLifecycleStore(dataDir).listStaleAlgoTenants(
+					FINGERPRINT_ALGO_VERSION,
+				);
+			}
 			return withSecurityHeaders(
 				Response.json({
 					version: APP_VERSION,
@@ -991,6 +1011,7 @@ export const server = Bun.serve({
 					debugMode: DEBUG_MODE,
 					pendingCaptures: debugStore.pendingCount,
 					aiEnabled,
+					staleAlgoTenants,
 				}),
 			);
 		}

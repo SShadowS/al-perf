@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
 import {
 	chmodSync,
+	existsSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -8,7 +9,10 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
+import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 import { clearEngineCache } from "../../src/semantic/engine-runner.js";
+import { closeLifecycleStoreForTest } from "../../web/lifecycle-db.js";
 
 // ---------------------------------------------------------------------------
 // Paths + stub helpers (mirrors test/mcp/server.test.ts)
@@ -398,5 +402,85 @@ describe("web server", () => {
 				clearEngineCache();
 			}
 		}, 120_000);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/debug/status — staleAlgoTenants (Task 3): the operator status
+// surface must report every tenant blocked by the stale-algo guard, but
+// MUST NOT open a lifecycle store (and therefore create lifecycle.sqlite)
+// when lifecycle tracking is off — that would be a regression on every
+// deployment that doesn't use lifecycle at all.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/debug/status — staleAlgoTenants", () => {
+	afterEach(() => {
+		delete process.env.AL_PERF_LIFECYCLE;
+		delete process.env.AL_PERF_DATA_DIR;
+	});
+
+	function staleFinding(tenant: string): NewFinding {
+		return {
+			tenant,
+			fingerprint: "pattern:debugstatuscli0001",
+			algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Stale finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		};
+	}
+
+	it("lifecycle OFF: staleAlgoTenants is [] and no lifecycle.sqlite is created", async () => {
+		delete process.env.AL_PERF_LIFECYCLE;
+		const dir = mkdtempSync(join(tmpdir(), "alperf-debug-status-off-"));
+		webTestCleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		process.env.AL_PERF_DATA_DIR = dir;
+
+		const res = await fetch(`http://localhost:3999/api/debug/status`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { staleAlgoTenants: unknown[] };
+		expect(body.staleAlgoTenants).toEqual([]);
+		expect(existsSync(join(dir, "lifecycle.sqlite"))).toBe(false);
+	});
+
+	it("lifecycle ON with a seeded stale finding: reports the blocked tenant", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-debug-status-on-"));
+		webTestCleanups.push(() => {
+			closeLifecycleStoreForTest(dir);
+			rmSync(dir, { recursive: true, force: true });
+		});
+		process.env.AL_PERF_DATA_DIR = dir;
+		process.env.AL_PERF_LIFECYCLE = "1";
+
+		const seedStore = new LifecycleStore(join(dir, "lifecycle.sqlite"));
+		seedStore.insertFinding(staleFinding("debugstaletenant"));
+		seedStore.close();
+
+		const res = await fetch(`http://localhost:3999/api/debug/status`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			staleAlgoTenants: Array<{
+				tenant: string;
+				count: number;
+				versions: number[];
+			}>;
+		};
+		expect(body.staleAlgoTenants).toEqual([
+			{
+				tenant: "debugstaletenant",
+				count: 1,
+				versions: [FINGERPRINT_ALGO_VERSION + 1],
+			},
+		]);
 	});
 });

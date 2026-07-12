@@ -2055,6 +2055,114 @@ describe("lifecycle status -f json", () => {
 });
 
 // ---------------------------------------------------------------------------
+// lifecycle status — stale-algo guard visibility (Task 3): an operator
+// querying a tenant blocked by the guard must be warned, naming the count,
+// versions, and remedy command. Table format prints the banner above the
+// table via console.log; json format must keep stdout a bare parseable
+// array (piping `-f json | jq` must keep working) with the warning routed
+// to stderr instead.
+// ---------------------------------------------------------------------------
+
+function staleStatusFinding(tenant: string): NewFinding {
+	return {
+		tenant,
+		fingerprint: "pattern:stalestatuscli0001",
+		algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+		state: "open",
+		source: "pattern",
+		patternId: "calcfields-in-loop",
+		title: "Stale finding",
+		severity: "critical",
+		appId: "",
+		appName: "",
+		routineKey: "",
+		firstSeenAt: "2026-07-01T00:00:00Z",
+		lastSeenAt: "2026-07-01T00:00:00Z",
+		lastEventAt: "2026-07-01T00:00:00Z",
+		observedKinds: ["sampling"],
+		observedStreams: ["nightly"],
+	};
+}
+
+describe("lifecycle status — stale-algo guard visibility", () => {
+	let dir: string;
+	let dbPath: string;
+	let stdoutSpy: ReturnType<typeof spyOn<typeof process.stdout, "write">>;
+	let stderrSpy: ReturnType<typeof spyOn<typeof process.stderr, "write">>;
+	let logSpy: ReturnType<typeof spyOn<Console, "log">>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "alperf-status-stale-cli-"));
+		dbPath = join(dir, "lifecycle.sqlite");
+		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+		stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(async () => {
+		stdoutSpy.mockRestore();
+		stderrSpy.mockRestore();
+		logSpy.mockRestore();
+		await rmSyncRetrying(dir);
+	});
+
+	async function run(args: string[]): Promise<void> {
+		const cmd = createLifecycleCommand();
+		cmd.exitOverride();
+		await cmd.parseAsync(["--db", dbPath, ...args], { from: "user" });
+	}
+
+	it("--format table: prints a warning banner above the table naming count, versions, and the remedy", async () => {
+		const store = new LifecycleStore(dbPath);
+		store.insertFinding(staleStatusFinding("acme"));
+		store.close();
+
+		await run(["status", "--tenant", "acme"]);
+
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).toContain("acme");
+		expect(printed).toContain(`v${FINGERPRINT_ALGO_VERSION + 1}`);
+		expect(printed).toContain(
+			`lifecycle maintain --purge-stale-fingerprints --tenant acme`,
+		);
+		// stdout must still be untouched by the warning — table format prints
+		// everything via console.log (which this test spies separately).
+		expect(stdoutSpy.mock.calls).toHaveLength(0);
+	});
+
+	it("--format json: warning goes to stderr; stdout stays a bare parseable JSON array", async () => {
+		const store = new LifecycleStore(dbPath);
+		store.insertFinding(staleStatusFinding("acme"));
+		store.close();
+
+		await run(["status", "--tenant", "acme", "-f", "json"]);
+
+		const stdoutText = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+		const rows = JSON.parse(stdoutText); // must not throw: stdout is a bare array
+		expect(Array.isArray(rows)).toBe(true);
+		expect(rows).toHaveLength(1);
+
+		const stderrText = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+		expect(stderrText).toContain("acme");
+		expect(stderrText).toContain(`v${FINGERPRINT_ALGO_VERSION + 1}`);
+		expect(stderrText).toContain(
+			`lifecycle maintain --purge-stale-fingerprints --tenant acme`,
+		);
+	});
+
+	it("clean tenant: no warning on either stream", async () => {
+		const store = new LifecycleStore(dbPath);
+		store.close();
+
+		await run(["status", "--tenant", "acme"]);
+
+		expect(stderrSpy.mock.calls).toHaveLength(0);
+		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(printed).not.toContain("stale-algo");
+		expect(printed).toContain("No findings.");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // lifecycle captures — deep-capture request queue operator CLI
 // (capture-requests plan Task 4). Operates on rows filed by
 // processCaptureTriggers (Task 2) and closed by evaluateRun's fulfillment
