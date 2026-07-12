@@ -576,6 +576,64 @@ describe("lifecycle sync — security boundary", () => {
 			store.close();
 		});
 
+		it("github token missing: github drain is skipped loudly (names github's token env var), ADO still drains fully, reaches the summary, exits 1", async () => {
+			seedPendingDeliveryForSinks(dbPath, ["github", "azureDevOps"]);
+			// Deliberately not setting AL_PERF_SYNC_TEST_GH_TOKEN.
+			delete process.env.AL_PERF_SYNC_TEST_GH_TOKEN;
+			process.env.AL_PERF_SYNC_TEST_ADO_TOKEN = "ado-token";
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					sinks: {
+						github: {
+							enabled: true,
+							repo: "owner/repo",
+							tokenEnv: "AL_PERF_SYNC_TEST_GH_TOKEN",
+						},
+						azureDevOps: ADO_CONFIG,
+					},
+				}),
+			);
+			globalThis.fetch = okFetch(fetchCalls);
+
+			await runSync(["sync", "-f", "json"]);
+
+			// The other sink's missing token is an operator error (exitCode 1),
+			// but the command still reaches the summary and must not have
+			// prevented azureDevOps from draining — the isolation is symmetric
+			// regardless of which sink's token is absent or drain plan order.
+			expect(process.exitCode).toBe(1);
+
+			const ghCalls = fetchCalls.filter((c) =>
+				String(c[0]).includes("api.github.com"),
+			);
+			const adoCalls = fetchCalls.filter((c) =>
+				String(c[0]).includes("dev.azure.com"),
+			);
+			expect(ghCalls).toHaveLength(0);
+			expect(adoCalls).toHaveLength(1);
+
+			const errText = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+			expect(errText).toContain("AL_PERF_SYNC_TEST_GH_TOKEN");
+
+			const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+			const summary = JSON.parse(output);
+			expect(summary.drains).toHaveLength(1);
+			expect(summary.drains[0]).toEqual({
+				sink: "azureDevOps",
+				delivered: 1,
+				retried: 0,
+				dead: 0,
+				collapsed: 0,
+			});
+
+			// The github row is still pending — never drained.
+			const store = new LifecycleStore(dbPath);
+			expect(store.listPendingOutbox("github", "comment-regressed")).toHaveLength(1);
+			expect(store.listPendingOutbox("azureDevOps", "comment-regressed")).toHaveLength(0);
+			store.close();
+		});
+
 		it("github-only config (back-compat): drains is a one-entry array for github, no azureDevOps entry", async () => {
 			seedPendingDelivery(dbPath);
 			process.env.AL_PERF_SYNC_TEST_GH_TOKEN = "gh-token";
