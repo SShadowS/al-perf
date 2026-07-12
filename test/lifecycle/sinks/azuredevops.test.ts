@@ -113,6 +113,20 @@ describe("escaping (injection tests)", () => {
 		expect(out).toBe("&lt;&gt;&amp;&quot;");
 	});
 
+	it("escapeHtml neutralizes single quotes (attribute-context safety)", () => {
+		const out = escapeHtml("O'Brien's finding: onmouseover='alert(1)'");
+		expect(out).not.toContain("'");
+		expect(out).toContain("O&#39;Brien&#39;s");
+		expect(out).toContain("onmouseover=&#39;alert(1)&#39;");
+	});
+
+	it("renderTitle escapes a single-quote-bearing title", () => {
+		const hostile = ctx({ title: "it's a trap' onmouseover='alert(1)" });
+		const title = renderTitle(hostile);
+		expect(title).not.toContain("'");
+		expect(title).toContain("&#39;");
+	});
+
 	it("renderTitle and renderDescription carry no raw tag from finding text", () => {
 		const hostile = ctx({
 			title: "<script>alert(1)</script>",

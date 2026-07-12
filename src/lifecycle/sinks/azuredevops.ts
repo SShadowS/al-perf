@@ -63,15 +63,20 @@ export interface AzureDevOpsAdapterOptions {
 
 /**
  * HTML-entity-escape everything ADO's Description/comment rich-text fields
- * would interpret as markup: & < > ". ORDER MATTERS: & first, so escaping
- * doesn't double-escape the entities it just produced.
+ * would interpret as markup: & < > " '. Covers both element-content context
+ * (today's only use — <p>, <pre>, <li>) AND single/double-quoted attribute
+ * context, so a future edit that interpolates finding text into an
+ * attribute (e.g. `title='${...}'`) stays safe without touching this
+ * function. ORDER MATTERS: & first, so escaping doesn't double-escape the
+ * entities it just produced.
  */
 export function escapeHtml(text: string): string {
 	return text
 		.replace(/&/g, "&amp;")
 		.replace(/</g, "&lt;")
 		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;");
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
 }
 
 /**
