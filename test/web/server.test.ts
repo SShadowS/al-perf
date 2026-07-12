@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
 import {
 	chmodSync,
+	existsSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -8,7 +9,10 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
+import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 import { clearEngineCache } from "../../src/semantic/engine-runner.js";
+import { closeLifecycleStoreForTest } from "../../web/lifecycle-db.js";
 
 // ---------------------------------------------------------------------------
 // Paths + stub helpers (mirrors test/mcp/server.test.ts)
@@ -398,5 +402,95 @@ describe("web server", () => {
 				clearEngineCache();
 			}
 		}, 120_000);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/debug/status — staleAlgoTenantCount / staleAlgoFindingCount: the
+// operator status surface must report AGGREGATE COUNTS ONLY for tenants
+// blocked by the stale-algo guard. This route is unauthenticated, so it must
+// never publish customer tenant identifiers (that's what the authenticated
+// `lifecycle status` CLI is for). It also MUST NOT open a lifecycle store
+// (and therefore create lifecycle.sqlite) when lifecycle tracking is off —
+// that would be a regression on every deployment that doesn't use lifecycle
+// at all.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/debug/status — stale-algo visibility", () => {
+	afterEach(() => {
+		delete process.env.AL_PERF_LIFECYCLE;
+		delete process.env.AL_PERF_DATA_DIR;
+	});
+
+	function staleFinding(tenant: string): NewFinding {
+		return {
+			tenant,
+			fingerprint: "pattern:debugstatuscli0001",
+			algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Stale finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		};
+	}
+
+	it("lifecycle OFF: both counts are 0 and no lifecycle.sqlite is created", async () => {
+		delete process.env.AL_PERF_LIFECYCLE;
+		const dir = mkdtempSync(join(tmpdir(), "alperf-debug-status-off-"));
+		webTestCleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		process.env.AL_PERF_DATA_DIR = dir;
+
+		const res = await fetch(`http://localhost:3999/api/debug/status`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			staleAlgoTenantCount: number;
+			staleAlgoFindingCount: number;
+		};
+		expect(body.staleAlgoTenantCount).toBe(0);
+		expect(body.staleAlgoFindingCount).toBe(0);
+		expect(existsSync(join(dir, "lifecycle.sqlite"))).toBe(false);
+	});
+
+	it("lifecycle ON with two blocked tenants: reports correct aggregate counts", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-debug-status-on-"));
+		webTestCleanups.push(() => {
+			closeLifecycleStoreForTest(dir);
+			rmSync(dir, { recursive: true, force: true });
+		});
+		process.env.AL_PERF_DATA_DIR = dir;
+		process.env.AL_PERF_LIFECYCLE = "1";
+
+		const seedStore = new LifecycleStore(join(dir, "lifecycle.sqlite"));
+		seedStore.insertFinding(staleFinding("acme-secret-customer"));
+		seedStore.insertFinding({
+			...staleFinding("acme-secret-customer"),
+			fingerprint: "pattern:debugstatuscli0002",
+		});
+		seedStore.insertFinding(staleFinding("debugstaletenant"));
+		seedStore.close();
+
+		const res = await fetch(`http://localhost:3999/api/debug/status`);
+		expect(res.status).toBe(200);
+		const rawBody = await res.text();
+		const body = JSON.parse(rawBody) as {
+			staleAlgoTenantCount: number;
+			staleAlgoFindingCount: number;
+		};
+		expect(body.staleAlgoTenantCount).toBe(2);
+		expect(body.staleAlgoFindingCount).toBe(3);
+
+		// Regression guard: this route is unauthenticated, so the response
+		// body must never contain a tenant identifier — only aggregate counts.
+		expect(rawBody).not.toContain("acme-secret-customer");
+		expect(rawBody).not.toContain("debugstaletenant");
 	});
 });

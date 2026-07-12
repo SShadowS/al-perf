@@ -144,6 +144,12 @@ long-dead finding files nothing no matter how much history it has. GitHub, havin
 already scanned that history, enqueues nothing new. There is no longer any reason
 to enable both sinks before a tenant accrues history.
 
+The same backlog replay applies to flipping `autoFile` on for the first time on a
+tenant with long history, even without adding a new sink: every dormant finding
+that now qualifies files in one burst instead of trickling in as findings recur —
+worth weighing against the [confidentiality note](#confidentiality-note) below.
+Review `lifecycle digest` for the tenant first.
+
 ```json
 {
 	"sinks": {

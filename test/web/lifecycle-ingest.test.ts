@@ -9,7 +9,8 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { LifecycleStore } from "../../src/lifecycle/store.js";
+import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
+import { LifecycleStore, type NewFinding } from "../../src/lifecycle/store.js";
 import { closeLifecycleStoreForTest } from "../../web/lifecycle-db.js";
 
 const TEST_DATA = mkdtempSync(join(tmpdir(), "alperf-lifecycle-ingest-"));
@@ -151,6 +152,10 @@ describe("ingest lifecycle hook (AL_PERF_LIFECYCLE)", () => {
 		expect(res.status).toBe(202);
 		const body = (await res.json()) as { status: string };
 		expect(body.status).toBe("stored");
+		// A generic evaluation error must NOT be mistaken for the stale-algo
+		// guard — the "lifecycle" key is only ever added for a caught
+		// StaleAlgoVersionError (see the ingest handler's catch block).
+		expect(body).not.toHaveProperty("lifecycle");
 	});
 
 	it("AL_PERF_LIFECYCLE=1 with a malformed AL_PERF_LIFECYCLE_CONFIG: fails before the keyversion marker, not swallowed like a runtime evaluation error", async () => {
@@ -180,5 +185,71 @@ describe("ingest lifecycle hook (AL_PERF_LIFECYCLE)", () => {
 			delete process.env.AL_PERF_LIFECYCLE;
 			delete process.env.AL_PERF_LIFECYCLE_CONFIG;
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// stale-algo visibility (Task 2): the ingest hook must stop claiming plain
+// success when the tenant is blocked by the stale-algo guard, without
+// failing the request (the profile IS stored, and is reanalyzable).
+// ---------------------------------------------------------------------------
+
+describe("ingest lifecycle hook — stale-algo visibility", () => {
+	it("blocked tenant: still 202/stored (profile on disk), but body carries lifecycle.status=blocked with a tenant-scoped remediation", async () => {
+		process.env.AL_PERF_LIFECYCLE = "1";
+		const tenantCode = "lcstale";
+		const seedStore = new LifecycleStore(join(TEST_DATA, "lifecycle.sqlite"));
+		seedStore.insertFinding({
+			tenant: tenantCode,
+			fingerprint: "pattern:staleaaaaaaaaaaa1",
+			algoVersion: FINGERPRINT_ALGO_VERSION + 1,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: "Stale finding",
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+		seedStore.close();
+
+		const token = await registerTenant(tenantCode);
+		const guid = "550e8400-e29b-41d4-a716-446655440220";
+		const res = await postIngest(tenantCode, token, guid);
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			status: string;
+			lifecycle?: { status: string; reason: string; remediation: string };
+		};
+		expect(body.status).toBe("stored");
+		// The profile really is stored — the guard throws before any write, and
+		// the ciphertext hits disk regardless of what the lifecycle hook does.
+		expect(
+			existsSync(
+				join(TEST_DATA, "storage", tenantCode, "profiles", guid, "blob.enc"),
+			),
+		).toBe(true);
+		expect(body.lifecycle?.status).toBe("blocked");
+		expect(body.lifecycle?.reason).toBe("stale-algo");
+		expect(body.lifecycle?.remediation).toContain("--purge-stale-fingerprints");
+		expect(body.lifecycle?.remediation).toContain(tenantCode);
+	});
+
+	it("clean tenant: the happy-path response body has NO lifecycle key at all", async () => {
+		process.env.AL_PERF_LIFECYCLE = "1";
+		const tenantCode = "lcstaleclean";
+		const token = await registerTenant(tenantCode);
+		const guid = "550e8400-e29b-41d4-a716-446655440221";
+		const res = await postIngest(tenantCode, token, guid);
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.status).toBe("stored");
+		expect(body).not.toHaveProperty("lifecycle");
 	});
 });

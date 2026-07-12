@@ -696,6 +696,23 @@ describe("stale algo-version findings", () => {
 		store.close();
 	});
 
+	it("listStaleAlgoTenants reports every blocked tenant, and nothing when clean", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "acme", "pattern:ddddddddddddddd1", 1);
+		seed(store, "acme", "pattern:ddddddddddddddd2", 1);
+		seed(store, "beta", "pattern:ddddddddddddddd3", 1);
+		seed(store, "clean", "pattern:ddddddddddddddd4", 2);
+
+		expect(store.listStaleAlgoTenants(2)).toEqual([
+			{ tenant: "acme", count: 2, versions: [1] },
+			{ tenant: "beta", count: 1, versions: [1] },
+		]);
+		expect(store.listStaleAlgoTenants(1)).toEqual([
+			{ tenant: "clean", count: 1, versions: [2] },
+		]);
+		store.close();
+	});
+
 	it("purge is tenant-scoped and deletes every state", () => {
 		const store = new LifecycleStore(":memory:");
 		seed(store, "acme", "pattern:bbbbbbbbbbbbbbb1", 1);

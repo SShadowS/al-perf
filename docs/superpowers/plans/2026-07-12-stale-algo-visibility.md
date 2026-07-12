@@ -207,13 +207,15 @@ Note the dynamic `import()` — this file already imports lifecycle modules dyna
 
 **Interfaces:**
 - Consumes: `LifecycleStore.listStaleAlgoTenants` from Task 1.
-- Produces: `/api/debug/status` gains `staleAlgoTenants: Array<{tenant, count, versions}>`. `lifecycle status` prints a warning when the queried tenant is blocked.
+- Produces: `/api/debug/status` gains `staleAlgoTenantCount: number` and `staleAlgoFindingCount: number`. `lifecycle status` prints a warning when the queried tenant is blocked.
+
+> **Reversed:** this route is unauthenticated, so the original `staleAlgoTenants: Array<{tenant, count, versions}>` shape (naming customer tenants) was a data leak. It has been replaced with the two aggregate counts below — no tenant identifiers ever cross this route. `lifecycle status` (authenticated CLI) remains the way to see actual tenant names, via the same `listStaleAlgoTenants` query.
 
 - [ ] **Step 1: `/api/debug/status`**
 
-Add `staleAlgoTenants` to the JSON. **Only query when `AL_PERF_LIFECYCLE === "1"`** — otherwise report `[]` without opening a store (opening one would create a lifecycle DB on a deployment that doesn't use lifecycle: a regression). Use the same `getLifecycleStore(dataDir)` accessor `ingest.ts` uses.
+Add `staleAlgoTenantCount` and `staleAlgoFindingCount` to the JSON, derived from `listStaleAlgoTenants(...).length` and the sum of `.count` — never the raw array. **Only query when `AL_PERF_LIFECYCLE === "1"`** — otherwise report `0`/`0` without opening a store (opening one would create a lifecycle DB on a deployment that doesn't use lifecycle: a regression). Use the same `getLifecycleStore(dataDir)` accessor `ingest.ts` uses.
 
-Test: with lifecycle off, `staleAlgoTenants` is `[]` and no DB file is created. With lifecycle on and a seeded stale finding, it reports the tenant.
+Test: with lifecycle off, both counts are `0` and no DB file is created. With lifecycle on and seeded stale findings, it reports the correct aggregate counts, and the response body contains no tenant name.
 
 - [ ] **Step 2: `lifecycle status`**
 

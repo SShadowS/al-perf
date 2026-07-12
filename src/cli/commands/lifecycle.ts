@@ -35,6 +35,7 @@ import {
 	applyIdentityUpgrades,
 	type EvaluationOutcome,
 	evaluateRun,
+	staleAlgoRemediation,
 } from "../../lifecycle/evaluate.js";
 import { FINGERPRINT_ALGO_VERSION } from "../../lifecycle/fingerprint.js";
 import { createAzureDevOpsSink } from "../../lifecycle/sinks/azuredevops.js";
@@ -863,6 +864,24 @@ export function createLifecycleCommand(): Command {
 			if (tenant === null) return;
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				// Warn when the queried tenant is blocked by the stale-algo guard —
+				// naming the count, the versions, and the remedy — so an operator
+				// polling status learns lifecycle tracking is doing nothing for
+				// this tenant instead of just seeing a quiet, possibly-empty list.
+				// countStaleAlgoFindings is already tenant-scoped — no need to list
+				// every tenant and search for this one.
+				const staleForTenant = store.countStaleAlgoFindings(
+					tenant,
+					FINGERPRINT_ALGO_VERSION,
+				);
+				const staleWarning =
+					staleForTenant.count > 0
+						? `Warning: tenant '${tenant}' is blocked by the stale-algo guard — ` +
+							`${staleForTenant.count} active finding(s) fingerprinted by algorithm ` +
+							`v${staleForTenant.versions.join("/v")}, current v${FINGERPRINT_ALGO_VERSION}. ` +
+							`Remedy: ${staleAlgoRemediation(tenant)}`
+						: null;
+
 				const rows = store.listFindings({
 					tenant,
 					state: opts.state,
@@ -870,6 +889,10 @@ export function createLifecycleCommand(): Command {
 					limit: parseInt(opts.limit, 10),
 				});
 				if (opts.format === "json") {
+					// Stdout must stay a bare parseable JSON array — piping
+					// `lifecycle status -f json | jq` must keep working — so the
+					// warning goes to stderr instead.
+					if (staleWarning) process.stderr.write(`${staleWarning}\n`);
 					// Only surface triageNote/triagedAt/triagedBy once a finding has
 					// actually been triaged — an untriaged row shows none of the
 					// three keys (not even null), keeping the common case terse.
@@ -885,6 +908,7 @@ export function createLifecycleCommand(): Command {
 					process.stdout.write(JSON.stringify(withTriage, null, 2) + "\n");
 					return;
 				}
+				if (staleWarning) console.log(chalk.yellow(staleWarning));
 				if (rows.length === 0) {
 					console.log("No findings.");
 					return;

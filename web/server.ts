@@ -980,9 +980,46 @@ export const server = Bun.serve({
 			}
 		}
 
+		// This route has no authentication — no bearer check, no admin gate —
+		// unlike /api/record-next-batch above, which IS admin-gated even
+		// though it's dev-only. Because anyone who can reach this endpoint
+		// can read the response, it must never publish customer tenant
+		// identifiers, only aggregate counts. An external monitor only needs
+		// to know that *something* is blocked. Do NOT "helpfully" restore
+		// tenant names or the raw array here — that would reintroduce a
+		// customer-data leak on an unauthenticated route.
+		//
+		// Note there is currently NO authenticated surface that enumerates
+		// WHICH tenants are blocked: `lifecycle status --tenant <t>` warns
+		// about the one tenant it was asked about, so an operator who sees a
+		// nonzero count here has to probe tenant by tenant. If that becomes
+		// painful, add the enumeration to an AUTHENTICATED surface (an admin-
+		// gated route, or a new CLI subcommand) — not to this one.
 		if (url.pathname === "/api/debug/status" && req.method === "GET") {
 			const aiEnabled =
 				process.env.AI_DISABLED !== "1" && !!process.env.ANTHROPIC_API_KEY;
+			// Only query the lifecycle store when lifecycle tracking is actually
+			// on — opening one just to answer this status query would create a
+			// lifecycle DB on a deployment that never uses lifecycle at all.
+			let staleAlgoTenantCount = 0;
+			let staleAlgoFindingCount = 0;
+			if (process.env.AL_PERF_LIFECYCLE === "1") {
+				const { getLifecycleStore } = await import("./lifecycle-db.ts");
+				const { FINGERPRINT_ALGO_VERSION } = await import(
+					"../src/lifecycle/fingerprint.ts"
+				);
+				// Read env per-request so tests can override the data dir after import.
+				const dataDir =
+					process.env.AL_PERF_DATA_DIR ?? resolve(import.meta.dir, "data");
+				const staleAlgoTenants = getLifecycleStore(
+					dataDir,
+				).listStaleAlgoTenants(FINGERPRINT_ALGO_VERSION);
+				staleAlgoTenantCount = staleAlgoTenants.length;
+				staleAlgoFindingCount = staleAlgoTenants.reduce(
+					(sum, t) => sum + t.count,
+					0,
+				);
+			}
 			return withSecurityHeaders(
 				Response.json({
 					version: APP_VERSION,
@@ -991,6 +1028,8 @@ export const server = Bun.serve({
 					debugMode: DEBUG_MODE,
 					pendingCaptures: debugStore.pendingCount,
 					aiEnabled,
+					staleAlgoTenantCount,
+					staleAlgoFindingCount,
 				}),
 			);
 		}
