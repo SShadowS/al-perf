@@ -8,15 +8,18 @@ import { describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, sep } from "path";
-import { recordRoutineMetrics, routineKeyFor } from "../../src/lifecycle/baselines.js";
-import { TriageAuditLog } from "../../src/lifecycle/triage/audit.js";
+import {
+	recordRoutineMetrics,
+	routineKeyFor,
+} from "../../src/lifecycle/baselines.js";
 import type { NewFinding } from "../../src/lifecycle/store.js";
 import { LifecycleStore } from "../../src/lifecycle/store.js";
+import { TriageAuditLog } from "../../src/lifecycle/triage/audit.js";
+import { PROMPT_VERSION } from "../../src/lifecycle/triage/prompt.js";
 import {
 	sanitizeReportFileName,
 	TriageTools,
 } from "../../src/lifecycle/triage/tools.js";
-import { PROMPT_VERSION } from "../../src/lifecycle/triage/prompt.js";
 
 function baseFinding(overrides?: Partial<NewFinding>): NewFinding {
 	return {
@@ -44,7 +47,11 @@ function fixedNow(ts = "2026-07-12T12:00:00Z"): () => string {
 	return () => ts;
 }
 
-function seedRun(store: LifecycleStore, profileId: string, captureTime: string): number {
+function seedRun(
+	store: LifecycleStore,
+	profileId: string,
+	captureTime: string,
+): number {
 	return store.recordRun({
 		tenant: "t1",
 		stream: "nightly",
@@ -112,20 +119,35 @@ describe("TriageTools.findingsList", () => {
 		const dir = mkdtempSync(join(tmpdir(), "alperf-triage-"));
 		try {
 			store.insertFinding(
-				baseFinding({ fingerprint: "f-open-warn", state: "open", severity: "warning" }),
+				baseFinding({
+					fingerprint: "f-open-warn",
+					state: "open",
+					severity: "warning",
+				}),
 			);
 			store.insertFinding(
-				baseFinding({ fingerprint: "f-open-crit", state: "open", severity: "critical" }),
+				baseFinding({
+					fingerprint: "f-open-crit",
+					state: "open",
+					severity: "critical",
+				}),
 			);
 			store.insertFinding(
-				baseFinding({ fingerprint: "f-resolved", state: "resolved", severity: "critical" }),
+				baseFinding({
+					fingerprint: "f-resolved",
+					state: "resolved",
+					severity: "critical",
+				}),
 			);
 			const tools = makeTools(store, dir);
 			const byState = tools.findingsList({ state: "resolved" });
 			expect(byState.ok && byState.result.map((r) => r.fingerprint)).toEqual([
 				"f-resolved",
 			]);
-			const bySeverity = tools.findingsList({ state: "open", severity: "critical" });
+			const bySeverity = tools.findingsList({
+				state: "open",
+				severity: "critical",
+			});
 			expect(
 				bySeverity.ok && bySeverity.result.map((r) => r.fingerprint),
 			).toEqual(["f-open-crit"]);
@@ -398,9 +420,7 @@ describe("TriageTools.recordTriage", () => {
 				recommendation: "b",
 			});
 			expect(res.ok).toBe(false);
-			expect(
-				store.getFinding(otherId)?.needsTriage,
-			).toBe(true);
+			expect(store.getFinding(otherId)?.needsTriage).toBe(true);
 		} finally {
 			store.close();
 			rmSync(dir, { recursive: true, force: true });
@@ -438,6 +458,11 @@ describe("sanitizeReportFileName / TriageTools.reportFile jail", () => {
 		["drive letter", "C:evil.txt"],
 		["drive letter with backslash", "C:\\evil.txt"],
 		["empty name", ""],
+		["Windows reserved device name (bare)", "con"],
+		["Windows reserved device name (uppercase)", "NUL"],
+		["Windows reserved device name (with extension)", "con.txt"],
+		["Windows reserved device name (multi-extension)", "LPT9.backup.tar"],
+		["Windows reserved device name (COM port)", "com1.log"],
 	];
 	for (const [label, name] of rejections) {
 		it(`rejects: ${label} (${JSON.stringify(name)})`, () => {
@@ -469,6 +494,92 @@ describe("sanitizeReportFileName / TriageTools.reportFile jail", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("returns ok:false (never throws) when the write itself fails, e.g. ENAMETOOLONG for a 300-char name", () => {
+		// sanitizeReportFileName has no length cap (only a charset + reserved-name
+		// check) — a 300-char all-valid-charset name passes it but blows past the
+		// filesystem's per-component name limit (~255 bytes on both NTFS and
+		// ext4), so writeFileSync throws. reportFile must catch that, not let it
+		// propagate — the class docstring promises dispatch() never throws, and
+		// this is the write path that could otherwise break that promise.
+		const store = new LifecycleStore(":memory:");
+		const dir = mkdtempSync(join(tmpdir(), "alperf-triage-"));
+		try {
+			const longName = `${"a".repeat(296)}.txt`; // 300 chars total
+			expect(sanitizeReportFileName(longName).ok).toBe(true);
+			const tools = makeTools(store, dir);
+			const res = tools.reportFile({ name: longName, content: "x" });
+			expect(res.ok).toBe(false);
+			if (res.ok) return;
+			expect(res.error).toContain("report_file: write failed");
+			// dispatch() must surface the same failure without throwing.
+			expect(() =>
+				tools.dispatch("report_file", { name: longName, content: "x" }),
+			).not.toThrow();
+			expect(
+				tools.dispatch("report_file", { name: longName, content: "x" }).ok,
+			).toBe(false);
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("dispatch() never throws even when a tool method throws internally", () => {
+		// Blanket backstop test: a malformed input that would make an internal
+		// helper throw (not just return an error) must still come back as an
+		// error ToolResult, not propagate.
+		const store = new LifecycleStore(":memory:");
+		const dir = mkdtempSync(join(tmpdir(), "alperf-triage-"));
+		try {
+			const tools = makeTools(store, dir);
+			// baselineQuery's captureKind check runs before any query, but
+			// findings_get with a non-numeric id shape exercises the DB layer
+			// with an unexpected type — this must not throw through dispatch.
+			expect(() =>
+				tools.dispatch("findings_get", { id: { nested: "object" } }),
+			).not.toThrow();
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("TriageAuditLog runId sanitization", () => {
+	it("accepts a valid charset runId", () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-triage-audit-"));
+		try {
+			const log = new TriageAuditLog({
+				reportDir: dir,
+				runId: "run-2026.07.12_ABC",
+				now: fixedNow(),
+			});
+			expect(log.filePath()).toBe(join(dir, "audit-run-2026.07.12_ABC.jsonl"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	const badRunIds: Array<[string, string]> = [
+		["parent-directory traversal", "../evil"],
+		["path separator", "run/1"],
+		["backslash", "run\\1"],
+		["empty", ""],
+		["bare dot", "."],
+	];
+	for (const [label, runId] of badRunIds) {
+		it(`throws for an invalid runId: ${label} (${JSON.stringify(runId)})`, () => {
+			const dir = mkdtempSync(join(tmpdir(), "alperf-triage-audit-"));
+			try {
+				expect(
+					() => new TriageAuditLog({ reportDir: dir, runId, now: fixedNow() }),
+				).toThrow();
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+	}
 });
 
 describe("TriageTools.dispatch (allow-list)", () => {
@@ -580,9 +691,7 @@ describe("TriageAuditLog", () => {
 				input: {},
 				resultSummary: "3 rows",
 			});
-			const entry = JSON.parse(
-				readFileSync(log.filePath(), "utf8").trim(),
-			);
+			const entry = JSON.parse(readFileSync(log.filePath(), "utf8").trim());
 			expect(entry).not.toHaveProperty("findingId");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -603,7 +712,11 @@ describe("TriageAuditLog", () => {
 				tenant: "t1",
 				dryRun: false,
 			});
-			log.logToolCall({ tool: "findings_list", input: {}, resultSummary: "1 row" });
+			log.logToolCall({
+				tool: "findings_list",
+				input: {},
+				resultSummary: "1 row",
+			});
 			log.logRunEnd({
 				findingsTriaged: 1,
 				findingsSkipped: 0,

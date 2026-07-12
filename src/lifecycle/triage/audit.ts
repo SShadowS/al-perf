@@ -14,6 +14,7 @@
 
 import { appendFileSync, mkdirSync } from "fs";
 import { join, resolve } from "path";
+import { sanitizeReportFileName } from "./tools.js";
 
 export interface AuditToolCallEntry {
 	findingId?: number;
@@ -48,9 +49,19 @@ export class TriageAuditLog {
 	private readonly now: () => string;
 
 	constructor(opts: TriageAuditLogOptions) {
+		// runId is interpolated straight into a filename below — same charset
+		// discipline as report_file's `name` (sanitizeReportFileName, tools.ts).
+		// Unlike a tool input, runId comes from the agent driver/CLI, not the
+		// model, so a bad value is a caller bug: fail closed with a throw
+		// rather than silently substituting something, matching this codebase's
+		// precedent for malformed operator-supplied config (config-file.ts).
+		const sanitized = sanitizeReportFileName(opts.runId);
+		if (!sanitized.ok) {
+			throw new Error(`TriageAuditLog: invalid runId — ${sanitized.error}`);
+		}
 		const dir = resolve(opts.reportDir);
 		mkdirSync(dir, { recursive: true });
-		this.path = join(dir, `audit-${opts.runId}.jsonl`);
+		this.path = join(dir, `audit-${sanitized.name}.jsonl`);
 		this.now = opts.now;
 	}
 

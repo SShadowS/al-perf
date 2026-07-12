@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import chalk from "chalk";
 import Table from "cli-table3";
 import { Command } from "commander";
@@ -5,6 +6,7 @@ import { createHash } from "crypto";
 import { readFileSync, statSync, writeFileSync } from "fs";
 import { extname } from "path";
 import { analyzeProfile } from "../../core/analyzer.js";
+import { type ExplainModel, MODEL_IDS } from "../../explain/explainer.js";
 import {
 	DEFAULT_API_KEY_ENV,
 	DEFAULT_SIGNALS,
@@ -41,10 +43,21 @@ import {
 import { transition } from "../../lifecycle/states.js";
 import { LifecycleStore } from "../../lifecycle/store.js";
 import { evaluateTelemetryBatch } from "../../lifecycle/telemetry.js";
+import {
+	renderTriageAgentSummary,
+	runTriageAgent,
+	type TriageClient,
+	type TriageClientCreateParams,
+	type TriageClientResponse,
+	type TriageContentBlock,
+} from "../../lifecycle/triage/agent.js";
 import type { TelemetryBatchDocument } from "../../types/telemetry.js";
 
 /** CLI default DB location (plan decision: dot-dir in cwd, one file). */
 export const DEFAULT_DB_PATH = ".al-perf/lifecycle.sqlite";
+
+/** D1 default `--report-dir` for `triage-agent` — both its written reports and its audit JSONL land here. */
+export const DEFAULT_TRIAGE_REPORT_DIR = ".al-perf/triage-reports";
 
 /**
  * Close a resolved finding (human confirmation). Exported for tests; the
@@ -108,6 +121,65 @@ function resolveLifecycleConfig(configPath: string): LifecycleConfig {
 		DEFAULT_LIFECYCLE_CONFIG,
 		loadLifecycleConfigFile(configPath) ?? {},
 	);
+}
+
+/**
+ * Adapts a real `Anthropic` client to the triage agent loop's minimal,
+ * self-owned `TriageClient` interface (agent.ts deliberately never imports
+ * `@anthropic-ai/sdk` — this is the ONE place that boundary is crossed, per
+ * the plan's "client constructed only here"). Content blocks the triage
+ * agent never uses (server tool use, thinking, etc.) are dropped rather than
+ * mapped — the agent's own tool set never provokes them.
+ */
+function wrapAnthropicClient(anthropic: Anthropic): TriageClient {
+	return {
+		messages: {
+			async create(
+				params: TriageClientCreateParams,
+			): Promise<TriageClientResponse> {
+				const response = await anthropic.messages.create({
+					model: params.model,
+					max_tokens: params.max_tokens,
+					system: params.system,
+					messages: params.messages as Anthropic.MessageParam[],
+					tools: params.tools as Anthropic.Tool[],
+				});
+				const content: TriageContentBlock[] = [];
+				for (const block of response.content) {
+					if (block.type === "text") {
+						content.push({ type: "text", text: block.text });
+					} else if (block.type === "tool_use") {
+						content.push({
+							type: "tool_use",
+							id: block.id,
+							name: block.name,
+							input: block.input,
+						});
+					}
+				}
+				return {
+					content,
+					stop_reason: response.stop_reason,
+					usage: {
+						input_tokens: response.usage.input_tokens,
+						output_tokens: response.usage.output_tokens,
+					},
+				};
+			},
+		},
+	};
+}
+
+/**
+ * `run-<digits from now()><random suffix>` — same charset as report_file
+ * names (sanitizeReportFileName / TriageAuditLog's constructor enforce it),
+ * built from the injected `now()` rather than `Date.now()` directly so a
+ * fixed clock in tests produces a fixed, assertable id.
+ */
+function randomTriageRunId(now: () => string): string {
+	const stamp = now().replace(/[^0-9]/g, "").slice(0, 17);
+	const suffix = Math.random().toString(36).slice(2, 8);
+	return `run-${stamp}-${suffix}`;
 }
 
 /** Shared by `evaluate`, `telemetry`, and `pull-telemetry` (non---out path) — same outcome shape, same print rules. */
@@ -625,6 +697,79 @@ export function createLifecycleCommand(): Command {
 				console.log(
 					`${opts.clear ? "Cleared" : "Set"} needs-triage on ${fingerprint}`,
 				);
+			} finally {
+				store.close();
+			}
+		});
+
+	cmd
+		.command("triage-agent")
+		.description(
+			"Scheduled LLM triage pass over needs-triage findings — read-mostly tools, one mutation (record_triage), fully audited (see docs/triage-agent-recipe.md)",
+		)
+		.option("--tenant <tenant>", "Tenant key", "local")
+		.option("--max-findings <n>", "Maximum findings to triage this run", "5")
+		.option(
+			"--max-turns <n>",
+			"Tool-use turns allowed per finding before it's skipped as a runaway loop",
+			"8",
+		)
+		.option(
+			"--budget-tokens <n>",
+			"Cumulative input+output token budget for the whole run",
+			"200000",
+		)
+		.option(
+			"--report-dir <path>",
+			"Report + audit-log directory",
+			DEFAULT_TRIAGE_REPORT_DIR,
+		)
+		.option("--model <model>", "sonnet|opus", "sonnet")
+		.option(
+			"--dry-run",
+			"Investigate and log as usual, but record_triage makes zero writes",
+		)
+		.option("-f, --format <format>", "Output format: text|json", "text")
+		.action(async (opts: any) => {
+			// Kill-switch checked FIRST, before even looking at the key — the
+			// brief's contract is zero client construction when disabled,
+			// regardless of whether a key happens to be present in env.
+			if (process.env.AI_DISABLED === "1") {
+				console.log(
+					"triage-agent: AI_DISABLED=1 — agent disabled, exiting without contacting the API.",
+				);
+				return;
+			}
+			const apiKey = process.env.ANTHROPIC_API_KEY;
+			if (!apiKey) {
+				console.error(
+					"triage-agent requires the ANTHROPIC_API_KEY environment variable " +
+						"(bring-your-own-key — see docs/triage-agent-recipe.md).",
+				);
+				process.exitCode = 1;
+				return;
+			}
+			const model = MODEL_IDS[opts.model === "opus" ? "opus" : ("sonnet" as ExplainModel)];
+			const client = wrapAnthropicClient(new Anthropic({ apiKey }));
+			const store = new LifecycleStore(cmd.opts().db);
+			try {
+				const lifecycleConfig = resolveLifecycleConfig(cmd.opts().config);
+				const now = () => new Date().toISOString();
+				const result = await runTriageAgent(
+					store,
+					{
+						tenant: opts.tenant,
+						reportDir: opts.reportDir,
+						maxFindings: parseInt(opts.maxFindings, 10),
+						maxTurnsPerFinding: parseInt(opts.maxTurns, 10),
+						budgetTokens: parseInt(opts.budgetTokens, 10),
+						model,
+						dryRun: Boolean(opts.dryRun),
+					},
+					{ now, runId: randomTriageRunId(now), lifecycleConfig },
+					client,
+				);
+				process.stdout.write(renderTriageAgentSummary(result, opts.format));
 			} finally {
 				store.close();
 			}

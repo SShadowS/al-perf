@@ -45,6 +45,15 @@ const DEFAULT_FINDINGS_LIST_LIMIT = 20;
 const RECENT_EVENTS_LIMIT = 10;
 const REPORT_FILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
 const CAPTURE_KINDS = new Set(["sampling", "instrumentation", "telemetry"]);
+/**
+ * Windows reserved device basenames (CON, PRN, AUX, NUL, COM1-9, LPT1-9) are
+ * reserved for the part of the name BEFORE the first '.', regardless of any
+ * extension(s) after it — "con.txt" and "con.tar.gz" both resolve to the
+ * CON device on Windows, not a regular file. Case-insensitive. The charset
+ * check alone lets these through (they're plain letters/digits), so this is
+ * a separate, explicit rejection.
+ */
+const WINDOWS_RESERVED_BASENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 export interface FindingsListRow {
 	id: number;
@@ -120,6 +129,13 @@ export function sanitizeReportFileName(
 				"report_file: name must match [A-Za-z0-9._-]+ (no path separators, no drive letters)",
 		};
 	}
+	const stem = name.includes(".") ? name.slice(0, name.indexOf(".")) : name;
+	if (WINDOWS_RESERVED_BASENAME_RE.test(stem)) {
+		return {
+			ok: false,
+			error: `report_file: name '${name}' is a Windows reserved device name`,
+		};
+	}
 	return { ok: true, name };
 }
 
@@ -148,39 +164,52 @@ export class TriageTools {
 	 * agent loop (Task 3) can log and continue past, not a crash.
 	 */
 	dispatch(name: string, input: unknown): ToolResult<unknown> {
-		const obj = (
-			input && typeof input === "object" ? input : {}
-		) as Record<string, unknown>;
-		switch (name as TriageToolName) {
-			case "findings_list":
-				return this.findingsList({
-					state: obj.state as FindingState | undefined,
-					severity: obj.severity as FindingSeverity | undefined,
-					limit: typeof obj.limit === "number" ? obj.limit : undefined,
-				});
-			case "findings_get":
-				return this.findingsGet({ id: obj.id as number });
-			case "baseline_query":
-				return this.baselineQuery({
-					routineKey: obj.routineKey as string,
-					captureKind: obj.captureKind as
-						| "sampling"
-						| "instrumentation"
-						| "telemetry",
-				});
-			case "record_triage":
-				return this.recordTriage({
-					id: obj.id as number,
-					assessment: obj.assessment as string,
-					recommendation: obj.recommendation as string,
-				});
-			case "report_file":
-				return this.reportFile({
-					name: obj.name as string,
-					content: obj.content as string,
-				});
-			default:
-				return { ok: false, error: `unknown tool: ${name}` };
+		// Blanket backstop for the class docstring's "never throws" contract:
+		// every individual tool method is written to return an error result
+		// rather than throw (reportFile's writeFileSync catch is the concrete
+		// case that needed it — ENAMETOOLONG and friends), but this catch is
+		// the guarantee, not the individual methods' discipline alone.
+		try {
+			const obj = (input && typeof input === "object" ? input : {}) as Record<
+				string,
+				unknown
+			>;
+			switch (name as TriageToolName) {
+				case "findings_list":
+					return this.findingsList({
+						state: obj.state as FindingState | undefined,
+						severity: obj.severity as FindingSeverity | undefined,
+						limit: typeof obj.limit === "number" ? obj.limit : undefined,
+					});
+				case "findings_get":
+					return this.findingsGet({ id: obj.id as number });
+				case "baseline_query":
+					return this.baselineQuery({
+						routineKey: obj.routineKey as string,
+						captureKind: obj.captureKind as
+							| "sampling"
+							| "instrumentation"
+							| "telemetry",
+					});
+				case "record_triage":
+					return this.recordTriage({
+						id: obj.id as number,
+						assessment: obj.assessment as string,
+						recommendation: obj.recommendation as string,
+					});
+				case "report_file":
+					return this.reportFile({
+						name: obj.name as string,
+						content: obj.content as string,
+					});
+				default:
+					return { ok: false, error: `unknown tool: ${name}` };
+			}
+		} catch (err) {
+			return {
+				ok: false,
+				error: `${name}: unexpected error — ${err instanceof Error ? err.message : String(err)}`,
+			};
 		}
 	}
 
@@ -191,7 +220,10 @@ export class TriageTools {
 	}): ToolResult<FindingsListRow[]> {
 		const limit = Math.max(
 			1,
-			Math.min(input.limit ?? DEFAULT_FINDINGS_LIST_LIMIT, MAX_FINDINGS_LIST_LIMIT),
+			Math.min(
+				input.limit ?? DEFAULT_FINDINGS_LIST_LIMIT,
+				MAX_FINDINGS_LIST_LIMIT,
+			),
 		);
 		// listFindings has no severity filter (no index for it) — fetch by
 		// tenant+state (the indexed dimensions) and filter+page in TS.
@@ -241,7 +273,9 @@ export class TriageTools {
 			result: {
 				...row,
 				occurrenceCount: this.store.countOccurrences(input.id),
-				latestOccurrenceDetails: this.store.getLatestOccurrenceDetails(input.id),
+				latestOccurrenceDetails: this.store.getLatestOccurrenceDetails(
+					input.id,
+				),
 				recentEvents: events,
 			},
 		};
@@ -347,14 +381,19 @@ export class TriageTools {
 		};
 	}
 
-	reportFile(input: { name: string; content: string }): ToolResult<ReportFileResult> {
+	reportFile(input: {
+		name: string;
+		content: string;
+	}): ToolResult<ReportFileResult> {
 		if (typeof input.content !== "string") {
 			return { ok: false, error: "report_file: content must be a string" };
 		}
 		const sanitized = sanitizeReportFileName(input.name);
 		if (!sanitized.ok) return sanitized;
 		const target = resolve(this.reportDir, sanitized.name);
-		const prefix = this.reportDir.endsWith(sep) ? this.reportDir : this.reportDir + sep;
+		const prefix = this.reportDir.endsWith(sep)
+			? this.reportDir
+			: this.reportDir + sep;
 		// Defense-in-depth beyond the charset check (zip-extractor precedent).
 		if (!target.startsWith(prefix)) {
 			return {
@@ -362,10 +401,24 @@ export class TriageTools {
 				error: "report_file: resolved path escapes the report directory",
 			};
 		}
-		writeFileSync(target, input.content, "utf8");
+		try {
+			writeFileSync(target, input.content, "utf8");
+		} catch (err) {
+			// e.g. ENAMETOOLONG for a name near the filesystem's component-length
+			// limit — the charset check has no length cap, so this is reachable.
+			// dispatch()'s docstring promises no throw; this is where that
+			// promise would otherwise have been broken.
+			return {
+				ok: false,
+				error: `report_file: write failed — ${err instanceof Error ? err.message : String(err)}`,
+			};
+		}
 		return {
 			ok: true,
-			result: { path: target, bytesWritten: Buffer.byteLength(input.content, "utf8") },
+			result: {
+				path: target,
+				bytesWritten: Buffer.byteLength(input.content, "utf8"),
+			},
 		};
 	}
 }
