@@ -927,6 +927,42 @@ describe("captureQueueHealth", () => {
 		store.close();
 	});
 
+	it("does not report atCap for pending/claimed rows that have already expired but haven't been swept yet", () => {
+		// processCaptureTriggers always calls expireCaptureRequests(now) BEFORE
+		// consulting countActiveCaptureRequests against maxPending. So a request
+		// whose expires_at is already past NOW will be reaped by the very next
+		// trigger scan before maxPending is ever checked — captureQueueHealth
+		// must not count it as occupying a queue slot, or atCap lies about the
+		// state processCaptureTriggers is actually about to be in.
+		const store = new LifecycleStore(":memory:");
+		const findingId = store.insertFinding(
+			baseFinding({ tenant: "acme", fingerprint: "pattern:acme-expired" }),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-expired-1",
+				requestedAt: "2026-07-01T00:00:00Z",
+				expiresAt: "2026-07-08T00:00:00Z", // already before NOW
+			}),
+		);
+		store.createCaptureRequest(
+			baseCaptureRequest({
+				tenant: "acme",
+				findingId,
+				fingerprint: "telemetry:acme-expired-2",
+				requestedAt: "2026-07-01T00:00:00Z",
+				expiresAt: "2026-07-08T00:00:00Z", // already before NOW
+			}),
+		);
+
+		const [health] = store.captureQueueHealth(NOW, 60, 2, "acme");
+		expect(health.pending).toBe(2);
+		expect(health.atCap).toBe(false);
+		store.close();
+	});
+
 	it("returns one entry per tenant when no tenant is given", () => {
 		const store = new LifecycleStore(":memory:");
 		const acmeFindingId = store.insertFinding(

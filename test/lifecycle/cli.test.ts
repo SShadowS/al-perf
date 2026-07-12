@@ -2509,6 +2509,10 @@ describe("lifecycle captures", () => {
 		const parsed = JSON.parse(output);
 		expect(Array.isArray(parsed)).toBe(true);
 		expect(parsed[0]).toHaveProperty("atCap");
+		// A stray console.log (e.g. a banner) would never reach the
+		// process.stdout.write spy above, but it WOULD break `... | jq` in
+		// production. Guard against that leak explicitly.
+		expect(logSpy).not.toHaveBeenCalled();
 	});
 });
 

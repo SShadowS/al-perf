@@ -1532,6 +1532,12 @@ export class LifecycleStore {
 	 * `stuckHolders`. `atCap` is the exception, and it is not a heuristic: it is
 	 * literally the state in which processCaptureTriggers stops filing new
 	 * requests, so it is the one crisp definition of a jammed queue.
+	 *
+	 * `processCaptureTriggers` always sweeps expired requests (`expireCaptureRequests`)
+	 * BEFORE consulting `countActiveCaptureRequests` against `maxPending` — so a
+	 * pending/claimed row whose `expiresAt` has already passed will be reaped by
+	 * the very next trigger scan before the cap is ever checked. `atCap` here
+	 * excludes those rows, so it matches what the next trigger run will actually see.
 	 */
 	captureQueueHealth(
 		now: string,
@@ -1580,8 +1586,13 @@ export class LifecycleStore {
 								.filter((b): b is string => b !== null),
 						),
 					].sort(),
-					// Same denominator processCaptureTriggers uses against maxPending.
-					atCap: pending.length + claimed.length >= maxPending,
+					// Same denominator processCaptureTriggers uses against maxPending,
+					// evaluated over rows that would survive an expiry sweep first —
+					// processCaptureTriggers always sweeps before checking the cap.
+					atCap:
+						[...pending, ...claimed].filter(
+							(r) => Date.parse(r.expiresAt) > Date.parse(now),
+						).length >= maxPending,
 					maxPending,
 					oldestPendingAt,
 					reclaimedEver: reclaimed.length,
