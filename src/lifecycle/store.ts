@@ -234,6 +234,28 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		`ALTER TABLE findings ADD COLUMN triaged_at TEXT`,
 		`ALTER TABLE findings ADD COLUMN triaged_by TEXT`,
 	],
+	[
+		// Purely additive — no table rebuild, no FK-toggle complications.
+		//
+		// finding_events.sink_processed was ONE bit per event, flipped once per
+		// trigger scan regardless of how many sinks were enabled. A sink turned on
+		// after a tenant had accrued history therefore never saw any of it. The
+		// watermark is per-sink, so each sink advances independently.
+		`CREATE TABLE IF NOT EXISTS sink_progress (
+			sink TEXT NOT NULL PRIMARY KEY,
+			last_event_id INTEGER NOT NULL DEFAULT 0
+		)`,
+		// Seed: every sink that has ALREADY done work — i.e. every sink with an
+		// issue mapping — resumes at the old global high-water mark instead of
+		// re-scanning its whole history. A sink with no mappings gets no row, so
+		// it starts at 0 and replays: exactly the backlog behavior being added.
+		// (Re-scanning would in fact be harmless — outbox dedupe keys are UNIQUE
+		// and rows are never deleted — but it would be pure waste on every sync.)
+		`INSERT OR IGNORE INTO sink_progress (sink, last_event_id)
+		 SELECT DISTINCT sink,
+		        (SELECT COALESCE(MAX(id), 0) FROM finding_events WHERE sink_processed = 1)
+		 FROM sink_issue_map`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -572,12 +594,41 @@ export class LifecycleStore {
 		);
 	}
 
-	listUnprocessedEvents(limit = 500): UnprocessedEvent[] {
-		return this.db
-			.query<Record<string, unknown>, [number]>(
-				"SELECT * FROM finding_events WHERE sink_processed = 0 ORDER BY id LIMIT ?",
+	getSinkProgress(sink: string): number {
+		const row = this.db
+			.query<{ last_event_id: number }, [string]>(
+				"SELECT last_event_id FROM sink_progress WHERE sink = ?",
 			)
-			.all(limit)
+			.get(sink);
+		return row?.last_event_id ?? 0;
+	}
+
+	/**
+	 * Upsert the sink's watermark. MAX() guards against a concurrent or
+	 * out-of-order caller dragging it backwards, which would replay events the
+	 * sink has already handled.
+	 */
+	advanceSinkProgress(sink: string, lastEventId: number): void {
+		this.db.run(
+			`INSERT INTO sink_progress (sink, last_event_id) VALUES (?, ?)
+			 ON CONFLICT(sink) DO UPDATE SET last_event_id = MAX(last_event_id, excluded.last_event_id)`,
+			[sink, lastEventId],
+		);
+	}
+
+	/**
+	 * Events this sink has not yet scanned. A sink with no sink_progress row
+	 * starts at 0 and therefore sees the full history — that is how a
+	 * newly-enabled sink picks up the backlog.
+	 */
+	listUnprocessedEvents(sink: string, limit = 500): UnprocessedEvent[] {
+		return this.db
+			.query<Record<string, unknown>, [string, number]>(
+				`SELECT e.* FROM finding_events e
+				 WHERE e.id > COALESCE((SELECT last_event_id FROM sink_progress WHERE sink = ?), 0)
+				 ORDER BY e.id LIMIT ?`,
+			)
+			.all(sink, limit)
 			.map((row) => ({
 				id: row.id as number,
 				findingId: row.finding_id as number,
@@ -588,17 +639,6 @@ export class LifecycleStore {
 				at: row.at as string,
 				detail: (row.detail as string | null) ?? null,
 			}));
-	}
-
-	markEventsProcessed(ids: number[]): void {
-		if (ids.length === 0) return;
-		const mark = this.db.prepare(
-			"UPDATE finding_events SET sink_processed = 1 WHERE id = ?",
-		);
-		const tx = this.db.transaction(() => {
-			for (const id of ids) mark.run(id);
-		});
-		tx();
 	}
 
 	recordRun(run: RunInput): { runId: number; duplicate: boolean } {

@@ -276,4 +276,87 @@ describe("drainOutbox", () => {
 		expect(store.listPendingOutbox("github")).toHaveLength(0);
 		store.close();
 	});
+
+	it("a large storm's epic dedupe key stays bounded", async () => {
+		const store = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 300; n++) {
+			const id = seedFinding(store, n);
+			store.enqueueOutbox({
+				tenant: "t1",
+				sink: "github",
+				kind: "create-issue",
+				findingId: id,
+				payload: JSON.stringify({ finding: contextFor(n), labels: [] }),
+				dedupeKey: `github:create:t1:${n}`,
+				nextAttemptAt: NOW,
+				createdAt: NOW,
+			});
+		}
+
+		await drainOutbox(
+			store,
+			fakeAdapter([{ ok: true, externalId: "1" }]),
+			{ ...RUNTIME, maxPerDrain: 1 },
+			{ now: NOW, sleep: async () => {} },
+		);
+
+		const epic = store.db
+			.query<{ dedupe_key: string }, []>(
+				"SELECT dedupe_key FROM outbox WHERE kind = 'create-epic'",
+			)
+			.get();
+		expect(epic).not.toBeNull();
+		expect((epic as { dedupe_key: string }).dedupe_key.length).toBeLessThan(80);
+		store.close();
+	});
+
+	it("the epic dedupe key is a property of the row set, not its order", async () => {
+		function epicDedupeKey(store: LifecycleStore): string {
+			const row = store.db
+				.query<{ dedupe_key: string }, []>(
+					"SELECT dedupe_key FROM outbox WHERE kind = 'create-epic'",
+				)
+				.get();
+			if (!row) throw new Error("expected a create-epic row");
+			return row.dedupe_key;
+		}
+
+		// Store A: natural row order out of listPendingOutbox.
+		const storeA = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 5; n++) enqueueCreate(storeA, n);
+		await drainOutbox(
+			storeA,
+			fakeAdapter([{ ok: true, externalId: "1" }]),
+			RUNTIME,
+			{
+				now: NOW,
+				sleep: async () => {},
+			},
+		);
+		const keyNaturalOrder = epicDedupeKey(storeA);
+		storeA.close();
+
+		// Store B: identical rows, but listPendingOutbox is wrapped to hand
+		// collapseCreates the SAME rows in reverse. If collapseCreates ever
+		// drops its `.sort(...)` before hashing, this key diverges from
+		// storeA's — the row-SET is identical, only the scan order differs.
+		const storeB = new LifecycleStore(":memory:");
+		for (let n = 1; n <= 5; n++) enqueueCreate(storeB, n);
+		const originalListPendingOutbox = storeB.listPendingOutbox.bind(storeB);
+		storeB.listPendingOutbox = (sink: string, kind?: string) =>
+			originalListPendingOutbox(sink, kind).reverse();
+		await drainOutbox(
+			storeB,
+			fakeAdapter([{ ok: true, externalId: "1" }]),
+			RUNTIME,
+			{
+				now: NOW,
+				sleep: async () => {},
+			},
+		);
+		const keyReversedOrder = epicDedupeKey(storeB);
+		storeB.close();
+
+		expect(keyReversedOrder).toBe(keyNaturalOrder);
+	});
 });

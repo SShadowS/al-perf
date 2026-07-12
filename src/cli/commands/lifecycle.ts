@@ -1132,7 +1132,7 @@ export function createLifecycleCommand(): Command {
 				// loadSinksConfig owns that read separately (config-file.ts
 				// deliberately ignores `sinks`).
 				const config = loadSinksConfig(configPath);
-				let triggers = { processed: 0, enqueued: 0, skippedMigration: 0 };
+				const triggers = { processed: 0, enqueued: 0, skippedMigration: 0 };
 				const drains: Array<{ sink: string } & DrainReport> = [];
 				let deadLetters: Array<{
 					id: number;
@@ -1147,7 +1147,30 @@ export function createLifecycleCommand(): Command {
 						`No sink config at ${configPath} — sink delivery skipped (capture-request scan still ran). Zero-custody alternative: drive 'gh issue create' from 'lifecycle digest -f json' — see docs/lifecycle-gh-recipe.md.`,
 					);
 				} else {
-					triggers = processEventsForSinks(store, config);
+					// Drain the whole backlog in one sync. Each scan is capped at a
+					// batch of events per sink so the enclosing transaction stays
+					// bounded; a newly-enabled sink replaying a long history therefore
+					// needs several scans. The loop terminates because every non-empty
+					// scan advances at least one sink's watermark.
+					//
+					// triggers.processed and triggers.skippedMigration must both count
+					// DISTINCT events across the whole drain, not the sum of each
+					// scan's count: sinks sitting at different watermarks (e.g. a
+					// newly-enabled sink replaying a backlog another sink has already
+					// passed) can each see the same event in a later scan, so summing
+					// scan.processed or scan.skippedMigration double-counts it. Union
+					// the per-scan id sets instead.
+					const processedEventIds = new Set<number>();
+					const skippedEventIds = new Set<number>();
+					for (;;) {
+						const scan = processEventsForSinks(store, config);
+						if (scan.processed === 0) break;
+						for (const id of scan.processedIds) processedEventIds.add(id);
+						for (const id of scan.skippedIds) skippedEventIds.add(id);
+						triggers.enqueued += scan.enqueued;
+					}
+					triggers.processed = processedEventIds.size;
+					triggers.skippedMigration = skippedEventIds.size;
 
 					// D2 sink registry: one plan per ENABLED sink block, built here
 					// (not in triggers.ts) because only sync needs live adapters —

@@ -219,18 +219,24 @@ export function parseFingerprint(s: string): FindingFingerprint {
 }
 
 // ---------------------------------------------------------------------------
-// Hashing (internal)
+// Hashing (shared)
 //
-// Token contract (v1): tokens are joined with "\u001f" (ASCII unit separator
-// — cannot occur in AL identifiers, GUIDs, or paths) and sha256-hashed,
-// truncated to the first 16 hex chars. The first token is the algo version
-// ("v1"), the second the domain ("pattern"/"telemetry"), so raw hashes can
-// never collide across versions or domains even before namespacing.
+// `sha256Hex16` is a plain sha256-and-truncate primitive: tokens are joined
+// with "\u001f" (ASCII unit separator — cannot occur in AL identifiers,
+// GUIDs, or paths), hashed, and truncated to the first 16 hex chars. It has
+// callers beyond this file (e.g. the lifecycle outbox's epic dedupe key,
+// which hashes bare row ids) that don't follow the token contract below.
+//
+// Token contract (v1) — binding on the FINGERPRINT callers in this file
+// (computePatternFingerprint, computeTelemetryFingerprint), not on
+// sha256Hex16 itself: the first token is the algo version ("v1"), the second
+// the domain ("pattern"/"telemetry"), so raw fingerprint hashes can never
+// collide across versions or domains even before namespacing.
 // ---------------------------------------------------------------------------
 
 const TOKEN_SEP = "\u001f";
 
-function sha256Hex16(tokens: readonly string[]): string {
+export function sha256Hex16(tokens: readonly string[]): string {
 	return createHash("sha256")
 		.update(tokens.join(TOKEN_SEP))
 		.digest("hex")
