@@ -623,7 +623,10 @@ describe("applyFingerprintMigration", () => {
 		const cancelled = store.listCaptureRequests("t1", "cancelled");
 		expect(cancelled).toHaveLength(1);
 		expect(cancelled[0]?.reason).toBe("from ask");
-		expect(cancelled[0]?.fingerprint).toBe("pattern:fallbackhash00001");
+		// Cancelling doesn't exempt it from "rekey every row for tenant+from" —
+		// it stays coherent with every other row instead of being the lone
+		// row still parked at the old identity.
+		expect(cancelled[0]?.fingerprint).toBe("pattern:stablehash000001");
 		store.close();
 	});
 

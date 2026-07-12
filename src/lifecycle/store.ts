@@ -1116,10 +1116,11 @@ export class LifecycleStore {
 			// fingerprint column coherent for historical rows. The
 			// from-fingerprint's active request (that partial-unique index
 			// permits at most one) repoints onto `to` if `to` has no active
-			// request of its own; otherwise it's cancelled rather than
-			// repointed — a second active request for the same routine is a
-			// duplicate ask, wasteful but not harmful (D5), and repointing would
-			// collide with the constraint.
+			// request of its own; otherwise — since a second active request for
+			// the same routine is a duplicate ask, wasteful but not harmful (D5) —
+			// it's cancelled instead of repointed. Its fingerprint still rekeys
+			// to `to` along with it: once terminal it no longer falls under
+			// idx_capture_requests_active, so this can't collide.
 			this.db.run(
 				"UPDATE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ? AND status NOT IN ('pending','claimed')",
 				[to, tenant, from],
@@ -1136,8 +1137,8 @@ export class LifecycleStore {
 				);
 			} else {
 				this.db.run(
-					"UPDATE capture_requests SET status = 'cancelled' WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
-					[tenant, from],
+					"UPDATE capture_requests SET fingerprint = ?, status = 'cancelled' WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+					[to, tenant, from],
 				);
 			}
 			// The from-row's own history now lives under toRow.id — log ITS
