@@ -32,7 +32,13 @@ export interface CaptureTriggerReport {
 	expired: number;
 	/** Stale claims returned to `pending` for another worker (executor died mid-capture). */
 	reclaimed: number;
-	/** Candidates that qualified but were skipped because the tenant was already at maxPending. */
+	/**
+	 * Candidates that qualified, had NO active capture request of their own,
+	 * and were denied one solely because the tenant was already at maxPending.
+	 * Excludes candidates that already hold an active (pending/claimed)
+	 * request — those aren't starved, they're already queued, so they don't
+	 * count here even while the tenant sits at the cap.
+	 */
 	skippedMaxPending: number;
 }
 
@@ -121,6 +127,14 @@ export function processCaptureTriggers(
 
 			const key = parseRoutineKey(finding.routineKey);
 			if (!key) continue;
+
+			// Already actively requested (this is likely what's occupying the
+			// tenant's cap slot) — not a cap denial, so check this BEFORE the
+			// cap, or the candidate would double-count itself as "skipped"
+			// for a request it already holds.
+			if (store.hasActiveCaptureRequest(finding.tenant, finding.fingerprint)) {
+				continue;
+			}
 
 			if (store.countActiveCaptureRequests(finding.tenant) >= cfg.maxPending) {
 				skippedMaxPending++;

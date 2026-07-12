@@ -540,6 +540,38 @@ describe("lifecycle sync — security boundary", () => {
 		expect(printed).toContain("captures health");
 	});
 
+	it("sync does NOT warn when the full queue holds only findings already requested (nothing starved)", async () => {
+		// A single qualifying finding, cap of 1. First sync files the request
+		// and fills the cap with that SAME finding's own row — not a jam, just
+		// a queue of one doing exactly what it should.
+		seedQualifyingTelemetryFinding(dbPath);
+		writeFileSync(
+			configPath,
+			JSON.stringify({ captureRequests: { maxPending: 1 } }),
+		);
+
+		await runSync(["sync"]);
+		const firstRun = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(firstRun).toContain(
+			"Capture requests: 1 created, 0 expired, 0 reclaimed.",
+		);
+		expect(firstRun).not.toMatch(/NOT requested/i);
+
+		// Second sync, same instant: the tenant is now at the cap, but the only
+		// active request belongs to the very finding still being scanned —
+		// nothing is starved. This must stay quiet, not cry wolf.
+		logSpy.mockClear();
+		await runSync(["sync"]);
+		const secondRun = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(secondRun).not.toMatch(/NOT requested/i);
+		expect(secondRun).not.toContain("WARNING");
+		expect(secondRun).not.toContain("maxPending cap");
+
+		const store = new LifecycleStore(dbPath);
+		expect(store.listCaptureRequests(TENANT, "pending")).toHaveLength(1);
+		store.close();
+	});
+
 	describe("multi-sink fan-out (Task 4)", () => {
 		it("both sinks configured with tokens present: both drain, JSON reports a per-sink drains array", async () => {
 			seedPendingDeliveryForSinks(dbPath, ["github", "azureDevOps"]);

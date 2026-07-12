@@ -1527,6 +1527,23 @@ export class LifecycleStore {
 	}
 
 	/**
+	 * Mirrors idx_capture_requests_active's predicate exactly (tenant +
+	 * fingerprint, status IN pending/claimed) — this is the same identity
+	 * `createCaptureRequest`'s INSERT OR IGNORE dedupes on. Lets a caller tell
+	 * "already actively requested" apart from "denied by the maxPending cap"
+	 * BEFORE consulting the cap, so a candidate that already holds the slot
+	 * it's occupying is never counted as skipped because of it.
+	 */
+	hasActiveCaptureRequest(tenant: string, fingerprint: string): boolean {
+		const row = this.db
+			.query<{ n: number }, [string, string]>(
+				"SELECT count(*) AS n FROM capture_requests WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+			)
+			.get(tenant, fingerprint);
+		return (row?.n ?? 0) > 0;
+	}
+
+	/**
 	 * Queue health per tenant. Reports FACTS, not verdicts — no "the executor is
 	 * dead" heuristic; the operator draws that conclusion from `stuck` and
 	 * `stuckHolders`. `atCap` is the exception, and it is not a heuristic: it is

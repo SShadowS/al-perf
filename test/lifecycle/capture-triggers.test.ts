@@ -205,6 +205,84 @@ describe("processCaptureTriggers", () => {
 		store.close();
 	});
 
+	it("healthy-but-full queue: candidates that already hold their own active request are not counted as skipped", () => {
+		const store = new LifecycleStore(":memory:");
+		const id1 = store.insertFinding(
+			telemetryFinding({ fingerprint: "telemetry:deadbeef00000007" }),
+		);
+		const id2 = store.insertFinding(
+			telemetryFinding({
+				fingerprint: "telemetry:deadbeef00000008",
+				routineKey: "abc123|Codeunit|50200|postcredit",
+			}),
+		);
+		seedOccurrences(store, id1, 3);
+		seedOccurrences(store, id2, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				maxPending: 2,
+			},
+		};
+
+		// First scan: both qualify, both fit under the cap, both get queued.
+		const first = processCaptureTriggers(store, cfg, NOW);
+		expect(first.created).toBe(2);
+		expect(first.skippedMaxPending).toBe(0);
+
+		// Second scan, same instant: the tenant is now AT the cap (2/2), but
+		// both active requests belong to these exact candidates — nothing is
+		// starved. A re-scan must not blame either of them for occupying the
+		// slot they themselves hold.
+		const second = processCaptureTriggers(store, cfg, NOW);
+		expect(second.created).toBe(0);
+		expect(second.skippedMaxPending).toBe(0);
+		expect(store.listCaptureRequests()).toHaveLength(2);
+		store.close();
+	});
+
+	it("a genuinely starved finding is still counted even while other candidates already hold their own requests", () => {
+		const store = new LifecycleStore(":memory:");
+		const id1 = store.insertFinding(
+			telemetryFinding({ fingerprint: "telemetry:deadbeef00000009" }),
+		);
+		const id2 = store.insertFinding(
+			telemetryFinding({
+				fingerprint: "telemetry:deadbeef0000000a",
+				routineKey: "abc123|Codeunit|50200|postcredit",
+			}),
+		);
+		seedOccurrences(store, id1, 3);
+		seedOccurrences(store, id2, 3);
+
+		const cfg = {
+			...DEFAULT_LIFECYCLE_CONFIG,
+			captureRequests: {
+				...DEFAULT_LIFECYCLE_CONFIG.captureRequests,
+				maxPending: 2,
+			},
+		};
+		expect(processCaptureTriggers(store, cfg, NOW).created).toBe(2);
+
+		// A brand-new qualifying finding with NO active request of its own —
+		// this one really is starved by the full queue.
+		const id3 = store.insertFinding(
+			telemetryFinding({
+				fingerprint: "telemetry:deadbeef0000000b",
+				routineKey: "abc123|Codeunit|50300|postinvoice",
+			}),
+		);
+		seedOccurrences(store, id3, 3);
+
+		const report = processCaptureTriggers(store, cfg, NOW);
+		expect(report.created).toBe(0);
+		expect(report.skippedMaxPending).toBe(1);
+		expect(store.listCaptureRequests()).toHaveLength(2);
+		store.close();
+	});
+
 	it("resolved/closed findings are never candidates", () => {
 		const store = new LifecycleStore(":memory:");
 		const resolvedId = store.insertFinding(
