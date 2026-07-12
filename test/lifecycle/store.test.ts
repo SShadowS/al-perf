@@ -657,3 +657,134 @@ describe("LifecycleStore capture requests", () => {
 		store.close();
 	});
 });
+
+describe("stale algo-version findings", () => {
+	function seed(
+		store: LifecycleStore,
+		tenant: string,
+		fp: string,
+		algo: number,
+	) {
+		return store.insertFinding({
+			tenant,
+			fingerprint: fp,
+			algoVersion: algo,
+			state: "open",
+			source: "pattern",
+			patternId: "calcfields-in-loop",
+			title: `Finding ${fp}`,
+			severity: "critical",
+			appId: "",
+			appName: "",
+			routineKey: "",
+			firstSeenAt: "2026-07-01T00:00:00Z",
+			lastSeenAt: "2026-07-01T00:00:00Z",
+			lastEventAt: "2026-07-01T00:00:00Z",
+			observedKinds: ["sampling"],
+			observedStreams: ["nightly"],
+		} satisfies NewFinding);
+	}
+
+	it("counts only active findings at a different algo version", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "acme", "pattern:aaaaaaaaaaaaaaa1", 1);
+		seed(store, "acme", "pattern:aaaaaaaaaaaaaaa2", 1);
+		seed(store, "acme", "pattern:aaaaaaaaaaaaaaa3", 2);
+		const stale = store.countStaleAlgoFindings("acme", 2);
+		expect(stale.count).toBe(2);
+		expect(stale.versions).toEqual([1]);
+		store.close();
+	});
+
+	it("purge is tenant-scoped and deletes every state", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "acme", "pattern:bbbbbbbbbbbbbbb1", 1);
+		seed(store, "other", "pattern:bbbbbbbbbbbbbbb2", 1);
+		const deleted = store.purgeStaleAlgoFindings("acme", 2);
+		expect(deleted).toBe(1);
+		expect(store.listFindings({ tenant: "acme" }).length).toBe(0);
+		expect(store.listFindings({ tenant: "other" }).length).toBe(1);
+		store.close();
+	});
+
+	it("purge removes dependent rows so no orphans survive", () => {
+		const store = new LifecycleStore(":memory:");
+		const id = seed(store, "acme", "pattern:ccccccccccccccc1", 1);
+		store.putIssueMapping({
+			tenant: "acme",
+			sink: "github",
+			fingerprint: "pattern:ccccccccccccccc1",
+			externalId: "42",
+			createdAt: "2026-07-01T00:00:00Z",
+		});
+		store.createCaptureRequest({
+			tenant: "acme",
+			fingerprint: "pattern:ccccccccccccccc1",
+			findingId: id,
+			appId: "",
+			appName: null,
+			objectType: "codeunit",
+			objectId: 50000,
+			methodName: "processline",
+			reason: "test",
+			requestedAt: "2026-07-01T00:00:00Z",
+			expiresAt: "2026-07-15T00:00:00Z",
+		});
+		// The FK-constrained relations the purge's DELETEs actually protect
+		// against: occurrences and finding_events both need a live row here or
+		// removing their DELETE never trips PRAGMA foreign_keys (it stays a
+		// vacuous check on empty tables). occurrences needs a run row first.
+		const { runId } = store.recordRun({
+			tenant: "acme",
+			stream: "nightly",
+			profileId: "profile-ccc",
+			captureKind: "sampling",
+			captureTime: "2026-07-01T00:00:00Z",
+			versionStamp: "",
+			incomplete: false,
+			exercisedApps: { ids: [], names: [] },
+		});
+		store.recordOccurrence({
+			findingId: id,
+			runId,
+			captureTime: "2026-07-01T00:00:00Z",
+			severity: "critical",
+		});
+		store.logEvent({
+			findingId: id,
+			event: "first-seen",
+			fromState: null,
+			toState: "new",
+			at: "2026-07-01T00:00:00Z",
+		});
+		store.enqueueOutbox({
+			tenant: "acme",
+			sink: "github",
+			kind: "file",
+			findingId: id,
+			payload: "{}",
+			dedupeKey: "acme:github:pattern:ccccccccccccccc1",
+			nextAttemptAt: "2026-07-01T00:00:00Z",
+			createdAt: "2026-07-01T00:00:00Z",
+		});
+		// A finding at the CURRENT algo version that supersedes the doomed one —
+		// the FK constraint (REFERENCES findings(id)) enforces that the pointer is
+		// nulled or the reference deleted; the assertion below proves that the
+		// survivor itself is preserved and its supersedes pointer is actually nulled.
+		const survivorId = seed(store, "acme", "pattern:ccccccccccccccc2", 2);
+		store.db.run("UPDATE findings SET supersedes = ? WHERE id = ?", [
+			id,
+			survivorId,
+		]);
+
+		store.purgeStaleAlgoFindings("acme", 2);
+
+		expect(
+			store.getIssueMapping("acme", "github", "pattern:ccccccccccccccc1"),
+		).toBeNull();
+		expect(store.getFinding(survivorId)?.supersedes).toBeNull();
+		const violations = store.db.query("PRAGMA foreign_key_check").all();
+		expect(violations).toEqual([]);
+		store.close();
+	});
+});

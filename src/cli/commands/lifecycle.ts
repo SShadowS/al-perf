@@ -36,6 +36,7 @@ import {
 	type EvaluationOutcome,
 	evaluateRun,
 } from "../../lifecycle/evaluate.js";
+import { FINGERPRINT_ALGO_VERSION } from "../../lifecycle/fingerprint.js";
 import { createAzureDevOpsSink } from "../../lifecycle/sinks/azuredevops.js";
 import { createGitHubSink } from "../../lifecycle/sinks/github.js";
 import {
@@ -1047,16 +1048,44 @@ export function createLifecycleCommand(): Command {
 	cmd
 		.command("maintain")
 		.description(
-			"Run store maintenance: roll up routine metrics older than the retention window",
+			"Run store maintenance: roll up routine metrics older than the retention window, or purge findings left behind by a fingerprint-algorithm bump",
 		)
 		.option(
 			"--retention-days <n>",
 			"Raw metric retention in days",
 			String(DEFAULT_LIFECYCLE_CONFIG.rawMetricsRetentionDays),
 		)
+		.option(
+			"--purge-stale-fingerprints",
+			"Delete findings whose fingerprints were minted by an older algorithm version (requires --tenant). Their history cannot be carried across an algorithm change; this discards it deliberately.",
+		)
+		.option(
+			"--tenant <tenant>",
+			"Tenant key (required with --purge-stale-fingerprints)",
+		)
 		.action((opts: any) => {
 			const store = new LifecycleStore(cmd.opts().db);
 			try {
+				if (opts.purgeStaleFingerprints) {
+					if (!opts.tenant) {
+						console.error(
+							"--purge-stale-fingerprints requires --tenant (the purge is tenant-scoped).",
+						);
+						process.exitCode = 2;
+						return;
+					}
+					const tenant = resolveTenantOpt(opts.tenant);
+					if (tenant === null) return;
+					const deleted = store.purgeStaleAlgoFindings(
+						tenant,
+						FINGERPRINT_ALGO_VERSION,
+					);
+					console.log(
+						`Purged ${deleted} finding(s) for tenant '${tenant}' minted by an older fingerprint algorithm (current: v${FINGERPRINT_ALGO_VERSION}).`,
+					);
+					return;
+				}
+
 				const res = rollupRoutineMetrics(
 					store,
 					new Date().toISOString(),

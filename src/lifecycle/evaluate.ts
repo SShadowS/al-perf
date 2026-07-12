@@ -291,6 +291,41 @@ export function applyIdentityUpgrades(
 	);
 }
 
+/**
+ * Thrown when the store holds active findings whose fingerprints were minted by
+ * a different FINGERPRINT_ALGO_VERSION than the one now in force. Their history
+ * cannot be carried across the change — the fingerprints simply no longer match
+ * — so continuing would silently re-file every live problem as first-seen and
+ * strand every existing row in `resolved` (which only a human `lifecycle close`
+ * can clear). Refusing is the honest move; `maintain --purge-stale-fingerprints`
+ * is the way forward.
+ */
+export class StaleAlgoVersionError extends Error {
+	readonly tenant: string;
+	readonly currentVersion: number;
+	readonly staleVersions: number[];
+	readonly count: number;
+
+	constructor(
+		tenant: string,
+		currentVersion: number,
+		staleVersions: number[],
+		count: number,
+	) {
+		super(
+			`${count} active finding(s) for tenant '${tenant}' were fingerprinted by algorithm ` +
+				`v${staleVersions.join("/v")}, but v${currentVersion} is now in force. Their history ` +
+				`cannot be carried across a fingerprint algorithm change. Discard them with:\n` +
+				`  lifecycle maintain --purge-stale-fingerprints --tenant ${tenant}`,
+		);
+		this.name = "StaleAlgoVersionError";
+		this.tenant = tenant;
+		this.currentVersion = currentVersion;
+		this.staleVersions = staleVersions;
+		this.count = count;
+	}
+}
+
 export function evaluateRun(
 	store: LifecycleStore,
 	result: AnalysisResult,
@@ -307,6 +342,22 @@ export function evaluateRun(
 	const index = buildMethodIndex(result);
 	const exercised = exercisedAppsOf(index.values());
 	const stamp = versionStampFrom(run.versions);
+
+	// Refuse to run against findings minted by a different fingerprint algorithm
+	// — see StaleAlgoVersionError. Deliberately outside runTx: this must throw
+	// before any write, not roll one back.
+	const stale = store.countStaleAlgoFindings(
+		run.tenant,
+		FINGERPRINT_ALGO_VERSION,
+	);
+	if (stale.count > 0) {
+		throw new StaleAlgoVersionError(
+			run.tenant,
+			FINGERPRINT_ALGO_VERSION,
+			stale.versions,
+			stale.count,
+		);
+	}
 
 	// The whole write path is one transaction: a throw anywhere below rolls
 	// back recordRun's `runs` insert too, so a crashed run is never left
