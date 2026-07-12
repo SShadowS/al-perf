@@ -1044,6 +1044,19 @@ export class LifecycleStore {
 					"UPDATE OR REPLACE sink_issue_map SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
 					[to, tenant, from],
 				);
+				// Same treatment for capture_requests: terminal rows
+				// (fulfilled/expired/cancelled) rekey for free since
+				// idx_capture_requests_active excludes them — nothing to collide
+				// with. An active row COULD collide with an unrelated active
+				// request already parked under the to-fingerprint; OR REPLACE
+				// resolves that exactly like the sink_issue_map rename above — the
+				// from-row is the live one here, so it wins and the other active
+				// row is dropped (a dropped capture request just re-files on the
+				// next sync).
+				this.db.run(
+					"UPDATE OR REPLACE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ?",
+					[to, tenant, from],
+				);
 				this.logEvent({
 					findingId: fromRow.id,
 					event: "migrated",
@@ -1096,6 +1109,36 @@ export class LifecycleStore {
 						[tenant, sink, from],
 					);
 				}
+			}
+			// Rekey capture_requests the same way. Terminal rows move over
+			// unconditionally — they aren't covered by idx_capture_requests_active
+			// so there's no collision to guard against, and it keeps the
+			// fingerprint column coherent for historical rows. The
+			// from-fingerprint's active request (that partial-unique index
+			// permits at most one) repoints onto `to` if `to` has no active
+			// request of its own; otherwise it's cancelled rather than
+			// repointed — a second active request for the same routine is a
+			// duplicate ask, wasteful but not harmful (D5), and repointing would
+			// collide with the constraint.
+			this.db.run(
+				"UPDATE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ? AND status NOT IN ('pending','claimed')",
+				[to, tenant, from],
+			);
+			const toHasActiveRequest = this.db
+				.query<{ n: number }, [string, string]>(
+					"SELECT count(*) AS n FROM capture_requests WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+				)
+				.get(tenant, to);
+			if ((toHasActiveRequest?.n ?? 0) === 0) {
+				this.db.run(
+					"UPDATE capture_requests SET fingerprint = ? WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+					[to, tenant, from],
+				);
+			} else {
+				this.db.run(
+					"UPDATE capture_requests SET status = 'cancelled' WHERE tenant = ? AND fingerprint = ? AND status IN ('pending','claimed')",
+					[tenant, from],
+				);
 			}
 			// The from-row's own history now lives under toRow.id — log ITS
 			// ending against fromRow.id AFTER that reassignment, so the
