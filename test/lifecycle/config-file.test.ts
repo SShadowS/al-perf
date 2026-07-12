@@ -485,6 +485,41 @@ describe("loadLifecycleConfigFile", () => {
 					expect(merged.telemetry.tenantMap[guid]).toBe("continia-do");
 				});
 			});
+
+			it("rejects case-variant duplicate GUID keys, naming both", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "dup-case-guid.json");
+					const upper = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+					const lower = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { [upper]: "acme", [lower]: "contoso" } },
+						}),
+					);
+					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(upper));
+					expect(() => loadLifecycleConfigFile(file)).toThrow(new RegExp(lower));
+				});
+			});
+
+			it("accepts two genuinely distinct GUIDs", () => {
+				withTmpDir("alperf-lc-cfg-", (dir) => {
+					const file = join(dir, "distinct-guids.json");
+					const guidA = "11111111-1111-1111-1111-111111111111";
+					const guidB = "22222222-2222-2222-2222-222222222222";
+					writeFileSync(
+						file,
+						JSON.stringify({
+							telemetry: { tenantMap: { [guidA]: "acme", [guidB]: "contoso" } },
+						}),
+					);
+					const patch = loadLifecycleConfigFile(file);
+					expect(patch?.telemetry?.tenantMap).toEqual({
+						[guidA]: "acme",
+						[guidB]: "contoso",
+					});
+				});
+			});
 		});
 
 		describe("unmappedTenantPolicy validation", () => {

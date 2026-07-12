@@ -171,12 +171,25 @@ function validateTelemetryBlock(
 			);
 		}
 		const tenantMap: Record<string, string> = {};
+		// Lowercased GUID -> the first original-case key seen for it, so a
+		// case-variant duplicate (e.g. "ABC..." and "abc...") is caught here
+		// rather than silently colliding downstream, where lookups are done
+		// against the lowercased GUID and would otherwise last-write-win.
+		const seenGuidKeys = new Map<string, string>();
 		for (const [key, value] of Object.entries(tenantMapInput as Record<string, unknown>)) {
 			if (!TENANT_GUID_RE.test(key)) {
 				throw new Error(
 					`${path}: telemetry.tenantMap key "${key}" is not a valid AAD tenant GUID (must match ${TENANT_GUID_RE})`,
 				);
 			}
+			const lowerKey = key.toLowerCase();
+			const priorKey = seenGuidKeys.get(lowerKey);
+			if (priorKey !== undefined) {
+				throw new Error(
+					`${path}: telemetry.tenantMap keys "${priorKey}" and "${key}" are case-variant duplicates of the same AAD tenant GUID`,
+				);
+			}
+			seenGuidKeys.set(lowerKey, key);
 			if (typeof value !== "string" || !TENANT_CODE_RE.test(value)) {
 				throw new Error(
 					`${path}: telemetry.tenantMap["${key}"] value ${JSON.stringify(value)} is not a valid tenant code (must match ${TENANT_CODE_RE})`,
