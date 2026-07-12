@@ -140,6 +140,13 @@ function seedQualifyingTelemetryFinding(
  * reproduces the exact state where an executor has died: nothing can be
  * created (already at cap) and nothing is due to expire (expiresAt is far in
  * the future), yet a qualifying finding is skipped every scan.
+ *
+ * `expiresAt` is derived from the real clock at seed time (not a hardcoded
+ * calendar date) — `processCaptureTriggers` compares it against
+ * `new Date().toISOString()` with no test hook to override "now", so a fixed
+ * future date would eventually become the past and the occupant would start
+ * expiring, quietly turning this into a non-starvation fixture. A 50-year
+ * offset keeps it in the future regardless of when the suite runs.
  */
 const OCCUPANT_FP = "telemetry:sync000000000cap0";
 function seedTenantAtCaptureCapacity(dbPath: string): void {
@@ -152,6 +159,9 @@ function seedTenantAtCaptureCapacity(dbPath: string): void {
 			routineKey: "abc123|Codeunit|50100|postvoid",
 		}),
 	);
+	const farFutureExpiresAt = new Date(
+		Date.now() + 50 * 365 * 24 * 60 * 60 * 1000,
+	).toISOString();
 	store.createCaptureRequest({
 		tenant: TENANT,
 		fingerprint: OCCUPANT_FP,
@@ -163,7 +173,7 @@ function seedTenantAtCaptureCapacity(dbPath: string): void {
 		methodName: "postvoid",
 		reason: "pre-seeded occupant filling maxPending cap",
 		requestedAt: "2026-07-01T00:00:00Z",
-		expiresAt: "2030-01-01T00:00:00Z",
+		expiresAt: farFutureExpiresAt,
 	});
 	store.close();
 }
@@ -493,6 +503,7 @@ describe("lifecycle sync — security boundary", () => {
 		const output = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
 		const summary = JSON.parse(output);
 		expect(summary.captureRequests.created).toBe(1);
+		expect(summary.captureRequests.reclaimed).toBe(0);
 		expect(summary.captureRequests.skippedMaxPending).toBe(1);
 
 		const store = new LifecycleStore(dbPath);
@@ -515,7 +526,15 @@ describe("lifecycle sync — security boundary", () => {
 		await runSync(["sync"]);
 
 		const printed = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
-		expect(printed).toContain("Capture requests:");
+		// Pins the starvation state itself (created == 0, expired == 0,
+		// reclaimed == 0), not just the warning it produces — without this, the
+		// fixture could silently decay (e.g. the occupant's expiresAt lapsing)
+		// into a scenario where `expired` is nonzero and the OLD guard
+		// (`created > 0 || expired > 0`) would have printed the counts line too,
+		// leaving this test green for the wrong reason.
+		expect(printed).toContain(
+			"Capture requests: 0 created, 0 expired, 0 reclaimed.",
+		);
 		expect(printed).toMatch(/NOT requested/i);
 		expect(printed).toContain("maxPending");
 		expect(printed).toContain("captures health");
