@@ -239,7 +239,7 @@ export interface RecordOpInfo {
 	recordVariable?: string;
 	/** First argument string for SetRange/SetFilter (the field name being filtered) */
 	fieldArgument?: string;
-	/** All field arguments for SetLoadFields calls */
+	/** All field arguments for SetLoadFields, CalcFields, and CalcSums calls */
 	allFieldArguments?: string[];
 	/**
 	 * Set when `insideLoop` is true because this op sits in a per-row trigger

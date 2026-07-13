@@ -259,6 +259,59 @@ describe("CalcField severity graduation", () => {
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].severity).toBe("warning");
 	});
+
+	it("rates severity from the field actually passed to CalcFields, not the whole table", () => {
+		// "CalcField Test Table" also has a Sum FlowField ("Total Amount") and a
+		// Count FlowField ("Line Count") elsewhere, but this call only calculates
+		// the Lookup field "Customer Name". Before the fix, severity was decided
+		// from whether the TABLE had any aggregation FlowField, so this was rated
+		// critical merely because of an unrelated Sum field on the same table.
+		const method = makeMethod({
+			functionName: "ProcessWithLookupFieldOnAggregationTable",
+			objectId: 50500,
+			objectName: "CalcField Loop Test",
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		expect(patterns.length).toBeGreaterThan(0);
+		expect(patterns[0].severity).toBe("warning");
+	});
+});
+
+describe("calcfields-in-loop — suggestion must be actionable", () => {
+	it("never tells the user to use SetLoadFields on a FlowField", () => {
+		// SetLoadFields does not accept FlowFields, and CalcFields operates on
+		// FlowFields. Suggesting it is advice the user cannot follow.
+		// https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setloadfields-method
+		//
+		// The suggestion is still allowed (deliberately) to NAME SetLoadFields in
+		// order to warn the user off it -- developers reach for it by reflex --
+		// so this checks for the specific bad advice ("use SetLoadFields") rather
+		// than a blanket absence of the word.
+		const method = makeMethod({
+			functionName: "ProcessRecords",
+			objectType: "Codeunit",
+			objectId: 50100,
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(finding).toBeDefined();
+		expect(finding?.suggestion).not.toMatch(/use SetLoadFields/i);
+		expect(finding?.suggestion).toContain("SetAutoCalcFields");
+	});
+
+	it("warns the user off SetLoadFields by name on the warning-severity branch too", () => {
+		const method = makeMethod({
+			functionName: "ProcessWithLookupCalcFieldOnly",
+			objectId: 50500,
+			objectName: "CalcField Loop Test",
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(finding).toBeDefined();
+		expect(finding?.severity).toBe("warning");
+		expect(finding?.suggestion).not.toMatch(/use SetLoadFields/i);
+		expect(finding?.suggestion).toContain("SetAutoCalcFields");
+	});
 });
 
 describe("detectIncompleteSetLoadFields", () => {

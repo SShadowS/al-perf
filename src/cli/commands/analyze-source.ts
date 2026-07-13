@@ -125,7 +125,7 @@ export function registerAnalyzeSourceCommand(program: Command) {
 							evidence: `${op.type}() at line ${op.line} inside loop`,
 							suggestion:
 								op.type === "CalcFields"
-									? "Move CalcFields() before the loop, or use SetLoadFields()."
+									? "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved, or filter on the FlowField instead of calculating it per row. Note SetLoadFields() does NOT help here — it does not accept FlowFields."
 									: op.type === "Modify"
 										? "Collect changes and apply after the loop, or use ModifyAll()."
 										: "Consider loading data before the loop with a single query.",

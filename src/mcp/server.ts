@@ -1207,7 +1207,9 @@ call points that are easy to overlook during performance tuning.
 **Severity:** critical
 A CalcFields() call found inside a loop body (repeat/for/foreach/while). CalcFields
 performs a database round-trip per call — inside a loop this becomes an N+1 query pattern.
-**Fix:** Move CalcFields before the loop, or use SetLoadFields to pre-load needed fields.
+**Fix:** Call SetAutoCalcFields before the loop so the FlowField is calculated as each
+record is retrieved, or filter on the FlowField instead of calculating it per row.
+SetLoadFields does NOT help here — it does not accept FlowFields.
 
 ### Modify in Loop
 **Severity:** critical

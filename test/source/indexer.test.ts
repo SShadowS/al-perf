@@ -265,6 +265,25 @@ test("extracts allFieldArguments for SetLoadFields calls", async () => {
 	expect(badSetLoadFieldsOp!.allFieldArguments).toContain("Document No.");
 });
 
+test("extracts allFieldArguments for CalcFields calls (needed to rate severity on the called field, not the table)", async () => {
+	const result = await indexALFile(
+		resolve(fixturesDir, "CodeUnit50500.al"),
+		fixturesDir,
+	);
+	expect(result).toBeDefined();
+
+	const proc = result!.procedures.find(
+		(p) => p.name === "ProcessWithLookupFieldOnAggregationTable",
+	)!;
+	expect(proc).toBeDefined();
+	const calcFieldsOp = proc.features.recordOps.find(
+		(op) => op.type === "CalcFields",
+	);
+	expect(calcFieldsOp).toBeDefined();
+	expect(calcFieldsOp!.allFieldArguments).toBeDefined();
+	expect(calcFieldsOp!.allFieldArguments).toEqual(["Customer Name"]);
+});
+
 test("does not count method calls as field accesses", async () => {
 	const result = await indexALFile(
 		resolve(fixturesDir, "CodeUnit50700.al"),

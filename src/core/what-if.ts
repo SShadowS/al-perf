@@ -31,7 +31,7 @@ const SAVINGS_MODELS: Record<
 	}),
 	"calcfields-in-loop": (p) => ({
 		savings: Math.round(p.impact * 0.8),
-		explanation: `Moving CalcFields outside the loop or using SetLoadFields could eliminate ~80% of the ${formatImpact(p.impact)} per-iteration cost.`,
+		explanation: `Moving CalcFields outside the loop, or calling SetAutoCalcFields before it, could eliminate ~80% of the ${formatImpact(p.impact)} per-iteration cost. SetLoadFields does not help here — it does not accept FlowFields.`,
 	}),
 	"modify-in-loop": (p) => ({
 		savings: Math.round(p.impact * 0.6),

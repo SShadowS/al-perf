@@ -31,27 +31,39 @@ function methodLabel(m: MethodBreakdown): string {
 	return `${m.functionName} (${m.objectType} ${m.objectId})`;
 }
 
-/** Aggregation CalcFormula types that cause full table scans */
+/**
+ * Aggregation CalcFormula types that force a SQL aggregation over every
+ * matching related row — expensive, and worth a `critical` rating.
+ *
+ * `Exist` is deliberately NOT here: it can short-circuit on the first match,
+ * which puts it closer to `Lookup`'s cost profile than to `Sum`/`Count`'s.
+ */
 const AGGREGATION_CALC_TYPES = new Set<TableFieldInfo["calcFormulaType"]>([
 	"Sum",
 	"Count",
 	"Average",
 	"Min",
 	"Max",
-	"Exist",
 ]);
 
 /**
- * Determine CalcFields severity based on table's CalcFormula types.
- * Tables with Sum/Count/Average/Min/Max/Exist FlowFields → critical (aggregation = expensive).
- * Tables with only Lookup FlowFields → warning (single-row, less severe).
- * Unknown tables (not in source index) → critical (conservative default).
+ * Determine CalcFields/CalcSums severity from the field(s) actually passed to
+ * the call — not from whether the record's table happens to have some
+ * unrelated aggregation FlowField elsewhere. `CalcFields(CheapLookupField)`
+ * must not be rated critical just because the same table also has a Sum
+ * field nobody is calculating here.
+ *
+ * Falls back to the table-wide heuristic (any aggregation FlowField on the
+ * table → critical) only when the call's field list is unknown — e.g. a
+ * bare `CalcFields();` with no arguments parses with none. `critical` stays
+ * the conservative default whenever severity truly cannot be determined.
  */
 function calcFieldSeverity(
-	recordVariable: string | undefined,
+	op: RecordOpInfo,
 	variables: VariableInfo[],
 	index: SourceIndex,
 ): "critical" | "warning" {
+	const recordVariable = op.recordVariable;
 	if (!recordVariable) return "critical";
 
 	const variable = variables.find(
@@ -62,9 +74,24 @@ function calcFieldSeverity(
 	// Find the table in the source index by name
 	for (const obj of index.objects.values()) {
 		if (obj.objectType === "Table" && obj.objectName === variable.tableName) {
-			const calcFields = obj.fields.filter((f) => f.calcFormulaType);
-			if (calcFields.length === 0) return "critical"; // No CalcFormula info, conservative
-			const hasAggregation = calcFields.some((f) =>
+			const calledFields = op.allFieldArguments;
+			if (!calledFields || calledFields.length === 0) {
+				// Field list unknown (e.g. a bare CalcFields() call) — fall back to
+				// the table-wide heuristic, conservative default.
+				const calcFields = obj.fields.filter((f) => f.calcFormulaType);
+				if (calcFields.length === 0) return "critical"; // No CalcFormula info, conservative
+				const hasAggregation = calcFields.some((f) =>
+					AGGREGATION_CALC_TYPES.has(f.calcFormulaType),
+				);
+				return hasAggregation ? "critical" : "warning";
+			}
+
+			const calledLower = new Set(calledFields.map((f) => f.toLowerCase()));
+			const calledTableFields = obj.fields.filter((f) =>
+				calledLower.has(f.name.toLowerCase()),
+			);
+			if (calledTableFields.length === 0) return "critical"; // Called field(s) not resolved, conservative
+			const hasAggregation = calledTableFields.some((f) =>
 				AGGREGATION_CALC_TYPES.has(f.calcFormulaType),
 			);
 			return hasAggregation ? "critical" : "warning";
@@ -101,7 +128,7 @@ export function detectCalcFieldsInLoop(
 
 		for (const op of opsInLoop) {
 			const severity = downgradePageImplicitLoop(
-				calcFieldSeverity(op.recordVariable, match.features.variables, index),
+				calcFieldSeverity(op, match.features.variables, index),
 				op,
 			);
 			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
@@ -115,8 +142,8 @@ export function detectCalcFieldsInLoop(
 				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 				suggestion:
 					severity === "critical"
-						? "Move CalcFields() before the loop, or use SetLoadFields() to pre-load only the fields you need. This table has aggregation FlowFields (Sum/Count) which are especially expensive."
-						: "Move CalcFields() before the loop, or use SetLoadFields(). This table has Lookup FlowFields which are less expensive but still cause N+1 queries.",
+						? "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved, or filter on the FlowField instead of calculating it per row. This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call. Note SetLoadFields() does NOT help here — it does not accept FlowFields."
+						: "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved. This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration. Note SetLoadFields() does NOT help here — it does not accept FlowFields.",
 			});
 		}
 	}

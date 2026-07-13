@@ -439,7 +439,17 @@ function collectRecordOps(
 		callNode: SyntaxNode,
 		methodName: string,
 	): string[] | undefined {
-		if (methodName.toLowerCase() !== "setloadfields") return undefined;
+		const lowerMethod = methodName.toLowerCase();
+		// SetLoadFields' argument list matters for missing/incomplete-SetLoadFields
+		// coverage checks. CalcFields/CalcSums' argument list matters for rating
+		// calcfields-in-loop severity on the field(s) actually calculated, not on
+		// the table as a whole (see calcFieldSeverity in source-patterns.ts).
+		if (
+			lowerMethod !== "setloadfields" &&
+			lowerMethod !== "calcfields" &&
+			lowerMethod !== "calcsums"
+		)
+			return undefined;
 		const argList = callNode.namedChildren.find(
 			(c) => c.type === "argument_list",
 		);
