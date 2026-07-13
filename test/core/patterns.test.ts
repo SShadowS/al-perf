@@ -578,6 +578,28 @@ describe("runDetectors", () => {
 			expect(typeof pattern.suggestion).toBe("string");
 		}
 	});
+
+	test("pins the exact sortPatterns order, including the id tiebreak, for event-chain.alcpuprofile", async () => {
+		// event-chain.alcpuprofile (no --source) produces 4 patterns that ALL tie
+		// on impact (500000), and 3 of those tie on severity ("warning") too — so
+		// this fixture is the one that actually exercises every fallback level of
+		// sortPatterns at this call site. A bare `impact - impact` sort here
+		// leaves the three warning-severity findings in whatever order the
+		// detector array happens to emit them, which is NOT this order — a
+		// regression to a bare impact sort changes this to
+		// [single-method-dominance, event-subscriber-hotspot, event-chain,
+		// event-chain] (event-subscriber-hotspot first, not last).
+		const parsed = await parseProfile(`${FIXTURES}/event-chain.alcpuprofile`);
+		const processed = processProfile(parsed);
+		const patterns = runDetectors(processed);
+
+		expect(patterns.map((p) => p.id)).toEqual([
+			"single-method-dominance",
+			"event-chain",
+			"event-chain",
+			"event-subscriber-hotspot",
+		]);
+	});
 });
 
 describe("pattern ordering", () => {

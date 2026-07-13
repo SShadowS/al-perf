@@ -779,9 +779,15 @@ function renderPatterns(data) {
 		info: "\u2139",
 	};
 
+	// Mirrors src/core/patterns.ts's sortPatterns: real measured impact outranks
+	// severity, not the other way around - a critical finding with 1ms impact
+	// must not render above a warning worth 5 seconds. Severity and id are
+	// tiebreaks only.
 	const sorted = [...data.patterns].sort(
 		(a, b) =>
-			(severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3),
+			b.impact - a.impact ||
+			(severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3) ||
+			String(a.id).localeCompare(String(b.id)),
 	);
 
 	for (const p of sorted) {

@@ -226,6 +226,18 @@ export async function analyzeProfile(
 		}
 		options?.onSourceIndex?.(sourceIndex);
 		const sourcePatterns = runSourceDetectors(methods, sourceIndex);
+		// Defensive re-sort: `patterns` (from runDetectors) and `sourcePatterns`
+		// (from runSourceDetectors) are each already sortPatterns-sorted, and
+		// Array.sort is stable, so concatenating them and applying a BARE impact
+		// sort here is a no-op against every current fixture — it only diverges
+		// from this full sortPatterns call if a source-correlated finding ties on
+		// nonzero impact with a profile-only one at different severities, which
+		// no fixture in this repo produces. Kept as sortPatterns anyway (not a
+		// bare sort) so this call site can never silently drift from the other
+		// four sortPatterns call sites if that case ever does show up. Not
+		// covered by a positional-order test for that reason — see
+		// test/core/analyzer.test.ts's merge test, which checks concatenation
+		// (both categories present) rather than order.
 		patterns = sortPatterns([...patterns, ...sourcePatterns]);
 	}
 

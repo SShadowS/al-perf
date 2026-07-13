@@ -22,7 +22,7 @@ export {
 	parseProfile,
 	parseProfileFromRaw,
 } from "./core/parser.js";
-export { runDetectors } from "./core/patterns.js";
+export { runDetectors, sortPatterns } from "./core/patterns.js";
 export { processProfile } from "./core/processor.js";
 export { buildTableBreakdown } from "./core/table-view.js";
 export type { ParsedTelemetryBatch } from "./core/telemetry-parser.js";

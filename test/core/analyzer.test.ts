@@ -4,7 +4,6 @@ import {
 	comparabilityWarning,
 	compareProfiles,
 } from "../../src/core/analyzer.js";
-import { sortPatterns } from "../../src/core/patterns.js";
 import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
 
 const FIXTURES = "test/fixtures";
@@ -121,15 +120,14 @@ describe("analyzeProfile", () => {
 		}
 	});
 
-	test("re-sorts the merged profile-only + source-correlated patterns with the shared comparator", async () => {
+	test("merges profile-only + source-correlated patterns spanning both categories", async () => {
 		// event-chain.alcpuprofile + test/fixtures/source produces patterns from
 		// BOTH runDetectors (profile-only) and runSourceDetectors
-		// (source-correlated) — the concatenation runDetectors() ++
-		// runSourceDetectors() at the merge site in analyzeProfile must be
-		// re-sorted with the exact same comparator both of those already use
-		// internally, or the two halves of the list could end up ordered by two
-		// different rules. Passing the result back through sortPatterns must be
-		// a no-op if the merge site is wired correctly.
+		// (source-correlated) — sanity-checks that the merge site in
+		// analyzeProfile actually concatenates both halves rather than dropping
+		// one. See src/core/analyzer.ts's merge-site comment for why ordering
+		// itself isn't pinned here: no current fixture makes the merge site's
+		// own sortPatterns call observably different from a bare impact sort.
 		const result = await analyzeProfile(
 			`${FIXTURES}/event-chain.alcpuprofile`,
 			{
@@ -138,16 +136,12 @@ describe("analyzeProfile", () => {
 		);
 
 		expect(result.patterns.length).toBeGreaterThan(1);
-		// Sanity: this fixture combo genuinely spans both categories.
 		expect(
 			result.patterns.some((p) => p.id === "single-method-dominance"),
 		).toBe(true);
 		expect(result.patterns.some((p) => p.id === "missing-setloadfields")).toBe(
 			true,
 		);
-
-		const resorted = sortPatterns(result.patterns);
-		expect(resorted.map((p) => p.id)).toEqual(result.patterns.map((p) => p.id));
 	});
 });
 

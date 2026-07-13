@@ -7,6 +7,7 @@ import {
 } from "../../src/core/batch-analyzer.js";
 import type { AnalysisResult } from "../../src/output/types.js";
 import type { ProfileMetadata } from "../../src/types/batch.js";
+import type { DetectedPattern } from "../../src/types/patterns.js";
 
 const BATCH_DIR = resolve(import.meta.dir, "../fixtures/batch");
 
@@ -182,5 +183,49 @@ describe("buildActivityBreakdown selfReferential flag", () => {
 
 		expect(selfRefActivity?.selfReferential).toBe(true);
 		expect(normalActivity?.selfReferential).toBeUndefined();
+	});
+});
+
+describe("aggregateResults recurringPatterns ordering", () => {
+	function stubPattern(id: string, severity: DetectedPattern["severity"]) {
+		return {
+			id,
+			severity,
+			title: id,
+			description: id,
+			impact: 0,
+			involvedMethods: ["Stub (Codeunit 1)"],
+			evidence: "stub",
+		} satisfies DetectedPattern;
+	}
+
+	it("id-tiebreaks recurring patterns that tie on recurrencePercent and severity", () => {
+		// Both patterns appear in both profiles (100% recurrence, same severity),
+		// so recurrencePercent and severityRank alone can't order them — without
+		// an id tiebreak, order falls through to Map insertion order, which here
+		// is deliberately the reverse of alphabetical (zzz-pattern pushed first)
+		// so a passing test can't be a coincidence of insertion order already
+		// matching alphabetical order.
+		const withPatterns = (
+			patterns: DetectedPattern[],
+			profilePath: string,
+		): AnalysisResult => {
+			const stub = makeStubResult([]);
+			stub.meta.profilePath = profilePath;
+			return { ...stub, patterns };
+		};
+
+		const zzz = stubPattern("zzz-pattern", "warning");
+		const aaa = stubPattern("aaa-pattern", "warning");
+
+		const result1 = withPatterns([zzz, aaa], "profile-1.alcpuprofile");
+		const result2 = withPatterns([zzz, aaa], "profile-2.alcpuprofile");
+
+		const batch = aggregateResults([result1, result2]);
+
+		expect(batch.recurringPatterns.map((p) => p.id)).toEqual([
+			"aaa-pattern",
+			"zzz-pattern",
+		]);
 	});
 });

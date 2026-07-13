@@ -277,7 +277,8 @@ function aggregatePatterns(
 		.sort(
 			(a, b) =>
 				b.recurrencePercent - a.recurrencePercent ||
-				severityRank(b.severity) - severityRank(a.severity),
+				severityRank(b.severity) - severityRank(a.severity) ||
+				a.id.localeCompare(b.id),
 		);
 }
 
