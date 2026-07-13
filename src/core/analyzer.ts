@@ -34,7 +34,7 @@ import { parseProfile } from "./parser.js";
 // Re-exported for callers (e.g. tests) that previously imported normalizeAppGuid from analyzer.
 export { normalizeAppGuid };
 
-import { runDetectors } from "./patterns.js";
+import { runDetectors, sortPatterns } from "./patterns.js";
 import { isIdleNode, processProfile } from "./processor.js";
 import { buildTableBreakdown } from "./table-view.js";
 import { annotateEstimatedSavings } from "./what-if.js";
@@ -215,7 +215,7 @@ export async function analyzeProfile(
 		.reduce((sum, n) => sum + n.selfTime, 0);
 
 	const includePatterns = options?.includePatterns !== false;
-	const patterns = includePatterns ? runDetectors(processed) : [];
+	let patterns = includePatterns ? runDetectors(processed) : [];
 
 	// Source correlation
 	let sourceIndex: SourceIndex | undefined = options?.sourceIndex;
@@ -226,8 +226,7 @@ export async function analyzeProfile(
 		}
 		options?.onSourceIndex?.(sourceIndex);
 		const sourcePatterns = runSourceDetectors(methods, sourceIndex);
-		patterns.push(...sourcePatterns);
-		patterns.sort((a, b) => b.impact - a.impact);
+		patterns = sortPatterns([...patterns, ...sourcePatterns]);
 	}
 
 	// Annotate patterns with estimated savings

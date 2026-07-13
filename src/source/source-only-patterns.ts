@@ -1,3 +1,4 @@
+import { sortPatterns } from "../core/patterns.js";
 import type { DetectedPattern } from "../types/patterns.js";
 import type {
 	ObjectInfo,
@@ -339,7 +340,5 @@ export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
 		...detectUnindexedFilters(index),
 	];
 
-	allPatterns.sort((a, b) => b.impact - a.impact);
-
-	return allPatterns;
+	return sortPatterns(allPatterns);
 }

@@ -1,3 +1,4 @@
+import { sortPatterns } from "../core/patterns.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
 import type {
@@ -674,7 +675,5 @@ export function runSourceDetectors(
 		...detectIncompleteSetLoadFields(methods, index),
 	];
 
-	allPatterns.sort((a, b) => b.impact - a.impact);
-
-	return allPatterns;
+	return sortPatterns(allPatterns);
 }

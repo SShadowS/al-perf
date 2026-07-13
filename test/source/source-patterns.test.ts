@@ -699,6 +699,48 @@ describe("runSourceDetectors", () => {
 			expect(patterns[i].impact).toBeLessThanOrEqual(patterns[i - 1].impact);
 		}
 	});
+
+	it("falls back to severity when two findings tie on (nonzero) impact", () => {
+		// Report.OnAfterGetRecord findings are "critical" (runs once per row of
+		// potentially millions); the identical shape on a Page is downgraded to
+		// "warning" (tens of rows, not millions). Forcing both methods to the
+		// same selfTime produces a genuine impact tie across every finding on
+		// both methods — impact-only sorting would leave them in whatever order
+		// the detectors happened to emit them.
+		const critical = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Report",
+			objectId: 50800,
+			selfTime: 4000,
+		});
+		const warning = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Page",
+			objectId: 50803,
+			selfTime: 4000,
+		});
+		// detectInsertInLoop and detectDeleteInLoop both match Report AND Page,
+		// and iterate the methods array in the order given below — so with the
+		// warning-severity (Page) method listed first, their two findings
+		// naturally emerge as [warning, critical] before any sort. A stable
+		// impact-only sort is a no-op on a tie and would leave that inversion in
+		// the final output; only a genuine severity fallback corrects it.
+		const patterns = runSourceDetectors([warning, critical], sourceIndex);
+		expect(patterns.length).toBeGreaterThan(1);
+		expect(patterns.every((p) => p.impact === 4000)).toBe(true);
+
+		const rank: Record<string, number> = { critical: 3, warning: 2, info: 1 };
+		for (let i = 1; i < patterns.length; i++) {
+			expect(rank[patterns[i].severity]).toBeLessThanOrEqual(
+				rank[patterns[i - 1].severity],
+			);
+		}
+
+		// Guard against a vacuous pass: both severities must actually be present.
+		const severities = new Set(patterns.map((p) => p.severity));
+		expect(severities.has("critical")).toBe(true);
+		expect(severities.has("warning")).toBe(true);
+	});
 });
 
 describe("per-row triggers are loop bodies", () => {

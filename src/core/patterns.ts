@@ -33,6 +33,41 @@ function methodWord(count: number): string {
 	return count === 1 ? "method" : "methods";
 }
 
+const SEVERITY_ORDER: Record<DetectedPattern["severity"], number> = {
+	critical: 3,
+	warning: 2,
+	info: 1,
+};
+
+/**
+ * Impact first (real measured time from the profile), then severity, then id.
+ *
+ * Source-only detectors have no profile and therefore no measured impact — they
+ * all emit impact 0. Sorting on impact alone left the entire source-only category
+ * tied at zero, in arbitrary order, so a theoretical 3x3 nested loop ranked
+ * identically to the real bottleneck.
+ *
+ * The fallback is severity, NOT a synthesized impact score. Inventing a number
+ * would produce something that looks like measured time and is not.
+ *
+ * The id tiebreak makes the order deterministic, so output does not churn between
+ * runs on equal findings.
+ *
+ * This is the ONE comparator for every pattern list in the codebase — used by
+ * runDetectors (below), runSourceDetectors (source/source-patterns.ts),
+ * runSourceOnlyDetectors (source/source-only-patterns.ts), the merge in
+ * analyzeProfile (core/analyzer.ts) that combines the two, and the
+ * analyze-source CLI command — so none of those call sites can drift apart.
+ */
+export function sortPatterns(patterns: DetectedPattern[]): DetectedPattern[] {
+	return [...patterns].sort(
+		(a, b) =>
+			b.impact - a.impact ||
+			SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
+			a.id.localeCompare(b.id),
+	);
+}
+
 /**
  * Group key for a profile node's method. MUST match aggregateByMethod's key
  * (src/core/aggregator.ts) so per-method call-site counts line up with the
@@ -569,7 +604,5 @@ export function runDetectors(profile: ProcessedProfile): DetectedPattern[] {
 		patterns.push(...detector(profile));
 	}
 
-	patterns.sort((a, b) => b.impact - a.impact);
-
-	return patterns;
+	return sortPatterns(patterns);
 }

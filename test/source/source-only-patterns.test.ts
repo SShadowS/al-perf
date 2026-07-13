@@ -402,4 +402,28 @@ describe("runSourceOnlyDetectors", () => {
 			expect(patterns[i].impact).toBeLessThanOrEqual(patterns[i - 1].impact);
 		}
 	});
+
+	test("ranks findings by severity when impact ties at zero", async () => {
+		// Every source-only detector emits impact 0 (there is no profile, so
+		// there is no measured time) — this is the exact scenario the
+		// prioritization fix targets. A theoretical finding used to rank
+		// identically to a real one just because the array happened to put it
+		// first.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = runSourceOnlyDetectors(index);
+		expect(patterns.length).toBeGreaterThan(0);
+		expect(patterns.every((p) => p.impact === 0)).toBe(true);
+
+		const rank: Record<string, number> = { critical: 3, warning: 2, info: 1 };
+		for (let i = 1; i < patterns.length; i++) {
+			expect(rank[patterns[i].severity]).toBeLessThanOrEqual(
+				rank[patterns[i - 1].severity],
+			);
+		}
+
+		// Guard against a vacuous pass: the fixture must genuinely produce more
+		// than one severity level, otherwise the assertion above proves nothing.
+		const severities = new Set(patterns.map((p) => p.severity));
+		expect(severities.size).toBeGreaterThan(1);
+	});
 });

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { resolve } from "path";
+import { sortPatterns } from "../../core/patterns.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import { buildSourceIndex } from "../../source/indexer.js";
 import { runSourceOnlyDetectors } from "../../source/source-only-patterns.js";
@@ -134,15 +135,12 @@ export function registerAnalyzeSourceCommand(program: Command) {
 				}
 			}
 
-			const allFindings = [...findings, ...inlineFindings];
-			allFindings.sort((a, b) => {
-				const sevOrder: Record<string, number> = {
-					critical: 0,
-					warning: 1,
-					info: 2,
-				};
-				return (sevOrder[a.severity] ?? 3) - (sevOrder[b.severity] ?? 3);
-			});
+			// Every finding on this path carries impact: 0 — there is no profile,
+			// so there is no measured time. sortPatterns falls back to severity,
+			// then to id for a deterministic order (previously: severity only,
+			// with no tiebreak, so equal-severity findings kept arbitrary array
+			// order).
+			const allFindings = sortPatterns([...findings, ...inlineFindings]);
 
 			const tableClusters = buildTableClusters(allFindings);
 

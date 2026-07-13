@@ -9,8 +9,10 @@ import {
 	detectRepeatedSiblings,
 	detectSingleMethodDominance,
 	runDetectors,
+	sortPatterns,
 } from "../../src/core/patterns.js";
 import { processProfile } from "../../src/core/processor.js";
+import type { DetectedPattern } from "../../src/types/patterns.js";
 import type {
 	ProcessedNode,
 	ProcessedProfile,
@@ -575,5 +577,52 @@ describe("runDetectors", () => {
 			expect(pattern.suggestion).toBeDefined();
 			expect(typeof pattern.suggestion).toBe("string");
 		}
+	});
+});
+
+describe("pattern ordering", () => {
+	test("ranks source-only findings by severity when impact ties at zero", () => {
+		const patterns = [
+			{ id: "nested-loops", severity: "info", impact: 0 },
+			{ id: "unfiltered-findset", severity: "critical", impact: 0 },
+			{ id: "unindexed-filter", severity: "warning", impact: 0 },
+		] as DetectedPattern[];
+
+		const sorted = sortPatterns(patterns);
+
+		expect(sorted.map((p) => p.severity)).toEqual([
+			"critical",
+			"warning",
+			"info",
+		]);
+	});
+
+	test("still ranks a measured profile finding above any source-only one", () => {
+		const patterns = [
+			{ id: "unfiltered-findset", severity: "critical", impact: 0 },
+			{ id: "single-method-dominance", severity: "warning", impact: 5000 },
+		] as DetectedPattern[];
+
+		const sorted = sortPatterns(patterns);
+
+		// Real measured time outranks a static smell, regardless of severity.
+		// This is the over-correction guard: a mutation that made severity
+		// outrank impact would sort the impact-0 critical finding first.
+		expect(sorted[0].id).toBe("single-method-dominance");
+	});
+
+	test("is stable — equal impact and severity keep a deterministic order", () => {
+		const a = { id: "aaa", severity: "warning", impact: 0 } as DetectedPattern;
+		const b = { id: "bbb", severity: "warning", impact: 0 } as DetectedPattern;
+		expect(sortPatterns([b, a]).map((p) => p.id)).toEqual(["aaa", "bbb"]);
+	});
+
+	test("does not mutate the input array (returns a new array)", () => {
+		const a = { id: "aaa", severity: "info", impact: 0 } as DetectedPattern;
+		const b = { id: "bbb", severity: "critical", impact: 0 } as DetectedPattern;
+		const input = [a, b];
+		const sorted = sortPatterns(input);
+		expect(input).toEqual([a, b]); // original order untouched
+		expect(sorted).toEqual([b, a]);
 	});
 });
