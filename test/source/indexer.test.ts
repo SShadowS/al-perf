@@ -288,8 +288,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(18);
-		expect(index.objects.size).toBe(18);
+		expect(index.files.length).toBe(24);
+		expect(index.objects.size).toBe(24);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -328,5 +328,86 @@ describe("implicit Rec", () => {
 		expect(calcFields).toBeDefined();
 		expect(calcFields!.recordVariable).toBe("CustLedgerEntry");
 		expect(calcFields!.recordVariable).not.toBe("Rec");
+	});
+
+	it("collects a bare CalcFields() in a page's OnAfterGetRecord as Rec, inside the implicit loop", async () => {
+		// Pins the "Page" arm of IMPLICIT_RECORD_OBJECT_TYPES specifically —
+		// the reviewer proved deleting "Page" from the gate left the whole
+		// suite green because no fixture exercised a bare call in a page.
+		// A Page has no dataitem wrapper, so its implicit record is "Rec".
+		const feats = await indexFixture("test/fixtures/source/ImplicitRecPage.al");
+		const calcFields = feats.recordOps.find((op) => op.type === "CalcFields");
+		expect(calcFields).toBeDefined();
+		expect(calcFields!.recordVariable).toBe("Rec");
+		expect(calcFields!.insideLoop).toBe(true);
+	});
+
+	it("collects a bare CalcFields() in an XMLport tableelement's OnAfterGetRecord as the tableelement's name, inside the implicit loop", async () => {
+		// Pins the "XMLport" arm of IMPLICIT_RECORD_OBJECT_TYPES specifically —
+		// the reviewer proved re-casing "XMLport" to "XmlPort" left the whole
+		// suite green because no fixture exercised a bare call in an XMLport.
+		const feats = await indexFixture(
+			"test/fixtures/source/ImplicitRecXmlPort.al",
+		);
+		const calcFields = feats.recordOps.find((op) => op.type === "CalcFields");
+		expect(calcFields).toBeDefined();
+		expect(calcFields!.recordVariable).toBe("CustLedgerEntry");
+		expect(calcFields!.insideLoop).toBe(true);
+	});
+
+	it("collects bare CalcFields()/Modify() in a TableExtension procedure as Rec", async () => {
+		// TableExtension was entirely absent from IMPLICIT_RECORD_OBJECT_TYPES.
+		// Real BC partner/ISV code overwhelmingly lives in extension objects
+		// (base tables can't be modified in place), so this was a blind spot
+		// in exactly the population that matters most.
+		const feats = await indexFixture(
+			"test/fixtures/source/ImplicitRecTableExtension.al",
+		);
+		const calcFields = feats.recordOps.find((op) => op.type === "CalcFields");
+		const modify = feats.recordOps.find((op) => op.type === "Modify");
+		expect(calcFields).toBeDefined();
+		expect(calcFields!.recordVariable).toBe("Rec");
+		expect(modify).toBeDefined();
+		expect(modify!.recordVariable).toBe("Rec");
+	});
+
+	it("collects a bare CalcFields() in a PageExtension's own OnAfterGetRecord as Rec, inside the implicit loop", async () => {
+		// Pins PageExtension's membership in BOTH IMPLICIT_RECORD_OBJECT_TYPES
+		// (the op is collected at all) AND PER_ROW_TRIGGERS (insideLoop is
+		// true) — a pageextension overriding OnAfterGetRecord directly is a
+		// real BC idiom, and base pages can't be modified in place either.
+		const feats = await indexFixture(
+			"test/fixtures/source/ImplicitRecPageExtension.al",
+		);
+		const calcFields = feats.recordOps.find((op) => op.type === "CalcFields");
+		expect(calcFields).toBeDefined();
+		expect(calcFields!.recordVariable).toBe("Rec");
+		expect(calcFields!.insideLoop).toBe(true);
+	});
+
+	it("resolves a bare call in a dataitem added by a ReportExtension to the dataitem's own name, inside the implicit loop", async () => {
+		// Pins ReportExtension's membership in IMPLICIT_RECORD_OBJECT_TYPES,
+		// DATAITEM_SCOPED_OBJECT_TYPES (dataitem name, not "Rec") and
+		// PER_ROW_TRIGGERS (insideLoop) all at once — a reportextension
+		// adding a dataitem via addfirst/addlast is a real BC idiom.
+		const feats = await indexFixture(
+			"test/fixtures/source/ImplicitRecReportExtension.al",
+		);
+		const calcFields = feats.recordOps.find((op) => op.type === "CalcFields");
+		expect(calcFields).toBeDefined();
+		expect(calcFields!.recordVariable).toBe("ExtraLedgerEntry");
+		expect(calcFields!.recordVariable).not.toBe("Rec");
+		expect(calcFields!.insideLoop).toBe(true);
+	});
+
+	it("does not collect a bare call in a report's global procedure outside any dataitem, which has no implicit record", async () => {
+		// A report's implicit record is the dataitem's own name — there is no
+		// dataitem in scope in a global helper procedure, so there is no
+		// implicit record at all. Before this guard, the `?? "Rec"` fallback
+		// silently invented a phantom "Rec" that doesn't exist in a report.
+		const feats = await indexFixture(
+			"test/fixtures/source/ImplicitRecReportGlobalProc.al",
+		);
+		expect(feats.recordOps).toHaveLength(0);
 	});
 });

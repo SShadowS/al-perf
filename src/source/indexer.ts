@@ -90,19 +90,53 @@ const OBJECT_TYPE_MAP: Record<string, string> = {
  * Codeunit has no implicit record, so a bare `Get(...)` there is a normal
  * procedure call and must NOT be collected.
  *
+ * `TableExtension`/`PageExtension`/`ReportExtension` are included alongside
+ * their base types for the same reason Task 7 added per-row triggers for
+ * extensions: in BC you cannot modify base tables/pages/reports directly, so
+ * partner and ISV code overwhelmingly lives in extension objects. Leaving
+ * these out would keep the tool blind in exactly the population where real
+ * AL code sits, even though the base-type gate was "fixed".
+ *
  * Values are exactly the reachable strings `OBJECT_TYPE_MAP` produces above
- * (note `"XMLport"`, not `"XmlPort"`). A standalone request page (`PageType =
- * RequestPage`) is still a `page_declaration` -- objectType `"Page"` -- so it
- * is already covered by `"Page"` and does not need its own entry; there is no
- * `OBJECT_TYPE_MAP` value that is literally `"RequestPage"`. A key that can
- * never match type-checks fine and silently does nothing (per Task 7's own
- * casing warning), so it is deliberately left out here.
+ * (note `"XMLport"`, not `"XmlPort"`). There is no `OBJECT_TYPE_MAP` value
+ * that is literally `"RequestPage"` -- a requestpage is a
+ * `requestpage_section` nested inside a report/XMLport's `declaration_body`
+ * (verified against `node-types.json`; there is no `requestpage_declaration`
+ * node), so its code is already indexed under the enclosing report/XMLport's
+ * own objectType and needs no entry of its own here. A key that can never
+ * match type-checks fine and silently does nothing (per Task 7's own casing
+ * warning), so it is deliberately left out.
  */
 const IMPLICIT_RECORD_OBJECT_TYPES = new Set([
 	"Table",
 	"Page",
 	"Report",
 	"XMLport",
+	"TableExtension",
+	"PageExtension",
+	"ReportExtension",
+]);
+
+/**
+ * Object types whose implicit record only exists *inside* a dataitem
+ * (Report) / tableelement (XMLport), and whose name IS that dataitem's own
+ * instance name, not the literal identifier `Rec` -- reports/XMLports have
+ * no variable actually named `Rec`. `ReportExtension` shares this shape: a
+ * dataitem it adds via `addfirst`/`addlast` is the same `report_dataitem`
+ * node as a base report's.
+ *
+ * A bare call in one of these object types OUTSIDE any dataitem (e.g. a
+ * report's global helper procedure) has no implicit record at all -- there
+ * is no dataitem in scope to name it after, and it must NOT be collected
+ * against a phantom `"Rec"` that doesn't exist in a report/XMLport. `Table`/
+ * `Page` (and their extensions) are deliberately absent from this set: they
+ * have no dataitem wrapper, so their implicit record genuinely is `Rec`
+ * everywhere in the object, not just inside some nested scope.
+ */
+const DATAITEM_SCOPED_OBJECT_TYPES = new Set([
+	"Report",
+	"XMLport",
+	"ReportExtension",
 ]);
 
 const LOOP_NODE_TYPES = new Set([
@@ -364,8 +398,18 @@ function collectRecordOps(
 		allFieldArguments?: string[];
 	}> = [];
 
+	// For Report/XMLport/ReportExtension the implicit record only exists
+	// *inside* a dataitem/tableelement -- a bare call in one of these object
+	// types with no enclosing dataitem (e.g. a report's global helper
+	// procedure) has no implicit record at all and must not be collected
+	// against a phantom "Rec" that doesn't exist there. Table/Page (and their
+	// extensions) have no dataitem wrapper, so this extra guard doesn't apply
+	// to them -- their implicit record genuinely is `Rec` everywhere.
 	const hasImplicitRecord =
-		!!context && IMPLICIT_RECORD_OBJECT_TYPES.has(context.objectType);
+		!!context &&
+		IMPLICIT_RECORD_OBJECT_TYPES.has(context.objectType) &&
+		(!DATAITEM_SCOPED_OBJECT_TYPES.has(context.objectType) ||
+			!!context.dataitemName);
 	// The implicit record's own name: a Report/XMLport dataitem's instance name
 	// (e.g. "CustLedgerEntry") when the bare call sits inside that dataitem --
 	// reports/XMLports have no variable literally named `Rec`. A Table/Page has
@@ -618,6 +662,14 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
  * they are per-*operation*, not per-row; they are only a loop when the caller
  * loops, which needs cross-procedure call-graph propagation, not this.
  *
+ * `ReportExtension`/`PageExtension` are included alongside their base types:
+ * a reportextension can add a dataitem (`addfirst`/`addlast` in its
+ * `dataset`), and a pageextension can override `OnAfterGetRecord` directly —
+ * both are real BC extensibility idioms, and since base reports/pages can't
+ * be modified in place, this is where most real ISV code doing this lives.
+ * `TableExtension` has no per-row trigger (tables have no dataitem/rendering
+ * concept) and is deliberately absent here.
+ *
  * Keys are `objectType` strings exactly as produced by `OBJECT_TYPE_MAP` —
  * note `"XMLport"`, not `"XmlPort"` or `"Xmlport"`.
  */
@@ -625,6 +677,8 @@ const PER_ROW_TRIGGERS: Record<string, Set<string>> = {
 	Report: new Set(["onaftergetrecord"]),
 	XMLport: new Set(["onaftergetrecord"]),
 	Page: new Set(["onaftergetrecord"]),
+	ReportExtension: new Set(["onaftergetrecord"]),
+	PageExtension: new Set(["onaftergetrecord"]),
 };
 
 function isPerRowTrigger(objectType: string, triggerName: string): boolean {
