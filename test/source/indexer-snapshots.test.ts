@@ -210,7 +210,7 @@ describe("Indexer output snapshots", () => {
 				resolve(fixturesDir, "Table50200.al"),
 				fixturesDir,
 			))!;
-			expect(r.fields).toHaveLength(5);
+			expect(r.fields).toHaveLength(6);
 
 			const totalAmount = r.fields.find((f) => f.name === "Total Amount")!;
 			expect(totalAmount.calcFormulaType).toBe("Sum");
@@ -221,6 +221,10 @@ describe("Indexer output snapshots", () => {
 
 			const lineCount = r.fields.find((f) => f.name === "Line Count")!;
 			expect(lineCount.calcFormulaType).toBe("Count");
+
+			const hasOpenOrders = r.fields.find((f) => f.name === "Has Open Orders")!;
+			expect(hasOpenOrders.calcFormulaType).toBe("Exist");
+			expect(hasOpenOrders.calcFormulaTable).toBe("Sales Line");
 
 			const noField = r.fields.find((f) => f.name === "No.")!;
 			expect(noField.calcFormulaType).toBeUndefined();

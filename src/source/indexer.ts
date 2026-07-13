@@ -1052,6 +1052,15 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 				if (child.type === "integer" && id === 0) {
 					id = parseInt(child.text, 10);
 				} else if (child.type === "quoted_identifier" && !name) {
+					// NOTE (documented, not fixed): field names are only captured from
+					// `quoted_identifier` here. An UNQUOTED field name (e.g.
+					// `field(2; Amount; Decimal) { CalcFormula = Sum(...) }`) never
+					// hits this branch, so `name` stays "" and this FlowField never
+					// resolves in resolveCalcFields/calcFieldSeverity
+					// (src/source/source-patterns.ts) -- it falls back to the
+					// conservative `critical` default there. Fails safe (over-severe,
+					// never under-severe); pre-existing behavior, out of scope for the
+					// calcfields-in-loop severity fix.
 					name = stripQuotes(child.text);
 				} else if (child.type === "type_specification") {
 					dataType = child.text;

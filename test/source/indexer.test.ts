@@ -134,7 +134,7 @@ test("extracts CalcFormula fields from table declarations", async () => {
 	);
 	expect(result).toBeDefined();
 	expect(result!.fields).toBeDefined();
-	expect(result!.fields.length).toBe(5);
+	expect(result!.fields.length).toBe(6);
 
 	const totalAmount = result!.fields.find((f) => f.name === "Total Amount");
 	expect(totalAmount).toBeDefined();
@@ -147,6 +147,12 @@ test("extracts CalcFormula fields from table declarations", async () => {
 	const lineCount = result!.fields.find((f) => f.name === "Line Count");
 	expect(lineCount).toBeDefined();
 	expect(lineCount!.calcFormulaType).toBe("Count");
+
+	const hasOpenOrders = result!.fields.find(
+		(f) => f.name === "Has Open Orders",
+	);
+	expect(hasOpenOrders).toBeDefined();
+	expect(hasOpenOrders!.calcFormulaType).toBe("Exist");
 
 	const noField = result!.fields.find((f) => f.name === "No.");
 	expect(noField!.calcFormulaType).toBeUndefined();

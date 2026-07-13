@@ -16,5 +16,9 @@ table 50200 "CalcField Test Table"
             CalcFormula = Count("Sales Line" WHERE("Document No." = FIELD("No.")));
         }
         field(5; "Customer No."; Code[20]) { }
+        field(6; "Has Open Orders"; Boolean)
+        {
+            CalcFormula = Exist("Sales Line" WHERE("Document No." = FIELD("No.")));
+        }
     }
 }

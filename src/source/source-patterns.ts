@@ -47,58 +47,119 @@ const AGGREGATION_CALC_TYPES = new Set<TableFieldInfo["calcFormulaType"]>([
 ]);
 
 /**
- * Determine CalcFields/CalcSums severity from the field(s) actually passed to
- * the call — not from whether the record's table happens to have some
- * unrelated aggregation FlowField elsewhere. `CalcFields(CheapLookupField)`
- * must not be rated critical just because the same table also has a Sum
- * field nobody is calculating here.
+ * Resolve the field(s) actually implicated by a CalcFields/CalcSums call to
+ * their indexed FlowField definitions. Both `calcFieldSeverity` and the
+ * suggestion's "this table has ..." fact sentence (`calcFieldFactSentence`)
+ * read from this single resolution, so they can never disagree with each
+ * other — and so that fact sentence can be omitted outright, rather than
+ * guessed, whenever nothing is actually known about the field. Asserting a
+ * FlowField type the tool has no evidence for is exactly the kind of
+ * confident falsehood this detector's suggestion text exists to eliminate.
  *
- * Falls back to the table-wide heuristic (any aggregation FlowField on the
- * table → critical) only when the call's field list is unknown — e.g. a
- * bare `CalcFields();` with no arguments parses with none. `critical` stays
- * the conservative default whenever severity truly cannot be determined.
+ * Falls back to the table's full FlowField set only when the call's field
+ * list is unknown — a bare `CalcFields();` with no arguments calculates
+ * every FlowField on the record, so the table's full set genuinely is the
+ * true answer there, not a guess.
+ *
+ * Returns `undefined` when nothing can be resolved: the record variable
+ * isn't a known Record, its table isn't in the index, or the named field(s)
+ * don't match any indexed FlowField on that table. Callers must not assert
+ * anything about the field's type when this is `undefined` — silence is the
+ * honest answer, not a confident guess.
  */
-function calcFieldSeverity(
+function resolveCalcFields(
 	op: RecordOpInfo,
 	variables: VariableInfo[],
 	index: SourceIndex,
-): "critical" | "warning" {
+): TableFieldInfo[] | undefined {
 	const recordVariable = op.recordVariable;
-	if (!recordVariable) return "critical";
+	if (!recordVariable) return undefined;
 
 	const variable = variables.find(
 		(v) => v.name.toLowerCase() === recordVariable.toLowerCase(),
 	);
-	if (!variable?.isRecord || !variable.tableName) return "critical";
+	// NOTE (documented, not fixed — Issue 6): a Page/Report/XMLport's implicit
+	// `Rec` inside a per-row trigger has no `var` declaration, so it never
+	// appears in `variables` and this always falls through to `undefined`
+	// here. That makes this resolution — and the severity it feeds — inert
+	// for every implicit-loop calcfields-in-loop finding: it always falls
+	// back to the conservative `critical` default regardless of which field
+	// is actually being calculated. Fails safe (over-severe, never
+	// under-severe); pre-existing behavior, not fixed by this change.
+	if (!variable?.isRecord || !variable.tableName) return undefined;
 
-	// Find the table in the source index by name
 	for (const obj of index.objects.values()) {
-		if (obj.objectType === "Table" && obj.objectName === variable.tableName) {
-			const calledFields = op.allFieldArguments;
-			if (!calledFields || calledFields.length === 0) {
-				// Field list unknown (e.g. a bare CalcFields() call) — fall back to
-				// the table-wide heuristic, conservative default.
-				const calcFields = obj.fields.filter((f) => f.calcFormulaType);
-				if (calcFields.length === 0) return "critical"; // No CalcFormula info, conservative
-				const hasAggregation = calcFields.some((f) =>
-					AGGREGATION_CALC_TYPES.has(f.calcFormulaType),
-				);
-				return hasAggregation ? "critical" : "warning";
-			}
+		if (obj.objectType !== "Table" || obj.objectName !== variable.tableName)
+			continue;
 
-			const calledLower = new Set(calledFields.map((f) => f.toLowerCase()));
-			const calledTableFields = obj.fields.filter((f) =>
-				calledLower.has(f.name.toLowerCase()),
-			);
-			if (calledTableFields.length === 0) return "critical"; // Called field(s) not resolved, conservative
-			const hasAggregation = calledTableFields.some((f) =>
-				AGGREGATION_CALC_TYPES.has(f.calcFormulaType),
-			);
-			return hasAggregation ? "critical" : "warning";
+		const calledFields = op.allFieldArguments;
+		if (!calledFields || calledFields.length === 0) {
+			const allFlowFields = obj.fields.filter((f) => f.calcFormulaType);
+			return allFlowFields.length > 0 ? allFlowFields : undefined;
 		}
+
+		const calledLower = new Set(calledFields.map((f) => f.toLowerCase()));
+		const resolved = obj.fields.filter(
+			(f) => f.calcFormulaType && calledLower.has(f.name.toLowerCase()),
+		);
+		return resolved.length > 0 ? resolved : undefined;
 	}
 
-	return "critical"; // Table not found in index, conservative default
+	return undefined; // Table not found in the index — nothing known.
+}
+
+/**
+ * Determine CalcFields/CalcSums severity from the resolved field(s) actually
+ * passed to the call — not from whether the record's table happens to have
+ * some unrelated aggregation FlowField elsewhere. `CalcFields(CheapLookupField)`
+ * must not be rated critical just because the same table also has a Sum
+ * field nobody is calculating here. `critical` stays the conservative
+ * default whenever nothing could be resolved (see `resolveCalcFields`).
+ */
+function calcFieldSeverity(
+	resolved: TableFieldInfo[] | undefined,
+): "critical" | "warning" {
+	if (!resolved) return "critical";
+	const hasAggregation = resolved.some((f) =>
+		AGGREGATION_CALC_TYPES.has(f.calcFormulaType),
+	);
+	return hasAggregation ? "critical" : "warning";
+}
+
+/**
+ * The factual "this table has ... FlowFields" clause of the suggestion.
+ * Must only ever be called with a resolved field list (see
+ * `resolveCalcFields`) — never derived from severity alone, which can be a
+ * conservative default rather than actual knowledge of the field's type.
+ */
+function calcFieldFactSentence(resolved: TableFieldInfo[]): string {
+	if (resolved.some((f) => AGGREGATION_CALC_TYPES.has(f.calcFormulaType))) {
+		return "This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.";
+	}
+	if (resolved.every((f) => f.calcFormulaType === "Exist")) {
+		return "This table has an Exist FlowField — cheaper than Sum/Count since SQL can short-circuit on the first matching row, but still one query per iteration.";
+	}
+	return "This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.";
+}
+
+/**
+ * Build the calcfields-in-loop suggestion text. The SetAutoCalcFields
+ * recommendation and the "SetLoadFields does NOT help" disclaimer always
+ * apply, regardless of what is known about the field. The "this table has X
+ * FlowFields" fact sentence is conditional on `resolved` — omitted entirely
+ * when the field didn't resolve, so the tool never asserts a FlowField type
+ * it doesn't actually know (see `resolveCalcFields`).
+ */
+function calcFieldsSuggestion(
+	severity: "critical" | "warning",
+	resolved: TableFieldInfo[] | undefined,
+): string {
+	const action =
+		severity === "critical"
+			? "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved, or filter on the FlowField instead of calculating it per row."
+			: "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved.";
+	const fact = resolved ? ` ${calcFieldFactSentence(resolved)}` : "";
+	return `${action}${fact} Note SetLoadFields() does NOT help here — it does not accept FlowFields.`;
 }
 
 /**
@@ -127,8 +188,15 @@ export function detectCalcFieldsInLoop(
 		);
 
 		for (const op of opsInLoop) {
+			// `resolvedFields` feeds BOTH severity and the suggestion's fact
+			// sentence, so they can't drift apart — see resolveCalcFields.
+			const resolvedFields = resolveCalcFields(
+				op,
+				match.features.variables,
+				index,
+			);
 			const severity = downgradePageImplicitLoop(
-				calcFieldSeverity(op, match.features.variables, index),
+				calcFieldSeverity(resolvedFields),
 				op,
 			);
 			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
@@ -140,10 +208,7 @@ export function detectCalcFieldsInLoop(
 				impact: method.selfTime,
 				involvedMethods: [methodLabel(method)],
 				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-				suggestion:
-					severity === "critical"
-						? "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved, or filter on the FlowField instead of calculating it per row. This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call. Note SetLoadFields() does NOT help here — it does not accept FlowFields."
-						: "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved. This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration. Note SetLoadFields() does NOT help here — it does not accept FlowFields.",
+				suggestion: calcFieldsSuggestion(severity, resolvedFields),
 			});
 		}
 	}

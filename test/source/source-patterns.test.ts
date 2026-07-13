@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { readFileSync } from "fs";
 import { resolve } from "path";
 import { buildSourceIndex } from "../../src/source/indexer.js";
 import {
@@ -247,6 +248,11 @@ describe("CalcField severity graduation", () => {
 		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].severity).toBe("critical");
+		// The resolved field ("Total Amount") really is a Sum FlowField -- this
+		// is a known fact, not a guess, so the suggestion may assert it.
+		expect(patterns[0].suggestion).toContain(
+			"This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.",
+		);
 	});
 
 	it("downgrades to warning when table only has Lookup CalcFormula fields", () => {
@@ -258,6 +264,9 @@ describe("CalcField severity graduation", () => {
 		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].severity).toBe("warning");
+		expect(patterns[0].suggestion).toContain(
+			"This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.",
+		);
 	});
 
 	it("rates severity from the field actually passed to CalcFields, not the whole table", () => {
@@ -274,19 +283,55 @@ describe("CalcField severity graduation", () => {
 		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].severity).toBe("warning");
+		// And the fact sentence must name the field actually called (Lookup),
+		// not the unrelated Sum/Count fields also on this table.
+		expect(patterns[0].suggestion).toContain(
+			"This table has Lookup FlowFields",
+		);
+		expect(patterns[0].suggestion).not.toContain("aggregation FlowFields");
+	});
+
+	it("rates Exist FlowFields as warning, not critical, and names them correctly (not 'Lookup')", () => {
+		// Exist FlowFields can short-circuit on the first matching row (SELECT
+		// CASE WHEN EXISTS(...)), unlike Sum/Count/Average/Min/Max which must
+		// scan every matching row -- same cost class as Lookup, so `warning` is
+		// right. But lumping it into the "Lookup FlowFields" sentence would be
+		// a different flavor of the exact falsehood this task exists to
+		// eliminate: asserting a specific FlowField type that isn't what was
+		// actually called. "CalcField Test Table" also has Sum/Count/Lookup
+		// fields elsewhere -- this call only calculates the Exist field.
+		const method = makeMethod({
+			functionName: "ProcessWithExistCalcFieldOnly",
+			objectId: 50500,
+			objectName: "CalcField Loop Test",
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(finding).toBeDefined();
+		expect(finding!.severity).toBe("warning");
+		expect(finding!.suggestion).toContain("Exist FlowField");
+		expect(finding!.suggestion).not.toContain("Lookup FlowFields");
+		expect(finding!.suggestion).not.toContain("aggregation FlowFields");
 	});
 });
 
 describe("calcfields-in-loop — suggestion must be actionable", () => {
-	it("never tells the user to use SetLoadFields on a FlowField", () => {
+	it("never tells the user to use SetLoadFields on a FlowField, and never asserts a FlowField type it doesn't know", () => {
 		// SetLoadFields does not accept FlowFields, and CalcFields operates on
 		// FlowFields. Suggesting it is advice the user cannot follow.
 		// https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setloadfields-method
 		//
 		// The suggestion is still allowed (deliberately) to NAME SetLoadFields in
 		// order to warn the user off it -- developers reach for it by reflex --
-		// so this checks for the specific bad advice ("use SetLoadFields") rather
-		// than a blanket absence of the word.
+		// exactly once, and only in that disclaimer. Anything else naming it
+		// (e.g. "use SetLoadFields", "consider SetLoadFields") is the bad advice
+		// creeping back in.
+		//
+		// "Sales Line" is deliberately NOT in the fixture index -- this call
+		// hits the table-not-found path, so the tool genuinely does not know
+		// this field's CalcFormula type. It must not claim "This table has
+		// aggregation FlowFields" (or any other FlowField-type claim) here --
+		// that would be asserting a fact it has no evidence for.
 		const method = makeMethod({
 			functionName: "ProcessRecords",
 			objectType: "Codeunit",
@@ -295,8 +340,16 @@ describe("calcfields-in-loop — suggestion must be actionable", () => {
 		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
 		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
 		expect(finding).toBeDefined();
-		expect(finding?.suggestion).not.toMatch(/use SetLoadFields/i);
-		expect(finding?.suggestion).toContain("SetAutoCalcFields");
+		const s = finding!.suggestion;
+		expect(s).toContain("SetAutoCalcFields");
+		// SetLoadFields may be named exactly once, and only to warn the user OFF it.
+		expect([...s.matchAll(/SetLoadFields/gi)]).toHaveLength(1);
+		expect(s).toMatch(
+			/SetLoadFields\(\) does NOT help here — it does not accept FlowFields/,
+		);
+		// The field never resolved (table not in the index) -- no "This table
+		// has ... FlowFields" claim may appear.
+		expect(s).not.toContain("This table has");
 	});
 
 	it("warns the user off SetLoadFields by name on the warning-severity branch too", () => {
@@ -309,9 +362,37 @@ describe("calcfields-in-loop — suggestion must be actionable", () => {
 		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
 		expect(finding).toBeDefined();
 		expect(finding?.severity).toBe("warning");
-		expect(finding?.suggestion).not.toMatch(/use SetLoadFields/i);
-		expect(finding?.suggestion).toContain("SetAutoCalcFields");
+		const s = finding!.suggestion;
+		expect(s).toContain("SetAutoCalcFields");
+		expect([...s.matchAll(/SetLoadFields/gi)]).toHaveLength(1);
+		expect(s).toMatch(
+			/SetLoadFields\(\) does NOT help here — it does not accept FlowFields/,
+		);
 	});
+});
+
+describe("duplicate wrong-advice sites stay fixed", () => {
+	// Task 1 fixed four shipped copies of "use SetLoadFields() to pre-load the
+	// fields you need" -- SetLoadFields does not accept FlowFields, and
+	// CalcFields operates on FlowFields, so that advice cannot be followed.
+	// This file's own suggestion strings are pinned above; the other three
+	// copies had no test at all and were trivially reintroducible with the
+	// full suite green. One guard per file, checked directly against the
+	// shipped source text, so none of the four can drift back silently.
+	const badAdvice = /(use|using|consider)\s+SetLoadFields/i;
+	const files = [
+		"../../src/source/source-patterns.ts",
+		"../../src/core/what-if.ts",
+		"../../src/mcp/server.ts",
+		"../../src/cli/commands/analyze-source.ts",
+	];
+
+	for (const relPath of files) {
+		it(`${relPath} does not tell the user to use/consider SetLoadFields for CalcFields-in-loop`, () => {
+			const text = readFileSync(resolve(import.meta.dir, relPath), "utf-8");
+			expect(text).not.toMatch(badAdvice);
+		});
+	}
 });
 
 describe("detectIncompleteSetLoadFields", () => {
@@ -429,6 +510,32 @@ describe("per-row triggers are loop bodies", () => {
 		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].evidence).toContain("XMLport.OnAfterGetRecord");
+	});
+
+	it("flags CalcFields in a Page OnAfterGetRecord without asserting a FlowField type it doesn't know", () => {
+		// ImplicitRecPage.al's implicit `Rec` (a Page has no dataitem wrapper,
+		// so there's no `var`-declared name to resolve) means `resolveCalcFields`
+		// can never find a table match here — and "Cust. Ledger Entry" isn't
+		// even in this fixture index, so the tool has zero evidence about
+		// Balance's CalcFormula type either way. Before the Issue 4 fix, the
+		// suggestion was keyed off the post-downgrade `warning` severity and
+		// unconditionally claimed "This table has Lookup FlowFields — cheaper
+		// than Sum/Count" here — false on both counts: nothing was resolved,
+		// and Balance is conventionally a Sum FlowField, not Lookup.
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Page",
+			objectId: 50903,
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(finding).toBeDefined();
+		// Critical (conservative default, table unresolved), downgraded one
+		// level for Page implicit loops.
+		expect(finding!.severity).toBe("warning");
+		expect(finding!.evidence).toContain("Page.OnAfterGetRecord");
+		expect(finding!.suggestion).toContain("SetAutoCalcFields");
+		expect(finding!.suggestion).not.toContain("This table has");
 	});
 
 	it("flags Modify in a Page OnAfterGetRecord at reduced (warning) severity", () => {

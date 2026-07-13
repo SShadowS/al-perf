@@ -38,6 +38,24 @@ codeunit 50500 "CalcField Loop Test"
             until TestRec.Next() = 0;
     end;
 
+    // Exist FlowFields can short-circuit on the first matching row (SELECT CASE
+    // WHEN EXISTS(...)), unlike Sum/Count/Average/Min/Max which must scan
+    // every matching row -- reclassified to the warning group, same cost
+    // class as Lookup. This calls ONLY the Exist field on a table that also
+    // has Sum/Count/Lookup fields, to confirm severity comes from the field
+    // actually passed to CalcFields (as with the Lookup case above), and that
+    // the suggestion names it as Exist rather than lumping it in with Lookup.
+    procedure ProcessWithExistCalcFieldOnly()
+    var
+        TestRec: Record "CalcField Test Table";
+    begin
+        TestRec.SetRange("No.", 'TEST');
+        if TestRec.FindSet() then
+            repeat
+                TestRec.CalcFields("Has Open Orders");
+            until TestRec.Next() = 0;
+    end;
+
     [IntegrationEvent(false, false)]
     local procedure OnBeforeProcessCalcFields(var TestRec: Record "CalcField Test Table")
     begin
