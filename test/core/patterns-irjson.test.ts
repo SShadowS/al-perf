@@ -16,10 +16,11 @@ function makeInvocation(
 	objectId: number,
 	parentIx: number | null,
 	selfTicks = 1000,
+	objectType = "CodeUnit",
 ): IrJsonInvocation {
 	return {
 		index,
-		objectType: "CodeUnit",
+		objectType,
 		objectId,
 		objectName: `Obj${objectId}`,
 		method,
@@ -129,6 +130,25 @@ describe("detectHighHitCount on ir-json (exact fan-out)", () => {
 		expect(patterns[0].evidence).toContain("2 calling invocation");
 		expect(patterns[0].evidence).toContain("5 total invocation");
 		expect(patterns[0].evidence).toContain("11.0x");
+	});
+
+	test("does not merge fan-out edges for a codeunit and a table sharing an object id", () => {
+		// One RunBatch parent invocation calling GetLine 6 times as a CodeUnit
+		// object and 6 times as a Table object, both objectId 50201. Merged
+		// (objectType-blind), that's 12 calls / 1 parent = 12x — over the 10x
+		// threshold. Split by objectType, each edge is 6 calls / 1 parent = 6x —
+		// under threshold. They are different methods and must not merge.
+		const invs: IrJsonInvocation[] = [
+			makeInvocation(0, "RunBatch", 50200, null),
+		];
+		for (let i = 0; i < 6; i++) {
+			invs.push(makeInvocation(1 + i, "GetLine", 50201, 0, 1000, "CodeUnit"));
+		}
+		for (let i = 0; i < 6; i++) {
+			invs.push(makeInvocation(7 + i, "GetLine", 50201, 0, 1000, "Table"));
+		}
+		const profile = processProfile(parseIrJson(makeDoc(invs)));
+		expect(detectHighHitCount(profile)).toHaveLength(0);
 	});
 });
 

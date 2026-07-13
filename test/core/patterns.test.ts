@@ -6,6 +6,7 @@ import {
 	detectEventSubscriberHotspot,
 	detectHighHitCount,
 	detectRecursion,
+	detectRepeatedSiblings,
 	detectSingleMethodDominance,
 	runDetectors,
 } from "../../src/core/patterns.js";
@@ -73,6 +74,103 @@ function makeProfileWith(specs: MethodSpec[]): ProcessedProfile {
 		nodeCount: allNodes.length,
 		startTime: 0,
 		endTime: PROFILE_TOTAL,
+	};
+}
+
+interface MethodIdentitySpec {
+	objectType: string;
+	objectId: number;
+	functionName: string;
+}
+
+function makeIdentityNode(id: number, spec: MethodIdentitySpec): ProcessedNode {
+	return {
+		id,
+		callFrame: {
+			functionName: spec.functionName,
+			scriptId: `${spec.objectType}_${spec.objectId}`,
+			url: "",
+			lineNumber: 1,
+			columnNumber: 0,
+		},
+		applicationDefinition: {
+			objectType: spec.objectType,
+			objectName: `Test${spec.objectType}`,
+			objectId: spec.objectId,
+		},
+		hitCount: 1,
+		children: [],
+		depth: 0,
+		selfTime: 1,
+		totalTime: 1,
+		selfTimePercent: 1,
+		totalTimePercent: 1,
+	};
+}
+
+/**
+ * Build a synthetic ProcessedProfile with one parent node and childSpecs.length
+ * children, all direct siblings under that parent. makeProfileWith produces
+ * flat, unrelated roots with no parent/children relationship, which cannot
+ * exercise detectRepeatedSiblings (it groups a node's own children).
+ */
+function makeSiblingProfile(
+	parentSpec: MethodIdentitySpec,
+	childSpecs: MethodIdentitySpec[],
+): ProcessedProfile {
+	let nextId = 1;
+	const parent = makeIdentityNode(nextId++, parentSpec);
+	const children = childSpecs.map((spec) => makeIdentityNode(nextId++, spec));
+	for (const child of children) {
+		child.parent = parent;
+		child.depth = 1;
+	}
+	parent.children = children;
+
+	const allNodes = [parent, ...children];
+	return {
+		type: "sampling",
+		roots: [parent],
+		allNodes,
+		nodeMap: new Map(allNodes.map((n) => [n.id, n])),
+		totalDuration: allNodes.length,
+		totalSelfTime: allNodes.length,
+		activeSelfTime: allNodes.length,
+		idleSelfTime: 0,
+		maxDepth: 1,
+		nodeCount: allNodes.length,
+		startTime: 0,
+		endTime: allNodes.length,
+	};
+}
+
+/**
+ * Build a synthetic ProcessedProfile from a linear ancestor chain: specs[0] is
+ * the root, specs[1] is its child, specs[2] is specs[1]'s child, and so on.
+ * Needed to exercise detectRecursion's ancestor walk, which makeProfileWith's
+ * flat unrelated roots cannot model.
+ */
+function makeChainProfile(specs: MethodIdentitySpec[]): ProcessedProfile {
+	const nodes = specs.map((spec, index) => makeIdentityNode(index + 1, spec));
+	for (let i = 1; i < nodes.length; i++) {
+		nodes[i].parent = nodes[i - 1];
+		nodes[i].depth = i;
+		nodes[i - 1].children = [nodes[i]];
+	}
+
+	return {
+		type: "sampling",
+		roots: [nodes[0]],
+		allNodes: nodes,
+		nodeMap: new Map(nodes.map((n) => [n.id, n])),
+		totalDuration: nodes.length,
+		totalSelfTime: nodes.length,
+		activeSelfTime: nodes.length,
+		idleSelfTime: 0,
+		maxDepth: Math.max(0, nodes.length - 1),
+		nodeCount: nodes.length,
+		startTime: 0,
+		endTime: nodes.length,
 	};
 }
 
@@ -319,6 +417,78 @@ describe("detectRecursion", () => {
 		const patterns = detectRecursion(processed);
 
 		expect(patterns).toHaveLength(0);
+	});
+});
+
+describe("method identity", () => {
+	test("does not merge a codeunit and a table that share an object id (repeated-siblings)", () => {
+		// Build a profile with codeunit 50000 "Run" and table 50000 "Run" as
+		// siblings, each below the repeated-siblings threshold on its own but
+		// above it if wrongly merged.
+		const codeunitChildren: MethodIdentitySpec[] = Array.from(
+			{ length: 30 },
+			() => ({ objectType: "Codeunit", objectId: 50000, functionName: "Run" }),
+		);
+		const tableChildren: MethodIdentitySpec[] = Array.from(
+			{ length: 30 },
+			() => ({ objectType: "Table", objectId: 50000, functionName: "Run" }),
+		);
+		const profile = makeSiblingProfile(
+			{ objectType: "Codeunit", objectId: 1, functionName: "Caller" },
+			[...codeunitChildren, ...tableChildren],
+		);
+
+		const patterns = runDetectors(profile);
+
+		// If the key omitted objectType these would merge to 60 and trip the
+		// threshold. They are different methods and must not.
+		expect(patterns.find((p) => p.id === "repeated-siblings")).toBeUndefined();
+	});
+
+	test("still flags 50+ genuinely identical siblings (regression guard)", () => {
+		const children: MethodIdentitySpec[] = Array.from({ length: 50 }, () => ({
+			objectType: "Codeunit",
+			objectId: 50000,
+			functionName: "Run",
+		}));
+		const profile = makeSiblingProfile(
+			{ objectType: "Codeunit", objectId: 1, functionName: "Caller" },
+			children,
+		);
+
+		const patterns = detectRepeatedSiblings(profile);
+
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].id).toBe("repeated-siblings");
+	});
+
+	test("does not report false recursion between a codeunit and table sharing an object id", () => {
+		// Chain: Codeunit 50000 "Run" -> Codeunit 1 "Wrapper" -> Table 50000
+		// "Run". Root and leaf share functionName+objectId but differ in
+		// objectType. If the ancestor-walk key omitted objectType, this would
+		// be reported as recursion between two unrelated objects.
+		const profile = makeChainProfile([
+			{ objectType: "Codeunit", objectId: 50000, functionName: "Run" },
+			{ objectType: "Codeunit", objectId: 1, functionName: "Wrapper" },
+			{ objectType: "Table", objectId: 50000, functionName: "Run" },
+		]);
+
+		const patterns = detectRecursion(profile);
+
+		expect(patterns).toHaveLength(0);
+	});
+
+	test("still detects genuine recursion when objectType and objectId match (regression guard)", () => {
+		const profile = makeChainProfile([
+			{ objectType: "Codeunit", objectId: 50000, functionName: "Run" },
+			{ objectType: "Codeunit", objectId: 1, functionName: "Wrapper" },
+			{ objectType: "Codeunit", objectId: 50000, functionName: "Run" },
+		]);
+
+		const patterns = detectRecursion(profile);
+
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].id).toBe("recursive-call");
 	});
 });
 

@@ -197,14 +197,14 @@ function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
 
 	for (const node of profile.allNodes) {
 		if (isIdleNode(node)) continue;
-		const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		const key = methodGroupKey(node);
 		methodTotalCounts.set(key, (methodTotalCounts.get(key) ?? 0) + 1);
 	}
 
 	for (const node of profile.allNodes) {
 		if (isIdleNode(node) || !node.parent) continue;
-		const childKey = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
-		const parentKey = `${node.parent.callFrame.functionName}:${node.parent.applicationDefinition.objectId}`;
+		const childKey = methodGroupKey(node);
+		const parentKey = methodGroupKey(node.parent);
 		const key = `${parentKey}=>${childKey}`;
 		let edge = edges.get(key);
 		if (!edge) {
@@ -227,7 +227,7 @@ function detectHighFanOutExact(profile: ProcessedProfile): DetectedPattern[] {
 		const callingParentCount = edge.parentIds.size;
 		const ratio = edge.childCount / callingParentCount;
 		if (ratio > 10) {
-			const parentKey = `${edge.parent.callFrame.functionName}:${edge.parent.applicationDefinition.objectId}`;
+			const parentKey = methodGroupKey(edge.parent);
 			const totalParentCount =
 				methodTotalCounts.get(parentKey) ?? callingParentCount;
 			patterns.push({
@@ -280,7 +280,8 @@ export const detectDeepCallStack: PatternDetector = (
 };
 
 /**
- * Detect parents with 50+ children sharing the same functionName+objectId.
+ * Detect parents with 50+ children sharing the same method identity
+ * (functionName+objectType+objectId — see methodGroupKey).
  * Severity: critical.
  */
 export const detectRepeatedSiblings: PatternDetector = (
@@ -292,10 +293,10 @@ export const detectRepeatedSiblings: PatternDetector = (
 		if (isIdleNode(node)) continue;
 		if (node.children.length < 50) continue;
 
-		// Group children by functionName+objectId
+		// Group children by method identity (functionName+objectType+objectId)
 		const groups = new Map<string, ProcessedNode[]>();
 		for (const child of node.children) {
-			const key = `${child.callFrame.functionName}:${child.applicationDefinition.objectId}`;
+			const key = methodGroupKey(child);
 			const group = groups.get(key);
 			if (group) {
 				group.push(child);
@@ -322,8 +323,8 @@ export const detectRepeatedSiblings: PatternDetector = (
 						formatMethodRef(representative),
 					],
 					evidence: exact
-						? `${group.length} sibling invocations with same functionName+objectId (exact invocation count, threshold: 50)`
-						: `${group.length} sibling calls with same functionName+objectId (threshold: 50)`,
+						? `${group.length} sibling invocations with same functionName+objectType+objectId (exact invocation count, threshold: 50)`
+						: `${group.length} sibling calls with same functionName+objectType+objectId (threshold: 50)`,
 					suggestion:
 						"The same method is called repeatedly at the same call site. Consider batching these calls or caching the result.",
 				});
@@ -436,25 +437,18 @@ export const detectRecursion: PatternDetector = (
 
 	for (const node of profile.allNodes) {
 		if (isIdleNode(node)) continue;
-		const key = `${node.callFrame.functionName}:${node.applicationDefinition.objectId}`;
+		const key = methodGroupKey(node);
 		if (reported.has(key)) continue;
 
 		// Walk up ancestors to check for same method
 		let ancestor = node.parent;
 		let depth = 0;
 		while (ancestor) {
-			if (
-				ancestor.callFrame.functionName === node.callFrame.functionName &&
-				ancestor.applicationDefinition.objectId ===
-					node.applicationDefinition.objectId
-			) {
+			if (methodGroupKey(ancestor) === key) {
 				reported.add(key);
 
 				const allInstances = profile.allNodes.filter(
-					(n) =>
-						n.callFrame.functionName === node.callFrame.functionName &&
-						n.applicationDefinition.objectId ===
-							node.applicationDefinition.objectId,
+					(n) => methodGroupKey(n) === key,
 				);
 				const totalImpact = allInstances.reduce(
 					(sum, n) => sum + n.selfTime,
