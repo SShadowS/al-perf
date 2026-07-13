@@ -3,7 +3,9 @@ import { resolve } from "path";
 import { buildSourceIndex } from "../../src/source/indexer.js";
 import {
 	detectCalcFieldsInLoop,
+	detectDeleteInLoop,
 	detectIncompleteSetLoadFields,
+	detectInsertInLoop,
 	detectMissingSetLoadFields,
 	detectModifyInLoop,
 	detectRecordOpInLoop,
@@ -72,6 +74,98 @@ describe("detectModifyInLoop", () => {
 		const patterns = detectModifyInLoop([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].id).toBe("modify-in-loop");
+	});
+
+	it("still flags only Modify/ModifyAll — Insert and Delete are separate findings", () => {
+		const method = makeMethod({
+			functionName: "ModifyAndInsertInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		const modify = patterns.filter((p) => p.id === "modify-in-loop");
+		const insert = patterns.filter((p) => p.id === "insert-in-loop");
+		expect(modify.length).toBe(1);
+		expect(insert.length).toBe(1);
+	});
+});
+
+describe("insert-in-loop", () => {
+	it("flags Insert inside a loop", () => {
+		const method = makeMethod({
+			functionName: "InsertInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = detectInsertInLoop([method], sourceIndex);
+		const f = patterns.find((p) => p.id === "insert-in-loop");
+		expect(f).toBeDefined();
+		expect(f?.suggestion).toMatch(/temporary|bulk|batch/i);
+	});
+
+	it("does not flag Insert on a temporary record", () => {
+		const method = makeMethod({
+			functionName: "InsertInLoopTemp",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = detectInsertInLoop([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "insert-in-loop")).toBeUndefined();
+	});
+
+	it("is wired into runSourceDetectors", () => {
+		const method = makeMethod({
+			functionName: "InsertInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "insert-in-loop")).toBeDefined();
+	});
+});
+
+describe("delete-in-loop", () => {
+	it("flags Delete inside a loop and suggests DeleteAll", () => {
+		const method = makeMethod({
+			functionName: "DeleteInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = detectDeleteInLoop([method], sourceIndex);
+		const f = patterns.find((p) => p.id === "delete-in-loop");
+		expect(f).toBeDefined();
+		expect(f?.suggestion).toContain("DeleteAll");
+	});
+
+	it("flags DeleteAll inside a loop deliberately — DeleteAll replaces the loop, not lives in one", () => {
+		const method = makeMethod({
+			functionName: "DeleteAllInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = detectDeleteInLoop([method], sourceIndex);
+		const f = patterns.find((p) => p.id === "delete-in-loop");
+		expect(f).toBeDefined();
+	});
+
+	it("does not flag Delete on a temporary record", () => {
+		const method = makeMethod({
+			functionName: "DeleteInLoopTemp",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = detectDeleteInLoop([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "delete-in-loop")).toBeUndefined();
+	});
+
+	it("is wired into runSourceDetectors", () => {
+		const method = makeMethod({
+			functionName: "DeleteInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "delete-in-loop")).toBeDefined();
 	});
 });
 

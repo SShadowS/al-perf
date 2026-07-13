@@ -206,6 +206,103 @@ export function detectModifyInLoop(
 }
 
 /**
+ * Detect Insert() inside loops.
+ * Severity: critical.
+ *
+ * Each Insert() in a loop is a separate SQL INSERT. The fix differs from
+ * modify-in-loop's: build a temporary table and insert once after the loop,
+ * or use a bulk-insert pattern.
+ */
+export function detectInsertInLoop(
+	methods: MethodBreakdown[],
+	index: SourceIndex,
+): DetectedPattern[] {
+	const patterns: DetectedPattern[] = [];
+
+	for (const method of methods) {
+		const match = matchToSource(
+			method.functionName,
+			method.objectType,
+			method.objectId,
+			index,
+		);
+		if (!match) continue;
+
+		const opsInLoop = match.features.recordOpsInLoops.filter(
+			(op) =>
+				op.type === "Insert" && !isTemporaryOp(op, match.features.variables),
+		);
+
+		for (const op of opsInLoop) {
+			const severity = downgradePageImplicitLoop("critical", op);
+			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+			patterns.push({
+				id: "insert-in-loop",
+				severity,
+				title: `${op.type} inside loop in ${method.functionName}`,
+				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL INSERT, which can be very slow for large datasets.`,
+				impact: method.selfTime,
+				involvedMethods: [methodLabel(method)],
+				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+				suggestion:
+					"Build a temporary table and insert the records once after the loop, or use a bulk-insert pattern — each Insert() in a loop is a separate SQL INSERT.",
+			});
+		}
+	}
+
+	return patterns;
+}
+
+/**
+ * Detect Delete()/DeleteAll() inside loops.
+ * Severity: critical.
+ *
+ * A DeleteAll() inside a loop is flagged deliberately: DeleteAll() inside a
+ * loop is still N statements — the point of DeleteAll() is to replace the
+ * loop, not to live in one.
+ */
+export function detectDeleteInLoop(
+	methods: MethodBreakdown[],
+	index: SourceIndex,
+): DetectedPattern[] {
+	const patterns: DetectedPattern[] = [];
+
+	for (const method of methods) {
+		const match = matchToSource(
+			method.functionName,
+			method.objectType,
+			method.objectId,
+			index,
+		);
+		if (!match) continue;
+
+		const opsInLoop = match.features.recordOpsInLoops.filter(
+			(op) =>
+				(op.type === "Delete" || op.type === "DeleteAll") &&
+				!isTemporaryOp(op, match.features.variables),
+		);
+
+		for (const op of opsInLoop) {
+			const severity = downgradePageImplicitLoop("critical", op);
+			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+			patterns.push({
+				id: "delete-in-loop",
+				severity,
+				title: `${op.type} inside loop in ${method.functionName}`,
+				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL DELETE, which can be very slow for large datasets.`,
+				impact: method.selfTime,
+				involvedMethods: [methodLabel(method)],
+				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+				suggestion:
+					"Use DeleteAll() with a filter instead of deleting row by row. If this call already is DeleteAll(), the loop around it is the bug — DeleteAll() exists to replace the loop, not to run inside one.",
+			});
+		}
+	}
+
+	return patterns;
+}
+
+/**
  * Detect record lookup operations (FindSet/FindFirst/FindLast/Find/Get) inside loops.
  * Severity: critical.
  */
@@ -389,6 +486,8 @@ export function runSourceDetectors(
 	const allPatterns: DetectedPattern[] = [
 		...detectCalcFieldsInLoop(methods, index),
 		...detectModifyInLoop(methods, index),
+		...detectInsertInLoop(methods, index),
+		...detectDeleteInLoop(methods, index),
 		...detectRecordOpInLoop(methods, index),
 		...detectMissingSetLoadFields(methods, index),
 		...detectIncompleteSetLoadFields(methods, index),
