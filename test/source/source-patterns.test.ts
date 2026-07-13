@@ -197,6 +197,21 @@ describe("detectMissingSetLoadFields", () => {
 		expect(patterns[0].id).toBe("missing-setloadfields");
 		expect(patterns[0].severity).toBe("warning");
 	});
+
+	it("is wired into runSourceDetectors", () => {
+		// The detector call itself was deleted from runSourceDetectors's list
+		// once already and the full 1776-test suite stayed green -- nothing
+		// asserted the detector actually reaches production output.
+		const method = makeMethod({
+			functionName: "LateSetLoadFields",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "missing-setloadfields"),
+		).toBeDefined();
+	});
 });
 
 describe("missing-setloadfields — ordering", () => {
@@ -260,6 +275,44 @@ describe("missing-setloadfields — bare SetLoadFields() reset", () => {
 		expect(
 			patterns.find((p) => p.id === "missing-setloadfields"),
 		).toBeDefined();
+	});
+});
+
+describe("missing-setloadfields — earliest SetLoadFields wins", () => {
+	it("does not flag either find when SetLoadFields(A) precedes the first find and SetLoadFields(B) precedes the second", () => {
+		// RepeatedSetLoadFieldsBetweenFinds (CodeUnit50700): SetLoadFields(A);
+		// FindSet; SetLoadFields(B); FindSet. Both finds are genuinely preceded
+		// by SOME restriction, so neither should be flagged. Anchoring on the
+		// LATEST SetLoadFields per variable (instead of the earliest) would
+		// evaluate the FIRST find against SetLoadFields(B), which has not run
+		// yet at that point in the method -- a false positive.
+		const method = makeMethod({
+			functionName: "RepeatedSetLoadFieldsBetweenFinds",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.filter((p) => p.id === "missing-setloadfields"),
+		).toHaveLength(0);
+	});
+});
+
+describe("missing-setloadfields — same-line position", () => {
+	it("does not flag when SetLoadFields precedes FindSet earlier on the same physical line", () => {
+		// SetLoadFieldsSameLineAsFindSet (CodeUnit50700): both calls on one
+		// physical line, SetLoadFields written first (lower column). Comparing
+		// line numbers alone treats an equal line as "not yet covered" and
+		// wrongly flags this; comparing (line, column) resolves the tie.
+		const method = makeMethod({
+			functionName: "SetLoadFieldsSameLineAsFindSet",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "missing-setloadfields"),
+		).toBeUndefined();
 	});
 });
 
@@ -503,6 +556,77 @@ describe("detectIncompleteSetLoadFields", () => {
 		const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].suggestion.toLowerCase()).toContain("amount");
+	});
+
+	it("is wired into runSourceDetectors", () => {
+		// Same hole as detectMissingSetLoadFields: nothing asserted this
+		// detector's output actually reaches runSourceDetectors either.
+		const method = makeMethod({
+			functionName: "BadSetLoadFields",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "incomplete-setloadfields"),
+		).toBeDefined();
+	});
+});
+
+describe("incomplete-setloadfields — bare SetLoadFields() reset", () => {
+	it("does not treat a bare SetLoadFields() as incomplete — it already loads every field", () => {
+		// BareSetLoadFieldsReset (CodeUnit50700): SetLoadFields() with zero
+		// arguments loads ALL fields (Microsoft docs). The pre-fix code treated
+		// the empty argument list as "loads zero fields" and compared it
+		// against every field later accessed, so it flagged Amount as
+		// "missing" -- a live critical false positive shipped by this exact
+		// fixture. Nothing can be missing from a call that loads everything.
+		const method = makeMethod({
+			functionName: "BareSetLoadFieldsReset",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "incomplete-setloadfields"),
+		).toBeUndefined();
+	});
+});
+
+describe("incomplete-setloadfields — temporary records", () => {
+	it("does not flag a temporary record", () => {
+		// ProcessTempWithIncompleteSetLoadFields (CodeUnit50400): SetLoadFields
+		// is a no-op on a temporary record -- no SQL load happens -- so an
+		// "incomplete" SetLoadFields call on a temp variable can never be a
+		// real problem, regardless of what fields are later accessed.
+		const method = makeMethod({
+			functionName: "ProcessTempWithIncompleteSetLoadFields",
+			objectId: 50400,
+		});
+		const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "incomplete-setloadfields"),
+		).toBeUndefined();
+	});
+});
+
+describe("incomplete-setloadfields — ordering", () => {
+	it("does not blame a field access that happened before the SetLoadFields call ran", () => {
+		// FieldAccessBeforeSetLoadFields (CodeUnit50700): Amount is accessed
+		// BEFORE any SetLoadFields call runs, then SetLoadFields("Document No.")
+		// runs, then only "Document No." is accessed afterward (and IS
+		// covered). Aggregating every field access in the method regardless of
+		// position (the pre-fix behavior) would count the early Amount access
+		// against this SetLoadFields call and wrongly flag it as incomplete.
+		const method = makeMethod({
+			functionName: "FieldAccessBeforeSetLoadFields",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "incomplete-setloadfields"),
+		).toBeUndefined();
 	});
 });
 
