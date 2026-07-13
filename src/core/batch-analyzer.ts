@@ -278,7 +278,12 @@ function aggregatePatterns(
 			(a, b) =>
 				b.recurrencePercent - a.recurrencePercent ||
 				severityRank(b.severity) - severityRank(a.severity) ||
-				a.id.localeCompare(b.id),
+				// Codepoint comparison, not localeCompare() — pattern ids are ASCII
+				// kebab-case, and a bare localeCompare() resolves the host's ambient
+				// default locale, which makes the "deterministic" tiebreak reorder
+				// under e.g. Danish collation (see src/core/patterns.ts's
+				// sortPatterns, the canonical comparator this mirrors).
+				(a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
 		);
 }
 

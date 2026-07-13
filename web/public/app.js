@@ -772,25 +772,22 @@ function renderPatterns(data) {
 		return;
 	}
 
-	const severityOrder = { critical: 0, warning: 1, info: 2 };
 	const severityIcon = {
 		critical: "\u2716",
 		warning: "\u26A0",
 		info: "\u2139",
 	};
 
-	// Mirrors src/core/patterns.ts's sortPatterns: real measured impact outranks
-	// severity, not the other way around - a critical finding with 1ms impact
-	// must not render above a warning worth 5 seconds. Severity and id are
-	// tiebreaks only.
-	const sorted = [...data.patterns].sort(
-		(a, b) =>
-			b.impact - a.impact ||
-			(severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3) ||
-			String(a.id).localeCompare(String(b.id)),
-	);
-
-	for (const p of sorted) {
+	// data.patterns arrives already sorted by src/core/patterns.ts's
+	// sortPatterns (impact desc, then severity, then a codepoint id tiebreak) -
+	// /api/analyze returns analyzeProfile()'s result as-is. Nothing between the
+	// fetch and this render filters, paginates, or merges the list, so
+	// re-sorting here would only be a hand-copied re-implementation of the
+	// server's comparator in a second runtime (the browser, on the visitor's
+	// own locale) with no test harness - exactly the server/client drift
+	// sortPatterns exists to eliminate. Do not reintroduce a client-side sort
+	// unless this list starts being filtered/paginated/merged client-side.
+	for (const p of data.patterns) {
 		const card = document.createElement("div");
 		card.className = "card";
 		card.style.marginBottom = "0.75rem";

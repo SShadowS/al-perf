@@ -53,6 +53,16 @@ const SEVERITY_ORDER: Record<DetectedPattern["severity"], number> = {
  * The id tiebreak makes the order deterministic, so output does not churn between
  * runs on equal findings.
  *
+ * The id tiebreak is a codepoint comparison (`<`/`>`), NOT `localeCompare()`.
+ * Pattern ids are ASCII kebab-case, so locale-aware collation is the wrong
+ * tool: `localeCompare()` with no locale argument resolves the host's
+ * *ambient default locale*, and collation order is locale-dependent. Under
+ * Danish (da-DK) collation, "aa" is treated as a variant of "å", which sorts
+ * AFTER "z" — so an id starting with "aa" would rank after one starting with
+ * "z" on a Danish host, and before it everywhere else. A "deterministic
+ * tiebreak" that silently reorders with the ambient host locale is not
+ * deterministic. Codepoint comparison has no ICU dependency and cannot drift.
+ *
  * This is the ONE comparator for every pattern list in the codebase — used by
  * runDetectors (below), runSourceDetectors (source/source-patterns.ts),
  * runSourceOnlyDetectors (source/source-only-patterns.ts), the merge in
@@ -64,7 +74,7 @@ export function sortPatterns(patterns: DetectedPattern[]): DetectedPattern[] {
 		(a, b) =>
 			b.impact - a.impact ||
 			SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
-			a.id.localeCompare(b.id),
+			(a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
 	);
 }
 

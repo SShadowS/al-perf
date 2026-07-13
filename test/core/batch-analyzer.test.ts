@@ -228,4 +228,48 @@ describe("aggregateResults recurringPatterns ordering", () => {
 			"zzz-pattern",
 		]);
 	});
+
+	it("id tiebreak is codepoint order, not locale-collation order (locale-independence regression guard)", () => {
+		// Same rationale as src/core/patterns.ts's sortPatterns test: Danish
+		// (da-DK) collation treats "aa" as a variant of "å", which sorts AFTER
+		// "z", so a bare `.localeCompare()` tiebreak silently reorders with
+		// the host's ambient default locale instead of staying deterministic.
+		//
+		// Proven directly against an explicit da-DK collator, not by flipping
+		// the test process's own ambient locale: this sandbox's `bun`
+		// resolves its ambient default locale to en-US regardless of
+		// LANG/LC_ALL, so a regression to bare `.localeCompare()` here would
+		// NOT turn this test red under `bun test` on this machine (confirmed
+		// manually — the same box's `node` DOES resolve da-DK from the OS
+		// locale and flips "aaa".localeCompare("zzz") to positive; `bun` does
+		// not pick that up on Windows).
+		const danishCollator = new Intl.Collator("da-DK");
+		expect(
+			danishCollator.compare("aaa-pattern", "zzz-pattern"),
+		).toBeGreaterThan(0); // da-DK: "aaa-pattern" AFTER "zzz-pattern"
+		expect("aaa-pattern" < "zzz-pattern").toBe(true); // codepoint: opposite
+
+		const withPatterns = (
+			patterns: DetectedPattern[],
+			profilePath: string,
+		): AnalysisResult => {
+			const stub = makeStubResult([]);
+			stub.meta.profilePath = profilePath;
+			return { ...stub, patterns };
+		};
+
+		const zzz = stubPattern("zzz-pattern", "warning");
+		const aaa = stubPattern("aaa-pattern", "warning");
+
+		const result1 = withPatterns([zzz, aaa], "profile-1.alcpuprofile");
+		const result2 = withPatterns([zzz, aaa], "profile-2.alcpuprofile");
+
+		const batch = aggregateResults([result1, result2]);
+
+		// Must follow codepoint order (aaa before zzz) regardless of host locale.
+		expect(batch.recurringPatterns.map((p) => p.id)).toEqual([
+			"aaa-pattern",
+			"zzz-pattern",
+		]);
+	});
 });

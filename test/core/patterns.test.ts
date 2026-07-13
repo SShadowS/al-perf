@@ -639,6 +639,53 @@ describe("pattern ordering", () => {
 		expect(sortPatterns([b, a]).map((p) => p.id)).toEqual(["aaa", "bbb"]);
 	});
 
+	test("id tiebreak is codepoint order, not locale-collation order (locale-independence regression guard)", () => {
+		// Danish (da-DK) collation treats "aa" as a variant of "å", which sorts
+		// AFTER "z" — so a bare, unlocaled `.localeCompare()` (which resolves
+		// whatever the host's *ambient default locale* happens to be) ranks an
+		// id starting with "aa" AFTER one starting with "z" on a Danish host,
+		// but BEFORE it on almost everywhere else. A "deterministic" tiebreak
+		// that flips with the ambient host locale is not deterministic.
+		// Codepoint order (`<`/`>`, what sortPatterns must use) always ranks
+		// "aaa-pattern" before "zzz-pattern", regardless of locale.
+		//
+		// This is proven directly against an explicitly-constructed da-DK
+		// Intl.Collator rather than by flipping the *test process's* ambient
+		// locale, because this sandbox's `bun` resolves its ambient default
+		// locale to en-US regardless of LANG/LC_ALL (confirmed manually: the
+		// same box's `node` resolves da-DK from the OS locale via LANG/LC_ALL
+		// and DOES flip "aaa".localeCompare("zzz") to positive; `bun` does
+		// not pick that up on Windows). A regression to bare
+		// `.localeCompare()` would therefore NOT turn this test red under
+		// `bun test` on this machine even though it silently breaks on a real
+		// Danish host — so the assertion below constructs the da-DK collator
+		// explicitly, independent of whatever locale actually executes the
+		// test, to prove the two orderings genuinely diverge for these ids.
+		const low = {
+			id: "aaa-pattern",
+			severity: "warning",
+			impact: 0,
+		} as DetectedPattern;
+		const high = {
+			id: "zzz-pattern",
+			severity: "warning",
+			impact: 0,
+		} as DetectedPattern;
+
+		const danishCollator = new Intl.Collator("da-DK");
+		// da-DK: "aaa-pattern" collates AFTER "zzz-pattern" ...
+		expect(danishCollator.compare(low.id, high.id)).toBeGreaterThan(0);
+		// ... while codepoint order says the opposite.
+		expect(low.id < high.id).toBe(true);
+
+		// sortPatterns must follow codepoint order (low before high), no
+		// matter what locale the host resolves by default.
+		expect(sortPatterns([high, low]).map((p) => p.id)).toEqual([
+			"aaa-pattern",
+			"zzz-pattern",
+		]);
+	});
+
 	test("does not mutate the input array (returns a new array)", () => {
 		const a = { id: "aaa", severity: "info", impact: 0 } as DetectedPattern;
 		const b = { id: "bbb", severity: "critical", impact: 0 } as DetectedPattern;
