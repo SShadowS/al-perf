@@ -574,6 +574,18 @@ const EXTERNAL_HTTP_CALL_CASE_MAP: Record<string, ExternalCallInfo["type"]> = {
  * (lowercase, trimmed) for the variables in scope of the procedure/trigger
  * currently being walked. Used to gate `HttpClient` member calls by the
  * receiver's actual declared type rather than by method name alone.
+ *
+ * KNOWN LIMITATION: `variables` comes from `extractVariables(procedureNode)`,
+ * which only reads a member's own `var_section` -- it never sees an
+ * object-level `var` section declared above the procedures (a normal way to
+ * declare and reuse a global `HttpClient` across procedures in BC). For
+ * `external-call-in-loop`, this declared-type gate IS the detector (unlike
+ * the record detectors, where a globals gap only degrades a temp/table
+ * refinement), so an object-level global `HttpClient` fails closed: its
+ * calls are invisible, not just unrefined. Deliberately deferred (wide blast
+ * radius across other detectors that also call `extractVariables`) -- pinned
+ * by a negative test in test/source/source-only-patterns.test.ts
+ * ("does not flag an object-level global HttpClient") rather than fixed here.
  */
 function buildVariableTypeMap(
 	variables: VariableInfo[] | undefined,
@@ -614,7 +626,13 @@ function collectExternalCalls(
 						const declaredType = variableTypes.get(objNode.text.toLowerCase());
 						if (
 							declaredType === HTTPCLIENT_TYPE_NAME &&
-							methodName in EXTERNAL_HTTP_CALL_CASE_MAP
+							// Object.hasOwn (not `in`), since `in` also matches inherited
+							// Object.prototype keys (e.g. "constructor" resolves through
+							// the prototype chain to the Object constructor function
+							// itself, not undefined). Not reachable from compiling AL --
+							// HttpClient has no Constructor method -- but tree-sitter
+							// indexes whatever is on disk, including non-compiling AL.
+							Object.hasOwn(EXTERNAL_HTTP_CALL_CASE_MAP, methodName)
 						) {
 							calls.push({
 								node: n,
@@ -699,6 +717,13 @@ function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
 
 /**
  * Extract variable declarations from a procedure/trigger node's var_section.
+ *
+ * KNOWN LIMITATION: reads only `procedureNode`'s own `var_section`, never an
+ * object-level `var` section declared above the procedures/triggers (a
+ * codeunit/page/report/table global). Callers relying on this for
+ * declared-type resolution (e.g. `buildVariableTypeMap`, above) will not see
+ * object-level global variables. See that function's doc comment for the
+ * concrete impact on `external-call-in-loop`.
  */
 function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 	const variables: VariableInfo[] = [];

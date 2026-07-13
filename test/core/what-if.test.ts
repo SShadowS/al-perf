@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { analyzeProfile } from "../../src/core/analyzer.js";
+import { annotateEstimatedSavings } from "../../src/core/what-if.js";
+import type { DetectedPattern } from "../../src/types/patterns.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -48,5 +50,29 @@ describe("What If estimator", () => {
 		if (deep) {
 			expect(deep.estimatedSavings).toBeUndefined();
 		}
+	});
+
+	test("estimates savings for external-call-in-loop pattern", () => {
+		// external-call-in-loop is source-only (never produced by
+		// analyzeProfile alone -- it needs --source), so this exercises
+		// annotateEstimatedSavings directly rather than through the full
+		// pipeline, mirroring the sibling dangerous-call-in-loop entry it
+		// sits beside in SAVINGS_MODELS. Without a model, estimatedSavings
+		// stays undefined -- this test pins that the entry exists.
+		const patterns: DetectedPattern[] = [
+			{
+				id: "external-call-in-loop",
+				severity: "critical",
+				title: "HttpClient.Send() inside loop in HttpSendInLoop",
+				description: "test pattern",
+				impact: 1000,
+				involvedMethods: ["HttpSendInLoop (Codeunit 50300)"],
+				evidence: "test evidence",
+			},
+		];
+		annotateEstimatedSavings(patterns);
+		expect(patterns[0].estimatedSavings).toBeDefined();
+		expect(patterns[0].estimatedSavings).toBeGreaterThan(0);
+		expect(patterns[0].savingsExplanation).toBeTruthy();
 	});
 });

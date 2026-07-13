@@ -36,6 +36,10 @@ report 50800 "Slow Report"
                 // here has no visible loop in the source either.
                 Client.Send(Request, Response);
                 Commit();
+                // A bare Sleep() in the same implicit loop (Task 9 review,
+                // Issue 5): the report trigger case was reachable and correct
+                // but had no direct test -- pinned here.
+                Sleep(1000);
             end;
         }
     }

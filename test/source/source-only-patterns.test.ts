@@ -214,11 +214,20 @@ describe("external-call-in-loop", () => {
 
 	test("leaves dangerous-call-in-loop reporting only Commit/Error/TestField", async () => {
 		// Transactional problems, different fix, separate id. Not merged.
+		// Covers both halves of external-call-in-loop (HttpClient calls AND
+		// bare Sleep()) -- adding "sleep" to DANGEROUS_CALLS instead of
+		// keeping it a distinct pattern id would double-report the same call
+		// under both ids without either of these assertions catching it.
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectDangerousCallsInLoop(index);
 		expect(
 			patterns.find((p) =>
 				p.involvedMethods.some((m) => m.includes("HttpSendInLoop")),
+			),
+		).toBeUndefined();
+		expect(
+			patterns.find((p) =>
+				p.involvedMethods.some((m) => m.includes("SleepInLoop")),
 			),
 		).toBeUndefined();
 	});
@@ -268,6 +277,25 @@ describe("external-call-in-loop", () => {
 		expect(f!.description).toContain("Report.OnAfterGetRecord");
 	});
 
+	test("flags a bare Sleep() in a report OnAfterGetRecord — implicit loop", async () => {
+		// Same implicit-loop shape as the HttpClient.Send() test above
+		// (SlowReport.al, report 50800) but for the bare-Sleep() branch of
+		// the detector, which previously had no direct test even though it
+		// was reachable and correct.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		const f = patterns.find(
+			(p) =>
+				p.title.includes("Sleep") &&
+				p.involvedMethods.some((m) => m.includes("50800")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.severity).toBe("critical");
+		expect(f!.evidence).toContain("Report.OnAfterGetRecord");
+		expect(f!.evidence).toContain("runs once per row");
+		expect(f!.description).toContain("Report.OnAfterGetRecord");
+	});
+
 	test("flags HttpClient.Send() in a Page OnAfterGetRecord at reduced (warning) severity", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectExternalCallInLoop(index);
@@ -277,6 +305,50 @@ describe("external-call-in-loop", () => {
 		expect(f).toBeDefined();
 		expect(f!.severity).toBe("warning");
 		expect(f!.evidence).toContain("Page.OnAfterGetRecord");
+	});
+
+	test("does not flag an object-level global HttpClient (known extractVariables limitation)", async () => {
+		// KNOWN LIMITATION, pinned deliberately, NOT a spec violation: unlike
+		// the record detectors, where a globals gap only degrades a temp/table
+		// refinement, here the declared-type gate IS the detector. extractVariables()
+		// only reads a member's own var_section and never sees an object-level
+		// `var` section, so buildVariableTypeMap() never learns GlobalClient's
+		// type here and the type gate fails closed -- even though declaring an
+		// HttpClient as an object-level global and reusing it across
+		// procedures is normal BC code. This is a real gap, deferred to a
+		// future task (see indexer.ts buildVariableTypeMap/extractVariables
+		// doc comments and CLAUDE.md). If extractVariables is ever extended to
+		// see object-level globals, this test MUST fail loudly and be updated
+		// -- it must never silently keep passing while the underlying
+		// behavior changes underneath it.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		expect(
+			patterns.find((p) =>
+				p.involvedMethods.some((m) =>
+					m.includes("ObjectLevelGlobalHttpClientInLoop"),
+				),
+			),
+		).toBeUndefined();
+	});
+
+	test("does not match Object.prototype keys via the 'in' operator (prototype-chain false positive)", async () => {
+		// EXTERNAL_HTTP_CALL_CASE_MAP is a plain object literal. `methodName in
+		// EXTERNAL_HTTP_CALL_CASE_MAP` matches inherited Object.prototype keys
+		// too -- "constructor" resolves through the prototype chain to the
+		// Object constructor function itself (not undefined), so a
+		// non-compiling `Client.Constructor()` used to produce a garbage
+		// finding whose `type` was a function, not a string. Fixed with
+		// Object.hasOwn(...).
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		expect(
+			patterns.find((p) =>
+				p.involvedMethods.some((m) =>
+					m.includes("HttpClientPrototypeChainInLoop"),
+				),
+			),
+		).toBeUndefined();
 	});
 
 	test("is wired into runSourceOnlyDetectors", async () => {

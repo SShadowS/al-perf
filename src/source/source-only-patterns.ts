@@ -218,6 +218,16 @@ export function detectDangerousCallsInLoop(
  * suggestion. `Codeunit.Run` in a loop is a transaction-boundary problem and
  * is deliberately out of scope here (needs its own thinking, per the brief).
  * Severity: critical (warning for a Page's implicit per-row loop).
+ *
+ * KNOWN LIMITATION: `HttpClient` calls are recognized by the receiver
+ * variable's declared type, resolved from `buildVariableTypeMap`/
+ * `extractVariables` in indexer.ts -- which only sees a member's OWN
+ * `var_section`, not an object-level global declared above the procedures.
+ * An `HttpClient` declared as an object-level global and reused across
+ * procedures (normal BC code) is therefore invisible to this detector: the
+ * type gate fails closed rather than degrading gracefully. Deliberately
+ * deferred, pinned by a negative test (see indexer.ts's `buildVariableTypeMap`
+ * doc comment and CLAUDE.md).
  */
 export function detectExternalCallInLoop(
 	index: SourceIndex,

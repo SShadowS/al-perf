@@ -99,4 +99,21 @@ codeunit 50300 "Dangerous Patterns"
         for i := 1 to 10 do
             Sleep(1000);
     end;
+
+    procedure HttpClientPrototypeChainInLoop()
+    var
+        Client: HttpClient;
+        i: Integer;
+    begin
+        // Regression pin (Task 9 review, Issue 3): EXTERNAL_HTTP_CALL_CASE_MAP
+        // is a plain object literal, and `methodName in EXTERNAL_HTTP_CALL_CASE_MAP`
+        // also matches inherited Object.prototype keys -- "constructor" resolves
+        // through the prototype chain to the Object constructor function itself,
+        // not undefined, so a member named Constructor() used to produce a
+        // garbage finding. Not reachable from compiling AL (HttpClient has no
+        // Constructor method) but tree-sitter indexes whatever is on disk,
+        // including non-compiling AL.
+        for i := 1 to 10 do
+            Client.Constructor();
+    end;
 }

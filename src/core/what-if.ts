@@ -45,6 +45,10 @@ const SAVINGS_MODELS: Record<
 		savings: Math.round(p.impact > 0 ? p.impact * 0.9 : 0),
 		explanation: `Moving Commit/Error outside the loop eliminates per-iteration transaction overhead.`,
 	}),
+	"external-call-in-loop": (p) => ({
+		savings: Math.round(p.impact > 0 ? p.impact * 0.9 : 0),
+		explanation: `Hoisting the HTTP call/Sleep outside the loop (or batching the request) eliminates per-iteration network round-trip or blocking-delay overhead.`,
+	}),
 };
 
 function formatImpact(us: number): string {
