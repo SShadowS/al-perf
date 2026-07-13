@@ -12,7 +12,7 @@ import {
 	loopEvidencePhrase,
 	loopLocationPhrase,
 } from "./implicit-loop.js";
-import { matchToSource } from "./locator.js";
+import { matchAllToSource } from "./locator.js";
 
 /**
  * Check if a record operation targets a temporary variable.
@@ -208,44 +208,51 @@ export function detectCalcFieldsInLoop(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// ALL candidates, not just the first: triggers are not name-unique
+		// within an object (a report with two dataitems has two
+		// OnAfterGetRecord members; a table with two field OnValidate triggers
+		// has two OnValidate members). matchToSource's `[0]` used to collapse
+		// them onto member #1, double-reporting it while member #2..N were
+		// never analyzed at all.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const opsInLoop = match.features.recordOpsInLoops.filter(
-			(op) =>
-				(op.type === "CalcFields" || op.type === "CalcSums") &&
-				!isTemporaryOp(op, match.features.variables) &&
-				!isKnownNonRecordOp(op, match.features.variables),
-		);
+		for (const match of matches) {
+			const opsInLoop = match.features.recordOpsInLoops.filter(
+				(op) =>
+					(op.type === "CalcFields" || op.type === "CalcSums") &&
+					!isTemporaryOp(op, match.features.variables) &&
+					!isKnownNonRecordOp(op, match.features.variables),
+			);
 
-		for (const op of opsInLoop) {
-			// `resolvedFields` feeds BOTH severity and the suggestion's fact
-			// sentence, so they can't drift apart — see resolveCalcFields.
-			const resolvedFields = resolveCalcFields(
-				op,
-				match.features.variables,
-				index,
-			);
-			const severity = downgradePageImplicitLoop(
-				calcFieldSeverity(resolvedFields),
-				op,
-			);
-			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
-			patterns.push({
-				id: "calcfields-in-loop",
-				severity,
-				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query, causing N+1 query performance issues.`,
-				impact: method.selfTime,
-				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-				suggestion: calcFieldsSuggestion(severity, resolvedFields),
-			});
+			for (const op of opsInLoop) {
+				// `resolvedFields` feeds BOTH severity and the suggestion's fact
+				// sentence, so they can't drift apart — see resolveCalcFields.
+				const resolvedFields = resolveCalcFields(
+					op,
+					match.features.variables,
+					index,
+				);
+				const severity = downgradePageImplicitLoop(
+					calcFieldSeverity(resolvedFields),
+					op,
+				);
+				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+				patterns.push({
+					id: "calcfields-in-loop",
+					severity,
+					title: `${op.type} inside loop in ${method.functionName}`,
+					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query, causing N+1 query performance issues.`,
+					impact: method.selfTime,
+					involvedMethods: [methodLabel(method)],
+					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+					suggestion: calcFieldsSuggestion(severity, resolvedFields),
+				});
+			}
 		}
 	}
 
@@ -263,35 +270,37 @@ export function detectModifyInLoop(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// See detectCalcFieldsInLoop for why ALL candidates must be iterated.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const opsInLoop = match.features.recordOpsInLoops.filter(
-			(op) =>
-				(op.type === "Modify" || op.type === "ModifyAll") &&
-				!isTemporaryOp(op, match.features.variables) &&
-				!isKnownNonRecordOp(op, match.features.variables),
-		);
+		for (const match of matches) {
+			const opsInLoop = match.features.recordOpsInLoops.filter(
+				(op) =>
+					(op.type === "Modify" || op.type === "ModifyAll") &&
+					!isTemporaryOp(op, match.features.variables) &&
+					!isKnownNonRecordOp(op, match.features.variables),
+			);
 
-		for (const op of opsInLoop) {
-			const severity = downgradePageImplicitLoop("critical", op);
-			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
-			patterns.push({
-				id: "modify-in-loop",
-				severity,
-				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL UPDATE, which can be very slow for large datasets.`,
-				impact: method.selfTime,
-				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-				suggestion:
-					"Collect changes and apply them after the loop, or use ModifyAll() if applicable.",
-			});
+			for (const op of opsInLoop) {
+				const severity = downgradePageImplicitLoop("critical", op);
+				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+				patterns.push({
+					id: "modify-in-loop",
+					severity,
+					title: `${op.type} inside loop in ${method.functionName}`,
+					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL UPDATE, which can be very slow for large datasets.`,
+					impact: method.selfTime,
+					involvedMethods: [methodLabel(method)],
+					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+					suggestion:
+						"Collect changes and apply them after the loop, or use ModifyAll() if applicable.",
+				});
+			}
 		}
 	}
 
@@ -313,35 +322,37 @@ export function detectInsertInLoop(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// See detectCalcFieldsInLoop for why ALL candidates must be iterated.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const opsInLoop = match.features.recordOpsInLoops.filter(
-			(op) =>
-				op.type === "Insert" &&
-				!isTemporaryOp(op, match.features.variables) &&
-				!isKnownNonRecordOp(op, match.features.variables),
-		);
+		for (const match of matches) {
+			const opsInLoop = match.features.recordOpsInLoops.filter(
+				(op) =>
+					op.type === "Insert" &&
+					!isTemporaryOp(op, match.features.variables) &&
+					!isKnownNonRecordOp(op, match.features.variables),
+			);
 
-		for (const op of opsInLoop) {
-			const severity = downgradePageImplicitLoop("critical", op);
-			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
-			patterns.push({
-				id: "insert-in-loop",
-				severity,
-				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL INSERT, which can be very slow for large datasets.`,
-				impact: method.selfTime,
-				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-				suggestion:
-					"Build a temporary table and insert the records once after the loop, or use a bulk-insert pattern — each Insert() in a loop is a separate SQL INSERT.",
-			});
+			for (const op of opsInLoop) {
+				const severity = downgradePageImplicitLoop("critical", op);
+				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+				patterns.push({
+					id: "insert-in-loop",
+					severity,
+					title: `${op.type} inside loop in ${method.functionName}`,
+					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL INSERT, which can be very slow for large datasets.`,
+					impact: method.selfTime,
+					involvedMethods: [methodLabel(method)],
+					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+					suggestion:
+						"Build a temporary table and insert the records once after the loop, or use a bulk-insert pattern — each Insert() in a loop is a separate SQL INSERT.",
+				});
+			}
 		}
 	}
 
@@ -363,35 +374,37 @@ export function detectDeleteInLoop(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// See detectCalcFieldsInLoop for why ALL candidates must be iterated.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const opsInLoop = match.features.recordOpsInLoops.filter(
-			(op) =>
-				(op.type === "Delete" || op.type === "DeleteAll") &&
-				!isTemporaryOp(op, match.features.variables) &&
-				!isKnownNonRecordOp(op, match.features.variables),
-		);
+		for (const match of matches) {
+			const opsInLoop = match.features.recordOpsInLoops.filter(
+				(op) =>
+					(op.type === "Delete" || op.type === "DeleteAll") &&
+					!isTemporaryOp(op, match.features.variables) &&
+					!isKnownNonRecordOp(op, match.features.variables),
+			);
 
-		for (const op of opsInLoop) {
-			const severity = downgradePageImplicitLoop("critical", op);
-			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
-			patterns.push({
-				id: "delete-in-loop",
-				severity,
-				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL DELETE, which can be very slow for large datasets.`,
-				impact: method.selfTime,
-				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-				suggestion:
-					"Use DeleteAll() with a filter instead of deleting row by row. If this call already is DeleteAll(), the loop around it is the bug — DeleteAll() exists to replace the loop, not to run inside one.",
-			});
+			for (const op of opsInLoop) {
+				const severity = downgradePageImplicitLoop("critical", op);
+				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+				patterns.push({
+					id: "delete-in-loop",
+					severity,
+					title: `${op.type} inside loop in ${method.functionName}`,
+					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL DELETE, which can be very slow for large datasets.`,
+					impact: method.selfTime,
+					involvedMethods: [methodLabel(method)],
+					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+					suggestion:
+						"Use DeleteAll() with a filter instead of deleting row by row. If this call already is DeleteAll(), the loop around it is the bug — DeleteAll() exists to replace the loop, not to run inside one.",
+				});
+			}
 		}
 	}
 
@@ -416,35 +429,37 @@ export function detectRecordOpInLoop(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// See detectCalcFieldsInLoop for why ALL candidates must be iterated.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const opsInLoop = match.features.recordOpsInLoops.filter(
-			(op) =>
-				LOOKUP_OPS.has(op.type) &&
-				!isTemporaryOp(op, match.features.variables) &&
-				!isKnownNonRecordOp(op, match.features.variables),
-		);
+		for (const match of matches) {
+			const opsInLoop = match.features.recordOpsInLoops.filter(
+				(op) =>
+					LOOKUP_OPS.has(op.type) &&
+					!isTemporaryOp(op, match.features.variables) &&
+					!isKnownNonRecordOp(op, match.features.variables),
+			);
 
-		for (const op of opsInLoop) {
-			const severity = downgradePageImplicitLoop("critical", op);
-			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
-			patterns.push({
-				id: "record-op-in-loop",
-				severity,
-				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query.`,
-				impact: method.selfTime,
-				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-				suggestion:
-					"Restructure to reduce database calls inside the loop. Consider loading data before the loop with a single query.",
-			});
+			for (const op of opsInLoop) {
+				const severity = downgradePageImplicitLoop("critical", op);
+				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+				patterns.push({
+					id: "record-op-in-loop",
+					severity,
+					title: `${op.type} inside loop in ${method.functionName}`,
+					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query.`,
+					impact: method.selfTime,
+					involvedMethods: [methodLabel(method)],
+					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
+					suggestion:
+						"Restructure to reduce database calls inside the loop. Consider loading data before the loop with a single query.",
+				});
+			}
 		}
 	}
 
@@ -587,41 +602,43 @@ export function detectMissingSetLoadFields(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// See detectCalcFieldsInLoop for why ALL candidates must be iterated.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const allOps = match.features.recordOps;
-		const findOps = allOps.filter((op) => FIND_OPS.has(op.type));
-		const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
+		for (const match of matches) {
+			const allOps = match.features.recordOps;
+			const findOps = allOps.filter((op) => FIND_OPS.has(op.type));
+			const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
 
-		for (const op of findOps) {
-			if (isTemporaryOp(op, match.features.variables)) continue; // no SQL load on a temp record
-			const recVarLower = op.recordVariable?.toLowerCase() ?? "";
-			const ops = opsByVar.get(recVarLower) ?? [];
-			// Covered if ANY restrictive (non-bare-reset) call precedes this find --
-			// a bare reset still loads every field, so it must not suppress this
-			// warning (see setLoadFieldsOpsByVar).
-			const isCovered = ops.some(
-				(o) => !o.isBareReset && isPositionBefore(o, op),
-			);
-			if (!isCovered) {
-				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
-				patterns.push({
-					id: "missing-setloadfields",
-					severity: "warning",
-					title: `${op.type} without SetLoadFields in ${method.functionName}`,
-					description: `${op.type}()${recVar} at line ${op.line} in ${match.file} has no preceding SetLoadFields(). This loads all fields from the database when only a subset may be needed.`,
-					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
-					evidence: `${op.type}() at line ${op.line} without SetLoadFields for ${op.recordVariable ?? "unknown variable"}`,
-					suggestion:
-						"Add SetLoadFields() before record retrieval to load only the fields you need, reducing I/O.",
-				});
+			for (const op of findOps) {
+				if (isTemporaryOp(op, match.features.variables)) continue; // no SQL load on a temp record
+				const recVarLower = op.recordVariable?.toLowerCase() ?? "";
+				const ops = opsByVar.get(recVarLower) ?? [];
+				// Covered if ANY restrictive (non-bare-reset) call precedes this find --
+				// a bare reset still loads every field, so it must not suppress this
+				// warning (see setLoadFieldsOpsByVar).
+				const isCovered = ops.some(
+					(o) => !o.isBareReset && isPositionBefore(o, op),
+				);
+				if (!isCovered) {
+					const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+					patterns.push({
+						id: "missing-setloadfields",
+						severity: "warning",
+						title: `${op.type} without SetLoadFields in ${method.functionName}`,
+						description: `${op.type}()${recVar} at line ${op.line} in ${match.file} has no preceding SetLoadFields(). This loads all fields from the database when only a subset may be needed.`,
+						impact: method.selfTime,
+						involvedMethods: [methodLabel(method)],
+						evidence: `${op.type}() at line ${op.line} without SetLoadFields for ${op.recordVariable ?? "unknown variable"}`,
+						suggestion:
+							"Add SetLoadFields() before record retrieval to load only the fields you need, reducing I/O.",
+					});
+				}
 			}
 		}
 	}
@@ -640,58 +657,60 @@ export function detectIncompleteSetLoadFields(
 	const patterns: DetectedPattern[] = [];
 
 	for (const method of methods) {
-		const match = matchToSource(
+		// See detectCalcFieldsInLoop for why ALL candidates must be iterated.
+		const matches = matchAllToSource(
 			method.functionName,
 			method.objectType,
 			method.objectId,
 			index,
 		);
-		if (!match) continue;
 
-		const allOps = match.features.recordOps;
-		const fieldAccesses = match.features.fieldAccesses;
-		const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
+		for (const match of matches) {
+			const allOps = match.features.recordOps;
+			const fieldAccesses = match.features.fieldAccesses;
+			const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
 
-		for (const [varLower, ops] of opsByVar) {
-			const accessesForVar = fieldAccesses.filter(
-				(a) => a.recordVariable.toLowerCase() === varLower,
-			);
-			if (accessesForVar.length === 0) continue;
+			for (const [varLower, ops] of opsByVar) {
+				const accessesForVar = fieldAccesses.filter(
+					(a) => a.recordVariable.toLowerCase() === varLower,
+				);
+				if (accessesForVar.length === 0) continue;
 
-			// Resolve coverage PER ACCESS: what did this variable's field set
-			// actually look like at the moment THIS access ran? That is the LAST
-			// SetLoadFields call before the access, not the earliest -- a later
-			// call replaces the field set from an earlier one, it does not union
-			// with it. Group any misses by the call that governed them, since two
-			// accesses in the same method can be governed by two different calls.
-			const missingByOp = new Map<SetLoadFieldsOp, Set<string>>();
+				// Resolve coverage PER ACCESS: what did this variable's field set
+				// actually look like at the moment THIS access ran? That is the LAST
+				// SetLoadFields call before the access, not the earliest -- a later
+				// call replaces the field set from an earlier one, it does not union
+				// with it. Group any misses by the call that governed them, since two
+				// accesses in the same method can be governed by two different calls.
+				const missingByOp = new Map<SetLoadFieldsOp, Set<string>>();
 
-			for (const access of accessesForVar) {
-				const governingOp = lastSetLoadFieldsOpBefore(ops, access);
-				if (governingOp === undefined) continue; // no coverage yet here -- missing-setloadfields' job, not this one's; reporting it here too would double-report the same bug
-				if (governingOp.isBareReset) continue; // bare reset loads every field -- covered
+				for (const access of accessesForVar) {
+					const governingOp = lastSetLoadFieldsOpBefore(ops, access);
+					if (governingOp === undefined) continue; // no coverage yet here -- missing-setloadfields' job, not this one's; reporting it here too would double-report the same bug
+					if (governingOp.isBareReset) continue; // bare reset loads every field -- covered
 
-				const fieldLower = access.fieldName.toLowerCase();
-				if (governingOp.fields.has(fieldLower)) continue;
+					const fieldLower = access.fieldName.toLowerCase();
+					if (governingOp.fields.has(fieldLower)) continue;
 
-				const missing = missingByOp.get(governingOp) ?? new Set<string>();
-				missing.add(fieldLower);
-				missingByOp.set(governingOp, missing);
-			}
+					const missing = missingByOp.get(governingOp) ?? new Set<string>();
+					missing.add(fieldLower);
+					missingByOp.set(governingOp, missing);
+				}
 
-			for (const [op, missingFieldsSet] of missingByOp) {
-				const missingFields = [...missingFieldsSet];
-				const recVar = accessesForVar[0]?.recordVariable ?? varLower;
-				patterns.push({
-					id: "incomplete-setloadfields",
-					severity: "critical",
-					title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
-					description: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`,
-					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
-					evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
-					suggestion: `Add the missing fields to SetLoadFields: ${missingFields.map((f) => `"${f}"`).join(", ")}`,
-				});
+				for (const [op, missingFieldsSet] of missingByOp) {
+					const missingFields = [...missingFieldsSet];
+					const recVar = accessesForVar[0]?.recordVariable ?? varLower;
+					patterns.push({
+						id: "incomplete-setloadfields",
+						severity: "critical",
+						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
+						description: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`,
+						impact: method.selfTime,
+						involvedMethods: [methodLabel(method)],
+						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
+						suggestion: `Add the missing fields to SetLoadFields: ${missingFields.map((f) => `"${f}"`).join(", ")}`,
+					});
+				}
 			}
 		}
 	}
@@ -700,14 +719,14 @@ export function detectIncompleteSetLoadFields(
 }
 
 /**
- * Build a synthetic `MethodBreakdown` per procedure/trigger indexed in a
- * `SourceIndex`, for running the source-correlated detectors with no profile
- * at all (the `analyze-source` CLI command). Every profile-derived field is
- * zeroed — there is no captured timing here, only structure — but
- * `functionName`/`objectType`/`objectId` are exactly what `matchToSource`
- * needs to resolve each synthetic method straight back to the SAME
- * procedure/trigger it was built from, so `runSourceDetectors` sees the real
- * `recordOpsInLoops`/`recordOps` for every member in the index.
+ * Build a synthetic `MethodBreakdown` per DISTINCT `(functionName, objectType,
+ * objectId)` triple indexed in a `SourceIndex`, for running the
+ * source-correlated detectors with no profile at all (the `analyze-source`
+ * CLI command). Every profile-derived field is zeroed — there is no captured
+ * timing here, only structure — but `functionName`/`objectType`/`objectId`
+ * are exactly what `matchAllToSource` needs to resolve each synthetic method
+ * back to every procedure/trigger it was built from, so `runSourceDetectors`
+ * sees the real `recordOpsInLoops`/`recordOps` for every member in the index.
  *
  * Exists so a profile-less caller can reuse the real detectors — with their
  * real severities, real implicit-loop self-explanation, and real
@@ -716,13 +735,29 @@ export function detectIncompleteSetLoadFields(
  * drift: `insert-in-loop | info` and `delete-in-loop | info` — including on
  * temporary records — where the real detectors say `critical` and exclude
  * temp records).
+ *
+ * DEDUPED by `(name, objectType, objectId)` — this is load-bearing, not
+ * cosmetic. Triggers are not name-unique within an object (a report with two
+ * dataitems has two `OnAfterGetRecord` members; a table with two field
+ * `OnValidate` triggers has two `OnValidate` members). Each detector now
+ * calls `matchAllToSource`, which resolves a `(name, objectType, objectId)`
+ * key to EVERY matching member at once. Emitting one synthetic method per
+ * RAW member (the pre-fix behavior) would mean N members all sharing that key
+ * each independently re-resolving to all N candidates — N × N duplicate
+ * findings, not N. Emitting one synthetic method per distinct key instead
+ * means each key is resolved exactly once, against all N real candidates,
+ * producing exactly N findings.
  */
 export function syntheticMethodsFromIndex(
 	index: SourceIndex,
 ): MethodBreakdown[] {
 	const methods: MethodBreakdown[] = [];
+	const seen = new Set<string>();
 	for (const obj of index.objects.values()) {
 		for (const member of [...obj.procedures, ...obj.triggers]) {
+			const key = `${member.name.toLowerCase()}|${obj.objectType}|${obj.objectId}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
 			methods.push({
 				functionName: member.name,
 				objectType: obj.objectType,

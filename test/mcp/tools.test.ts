@@ -194,6 +194,114 @@ describe("MCP Tool: analyze_source", () => {
 		const parsed = JSON.parse(text);
 		expect(parsed.findings.length).toBeGreaterThan(0);
 	});
+
+	test("reports BOTH dataitems of a report with two same-named OnAfterGetRecord triggers", async () => {
+		// The MCP surface iterates obj.procedures/obj.triggers directly (one
+		// finding per real member), so it never had the matchToSource collapse
+		// bug the CLI had — this pins that it stays correct on the new
+		// two-dataitem fixture (ReportTwoDataItems.al, Report 50909).
+		const { client } = await createTestClient();
+		const result = await client.callTool({
+			name: "analyze_source",
+			arguments: { sourcePath: "test/fixtures/source" },
+		});
+		const text = (result.content as TextContent)[0].text;
+		const parsed = JSON.parse(text);
+
+		const onReport = (f: any) =>
+			f.objectId === 50909 && f.procedure === "OnAfterGetRecord";
+		const calcfields = parsed.findings.filter(
+			(f: any) => onReport(f) && f.finding.startsWith("CalcFields("),
+		);
+		const modify = parsed.findings.filter(
+			(f: any) => onReport(f) && f.finding.startsWith("Modify("),
+		);
+		expect(calcfields.length).toBe(2);
+		expect(modify.length).toBe(1);
+	});
+
+	test("reports BOTH field OnValidate triggers of a table sharing the same trigger name", async () => {
+		const { client } = await createTestClient();
+		const result = await client.callTool({
+			name: "analyze_source",
+			arguments: { sourcePath: "test/fixtures/source" },
+		});
+		const text = (result.content as TextContent)[0].text;
+		const parsed = JSON.parse(text);
+
+		const onTable = (f: any) =>
+			f.objectId === 50931 && f.procedure === "OnValidate";
+		const calcfields = parsed.findings.filter(
+			(f: any) => onTable(f) && f.finding.startsWith("CalcFields("),
+		);
+		const modify = parsed.findings.filter(
+			(f: any) => onTable(f) && f.finding.startsWith("Modify("),
+		);
+		expect(calcfields.length).toBe(1);
+		expect(modify.length).toBe(1);
+		expect(modify[0].severity).toBe("critical");
+	});
+
+	test("CLI and MCP now agree on the two-dataitem report and the two-OnValidate table (whole-branch review, final blocker)", async () => {
+		// Before this fix: the CLI (routed through matchToSource) reported
+		// Customer's CalcFields twice and never saw Vendor's CalcFields/Modify
+		// at all, while the MCP surface (iterating raw index members directly)
+		// was already correct — the two surfaces disagreed on identical code,
+		// the exact complaint the previous fix existed to close, only
+		// reversed. Both must now report the identical facts.
+		const { client } = await createTestClient();
+		const mcpResult = await client.callTool({
+			name: "analyze_source",
+			arguments: { sourcePath: "test/fixtures/source" },
+		});
+		const mcpParsed = JSON.parse((mcpResult.content as TextContent)[0].text);
+
+		const proc = Bun.spawn(
+			[
+				"bun",
+				"run",
+				"src/cli/index.ts",
+				"analyze-source",
+				"test/fixtures/source",
+				"-f",
+				"json",
+			],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		await proc.exited;
+		const cliParsed = JSON.parse(await new Response(proc.stdout).text());
+
+		const mcpCount = (objectId: number, procedure: string, prefix: string) =>
+			mcpParsed.findings.filter(
+				(f: any) =>
+					f.objectId === objectId &&
+					f.procedure === procedure &&
+					f.finding.startsWith(prefix),
+			).length;
+		const cliCount = (label: string, id: string) =>
+			cliParsed.findings.filter(
+				(f: any) => f.involvedMethods?.[0] === label && f.id === id,
+			).length;
+
+		expect(
+			cliCount("OnAfterGetRecord (Report 50909)", "calcfields-in-loop"),
+		).toBe(mcpCount(50909, "OnAfterGetRecord", "CalcFields("));
+		expect(cliCount("OnAfterGetRecord (Report 50909)", "modify-in-loop")).toBe(
+			mcpCount(50909, "OnAfterGetRecord", "Modify("),
+		);
+		expect(cliCount("OnValidate (Table 50931)", "calcfields-in-loop")).toBe(
+			mcpCount(50931, "OnValidate", "CalcFields("),
+		);
+		expect(cliCount("OnValidate (Table 50931)", "modify-in-loop")).toBe(
+			mcpCount(50931, "OnValidate", "Modify("),
+		);
+
+		// Guard against a vacuous pass: both surfaces must actually see these.
+		expect(
+			cliCount("OnAfterGetRecord (Report 50909)", "calcfields-in-loop"),
+		).toBe(2);
+		expect(cliCount("OnValidate (Table 50931)", "modify-in-loop")).toBe(1);
+	});
 });
 
 describe("MCP Tool: gate_check", () => {

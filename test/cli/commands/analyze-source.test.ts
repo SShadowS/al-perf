@@ -128,4 +128,73 @@ describe("CLI analyze-source command", () => {
 		const text = await new Response(proc.stdout).text();
 		expect(text).toContain("analyze-source");
 	});
+
+	test("analyzes BOTH dataitems of a report with two same-named OnAfterGetRecord triggers, without duplicating either", async () => {
+		// Whole-branch review, final blocker: matchToSource collapsed all
+		// same-named members in an object onto member #1. ReportTwoDataItems.al
+		// (Report 50909) has Customer and Vendor dataitems, each with its own
+		// OnAfterGetRecord — the single most ordinary BC report shape (header +
+		// lines). Before the fix: Customer's CalcFields reported TWICE, Vendor's
+		// CalcFields and Modify absent entirely.
+		const proc = Bun.spawn(
+			[
+				"bun",
+				"run",
+				CLI,
+				"analyze-source",
+				"test/fixtures/source",
+				"-f",
+				"json",
+			],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		await proc.exited;
+		const text = await new Response(proc.stdout).text();
+		const result = JSON.parse(text);
+
+		const onReport = (f: any) =>
+			f.involvedMethods?.[0] === "OnAfterGetRecord (Report 50909)";
+		const calcfields = result.findings.filter(
+			(f: any) => f.id === "calcfields-in-loop" && onReport(f),
+		);
+		const modify = result.findings.filter(
+			(f: any) => f.id === "modify-in-loop" && onReport(f),
+		);
+		expect(calcfields.length).toBe(2);
+		expect(modify.length).toBe(1);
+	});
+
+	test("analyzes BOTH field OnValidate triggers of a table sharing the same trigger name", async () => {
+		// TableTwoValidateTriggers.al (Table 50931): field "Customer No." has a
+		// for-loop CalcFields; field "Related No." has a genuine repeat...until
+		// Modify() — a real critical modify-in-loop, not an implicit-loop edge
+		// case (table triggers are not per-row).
+		const proc = Bun.spawn(
+			[
+				"bun",
+				"run",
+				CLI,
+				"analyze-source",
+				"test/fixtures/source",
+				"-f",
+				"json",
+			],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		await proc.exited;
+		const text = await new Response(proc.stdout).text();
+		const result = JSON.parse(text);
+
+		const onTable = (f: any) =>
+			f.involvedMethods?.[0] === "OnValidate (Table 50931)";
+		const calcfields = result.findings.filter(
+			(f: any) => f.id === "calcfields-in-loop" && onTable(f),
+		);
+		const modify = result.findings.filter(
+			(f: any) => f.id === "modify-in-loop" && onTable(f),
+		);
+		expect(calcfields.length).toBe(1);
+		expect(modify.length).toBe(1);
+		expect(modify[0].severity).toBe("critical");
+	});
 });

@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { fingerprintPatterns } from "../../src/lifecycle/wire.js";
 import { buildSourceIndex } from "../../src/source/indexer.js";
 import {
 	detectCalcFieldsInLoop,
@@ -11,6 +12,7 @@ import {
 	detectModifyInLoop,
 	detectRecordOpInLoop,
 	runSourceDetectors,
+	syntheticMethodsFromIndex,
 } from "../../src/source/source-patterns.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
 import type { SourceIndex } from "../../src/types/source-index.js";
@@ -957,5 +959,113 @@ describe("per-row triggers are loop bodies", () => {
 		});
 		const patterns = detectRecordOpInLoop([method], sourceIndex);
 		expect(patterns.find((p) => p.id === "record-op-in-loop")).toBeUndefined();
+	});
+});
+
+describe("multi-member matching — final whole-branch-review blocker", () => {
+	// matchToSource used to return matchAllToSource(...)[0] — a SINGLE
+	// candidate for (name, objectType, objectId). But triggers are NOT
+	// name-unique within an object: a report with two dataitems has TWO
+	// OnAfterGetRecord members; a table with two field OnValidate triggers has
+	// TWO OnValidate members. The old resolver collapsed both onto member #1,
+	// double-reporting it while member #2..N were never analyzed at all.
+	//
+	// ReportTwoDataItems.al (Report 50909) and TableTwoValidateTriggers.al
+	// (Table 50931) exist specifically to pin this: no fixture in the corpus
+	// had two same-named members before them, so every corpus sweep in the
+	// prior fix was structurally blind to this shape.
+	let allSyntheticPatterns: ReturnType<typeof runSourceDetectors>;
+
+	beforeAll(() => {
+		allSyntheticPatterns = runSourceDetectors(
+			syntheticMethodsFromIndex(sourceIndex),
+			sourceIndex,
+		);
+	});
+
+	it("syntheticMethodsFromIndex emits exactly ONE method per (name, objectType, objectId) even when multiple raw members share that name — the N² dedupe guard", () => {
+		// Without this dedupe, two raw "OnAfterGetRecord" members would each
+		// independently call matchAllToSource and each get back BOTH real
+		// candidates — 2 methods x 2 candidates = 4 duplicate findings where
+		// there should be 2. Removing the dedupe must turn this red.
+		const methods = syntheticMethodsFromIndex(sourceIndex);
+		expect(
+			methods.filter((m) => m.objectType === "Report" && m.objectId === 50909),
+		).toHaveLength(1);
+		expect(
+			methods.filter((m) => m.objectType === "Table" && m.objectId === 50931),
+		).toHaveLength(1);
+	});
+
+	it("analyzes BOTH dataitems of a report with two same-named OnAfterGetRecord triggers — not just dataitem #1, and not duplicated", () => {
+		const calcfields = allSyntheticPatterns.filter(
+			(p) =>
+				p.id === "calcfields-in-loop" &&
+				p.involvedMethods[0] === "OnAfterGetRecord (Report 50909)",
+		);
+		const modify = allSyntheticPatterns.filter(
+			(p) =>
+				p.id === "modify-in-loop" &&
+				p.involvedMethods[0] === "OnAfterGetRecord (Report 50909)",
+		);
+		// Exactly one CalcFields per dataitem (Customer AND Vendor) — not 1
+		// (member #2 invisible, the pre-fix bug: revert to matchToSource[0] and
+		// this drops to 1) and not 4 (N x N duplication if the dedupe above is
+		// removed).
+		expect(calcfields).toHaveLength(2);
+		// Vendor's Modify() was never analyzed before this fix — matchToSource
+		// always resolved "OnAfterGetRecord (Report 50909)" to the Customer
+		// dataitem (member #1) only.
+		expect(modify).toHaveLength(1);
+	});
+
+	it("does not move the fingerprint anchor across dataitems — both calcfields-in-loop findings on the report share the identical involvedMethods label", () => {
+		const calcfields = allSyntheticPatterns.filter(
+			(p) =>
+				p.id === "calcfields-in-loop" &&
+				p.involvedMethods[0] === "OnAfterGetRecord (Report 50909)",
+		);
+		expect(calcfields).toHaveLength(2);
+		expect(calcfields[0].involvedMethods).toEqual(
+			calcfields[1].involvedMethods,
+		);
+	});
+
+	it("fingerprint stability verified via the real wiring (not assumed): both findings collapse to ONE fingerprint", () => {
+		// Per src/lifecycle/wire.ts, identity is (patternId x anchor routine x
+		// appId) with no salient location — N instances of one pattern on one
+		// routine share ONE fingerprint. Proven here against the ACTUAL
+		// fingerprintPatterns wiring, not just by comparing involvedMethods
+		// strings by hand.
+		const methods = syntheticMethodsFromIndex(sourceIndex);
+		const patterns = runSourceDetectors(methods, sourceIndex).filter(
+			(p) =>
+				p.id === "calcfields-in-loop" &&
+				p.involvedMethods[0] === "OnAfterGetRecord (Report 50909)",
+		);
+		expect(patterns).toHaveLength(2);
+		fingerprintPatterns(patterns, methods);
+		expect(patterns[0].fingerprint).toBeDefined();
+		expect(patterns[0].fingerprint).toBe(patterns[1].fingerprint);
+	});
+
+	it("analyzes BOTH field OnValidate triggers of a table sharing the same trigger name — field #2's real repeat...until Modify() is a genuine critical finding, not an implicit-loop edge case", () => {
+		// Table triggers are not per-row (see "does not promote table triggers"
+		// above) — TableTwoValidateTriggers.al's second field deliberately uses
+		// a real syntactic repeat...until loop so this is a genuine bug, not an
+		// artifact of implicit-loop promotion.
+		const calc = allSyntheticPatterns.filter(
+			(p) =>
+				p.id === "calcfields-in-loop" &&
+				p.involvedMethods[0] === "OnValidate (Table 50931)",
+		);
+		const modify = allSyntheticPatterns.filter(
+			(p) =>
+				p.id === "modify-in-loop" &&
+				p.involvedMethods[0] === "OnValidate (Table 50931)",
+		);
+		expect(calc).toHaveLength(1); // field "Customer No." — not doubled
+		expect(modify).toHaveLength(1); // field "Related No." — invisible before this fix
+		expect(modify[0]?.severity).toBe("critical");
 	});
 });
