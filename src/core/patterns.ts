@@ -29,6 +29,10 @@ function callSiteWord(count: number): string {
 	return count === 1 ? "call site" : "call sites";
 }
 
+function methodWord(count: number): string {
+	return count === 1 ? "method" : "methods";
+}
+
 /**
  * Group key for a profile node's method. MUST match aggregateByMethod's key
  * (src/core/aggregator.ts) so per-method call-site counts line up with the
@@ -83,7 +87,19 @@ export const detectSingleMethodDominance: PatternDetector = (
 
 		const key = `${method.functionName}_${method.objectType}_${method.objectId}`;
 		const callSites = callSitesByMethod.get(key);
-		if (!callSites || callSites.length === 0) continue;
+		if (!callSites || callSites.length === 0) {
+			// Should be unreachable: methodGroupKey() and aggregateByMethod's key
+			// (src/core/aggregator.ts) are built from the same fields with the
+			// same idle-node exclusion, so every method aggregateByMethod
+			// produces must have a matching entry in callSitesByMethod. If this
+			// throws, the two key functions have drifted apart — fail loudly
+			// instead of silently dropping the finding (see the "MUST match"
+			// comment above methodGroupKey).
+			throw new Error(
+				`single-method-dominance: no call sites found for method key "${key}" ` +
+					"(methodGroupKey and aggregateByMethod's key must agree — they have drifted apart)",
+			);
+		}
 
 		const representative = callSites.reduce((max, node) =>
 			node.selfTime > max.selfTime ? node : max,
@@ -398,10 +414,10 @@ export const detectEventSubscriberHotspot: PatternDetector = (
 			id: "event-subscriber-hotspot",
 			severity: "warning",
 			title: `Event subscribers consume ${totalSelfTimePercent.toFixed(1)}% of self-time`,
-			description: `${aggregated.length} event subscriber method(s) (OnBefore/OnAfter/HandleOn), aggregated across ${totalCallSites} ${callSiteWord(totalCallSites)}, collectively account for ${totalSelfTimePercent.toFixed(1)}% of total self-time.`,
+			description: `${aggregated.length} event subscriber ${methodWord(aggregated.length)} (OnBefore/OnAfter/HandleOn), aggregated across ${totalCallSites} ${callSiteWord(totalCallSites)}, collectively account for ${totalSelfTimePercent.toFixed(1)}% of total self-time.`,
 			impact: totalImpact,
 			involvedMethods,
-			evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${aggregated.length} method(s), aggregated across ${totalCallSites} ${callSiteWord(totalCallSites)} (threshold: 10%)`,
+			evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${aggregated.length} ${methodWord(aggregated.length)}, aggregated across ${totalCallSites} ${callSiteWord(totalCallSites)} (threshold: 10%)`,
 			suggestion:
 				"This event subscriber is consuming significant time. Review whether it needs to run for every event, or if it can be filtered or optimized.",
 		},

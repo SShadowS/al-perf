@@ -96,14 +96,20 @@ describe("detectSingleMethodDominance", () => {
 
 describe("single-method-dominance — aggregation", () => {
 	test("flags a method that dominates via several call sites, not one", () => {
-		// 3 call sites x 30% self-time = 90% of the profile in one method.
-		// Per-node thresholding sees three 30% nodes and reports nothing.
+		// 3 call sites at 45/30/15% self-time = 90% of the profile in one
+		// method, with no single call site above the 50% threshold.
+		// Per-node thresholding sees three sub-50% nodes and reports nothing.
+		// The sites are deliberately asymmetric (not 30/30/30) so the
+		// "representative" (highest self-time) call site is observable: if the
+		// representative-selection reduce were inverted to pick the LOWEST
+		// self-time node, or the evidence's "largest single call site" clause
+		// were deleted, this test must fail.
 		const profile = makeProfileWith([
 			{
 				objectType: "Codeunit",
 				objectId: 50000,
 				functionName: "Post",
-				selfTimePercent: 30,
+				selfTimePercent: 45,
 			},
 			{
 				objectType: "Codeunit",
@@ -115,7 +121,7 @@ describe("single-method-dominance — aggregation", () => {
 				objectType: "Codeunit",
 				objectId: 50000,
 				functionName: "Post",
-				selfTimePercent: 30,
+				selfTimePercent: 15,
 			},
 		]);
 
@@ -128,6 +134,9 @@ describe("single-method-dominance — aggregation", () => {
 		// The evidence must state the aggregation — a user who greps the
 		// profile for a single 90% frame must not conclude the tool is lying.
 		expect(dominance!.evidence).toContain("aggregated across 3 call sites");
+		// The evidence must name the true largest call site (45%), not the
+		// smallest (15%) and not omit the clause entirely.
+		expect(dominance!.evidence).toContain("largest single call site: 45.0%");
 	});
 
 	test("does not flag three DIFFERENT methods at 30% each", () => {
