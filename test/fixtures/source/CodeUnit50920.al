@@ -68,4 +68,18 @@ codeunit 50920 "Insert Delete Loop Patterns"
                 OldLine.Delete();
             until SalesLine.Next() = 0;
     end;
+
+    procedure InsertOnNonRecordInLoop()
+    var
+        Names: List of [Text];
+        i: Integer;
+    begin
+        // Insert() is a real method on List of [Text] too -- RECORD_OPS
+        // (indexer.ts) matches the method NAME only, so this must never read
+        // as a SQL INSERT. Names resolves in this procedure's own
+        // var_section with isRecord = false, so the record-op detectors must
+        // exclude it (whole-branch review Blocker 1).
+        for i := 1 to 10 do
+            Names.Insert(i, 'x');
+    end;
 }

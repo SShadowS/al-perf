@@ -45,12 +45,20 @@ export function loopEvidencePhrase(item: ImplicitLoopAware): string {
  * rows (millions) like a Report or XMLport dataitem. Same bug shape, an order
  * of magnitude less costly — still worth flagging, but one severity level
  * below the report/XMLport case.
+ *
+ * `PageExtension` gets the identical downgrade: a pageextension overriding
+ * `OnAfterGetRecord` renders the same bounded row count as a base page, and
+ * base pages can't be modified in place in BC — extensions are where almost
+ * all real partner/ISV page code lives. Matching on `startsWith("Page.")`
+ * alone missed `"PageExtension.OnAfterGetRecord"` entirely, so every
+ * pageextension kept the report/XMLport-level `critical` severity.
  */
 export function downgradePageImplicitLoop(
 	severity: "critical" | "warning",
 	item: ImplicitLoopAware,
 ): "critical" | "warning" {
-	return severity === "critical" && item.implicitLoop?.startsWith("Page.")
-		? "warning"
-		: severity;
+	const isPageImplicitLoop =
+		item.implicitLoop?.startsWith("Page.") ||
+		item.implicitLoop?.startsWith("PageExtension.");
+	return severity === "critical" && isPageImplicitLoop ? "warning" : severity;
 }

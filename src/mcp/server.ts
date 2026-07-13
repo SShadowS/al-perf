@@ -23,8 +23,16 @@ import {
 	type PrioritizedFinding,
 	prioritizeFindings,
 } from "../semantic/views.js";
+import {
+	downgradePageImplicitLoop,
+	loopLocationPhrase,
+} from "../source/implicit-loop.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { runSourceOnlyDetectors } from "../source/source-only-patterns.js";
+import {
+	isKnownNonRecordOp,
+	isTemporaryOp,
+} from "../source/source-patterns.js";
 import {
 	extractCompanionZip,
 	findCompanionZip,
@@ -33,7 +41,7 @@ import type { MethodBreakdown } from "../types/aggregated.js";
 import type { ProfileMetadata } from "../types/batch.js";
 import type { CorrelationSummary } from "../types/fused.js";
 import type { ProcessedProfile } from "../types/processed.js";
-import type { SourceIndex } from "../types/source-index.js";
+import type { RecordOpInfo, SourceIndex } from "../types/source-index.js";
 
 /** Trimmed fusion block for MCP output (R2-12: no unweightedFindings). */
 interface McpFusionBlock {
@@ -108,6 +116,53 @@ function capFindingChains(
 		if (capped === p.causalSteps) return p; // no-op (within cap)
 		return { ...p, causalSteps: capped };
 	});
+}
+
+/**
+ * Record op types the real in-loop detectors (source-patterns.ts) assign a
+ * "critical" severity to (before any Page/PageExtension downgrade):
+ * CalcFields/CalcSums, Modify/ModifyAll, Insert, Delete/DeleteAll, and the
+ * record-lookup ops (FindSet/FindFirst/FindLast/Find/Get). Everything else
+ * `RECORD_OPS` recognizes (SetRange/SetFilter/Reset/Next/Count/CountApprox/
+ * IsEmpty/SetLoadFields) has no real "in-loop" detector at all, so it stays
+ * "info" here — purely descriptive, not a disagreement with anything.
+ */
+const CRITICAL_RECORD_OP_TYPES = new Set([
+	"CalcFields",
+	"CalcSums",
+	"Modify",
+	"ModifyAll",
+	"Insert",
+	"Delete",
+	"DeleteAll",
+	"FindSet",
+	"FindFirst",
+	"FindLast",
+	"Find",
+	"Get",
+]);
+
+/**
+ * Severity for a raw record-op-in-loop entry in the `analyze_source` tool's
+ * flat `findings` list. Mirrors the real detectors' conservative default
+ * (`critical`, downgraded one level for a Page/PageExtension implicit loop)
+ * for every op type they cover, rather than re-deriving a second severity
+ * scale that can drift from theirs — this list previously rated
+ * CalcFields/Modify as "warning" and Insert/Delete as "info" unconditionally,
+ * disagreeing with the real `calcfields-in-loop`/`modify-in-loop`/
+ * `insert-in-loop`/`delete-in-loop` findings for the identical call. This
+ * does not attempt CalcFields' FlowField-type resolution (that lives in
+ * `resolveCalcFields`, source-patterns.ts, and needs a `SourceIndex` table
+ * lookup) — it uses the same conservative `critical` fallback the real
+ * detector uses whenever that resolution comes up empty, which is never a
+ * confident wrong answer, just the safe default.
+ */
+function recordOpInLoopSeverity(
+	op: RecordOpInfo,
+): "critical" | "warning" | "info" {
+	return CRITICAL_RECORD_OP_TYPES.has(op.type)
+		? downgradePageImplicitLoop("critical", op)
+		: "info";
 }
 
 export interface McpServerOptions {
@@ -714,16 +769,25 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					const allMembers = [...obj.procedures, ...obj.triggers];
 					for (const member of allMembers) {
 						for (const op of member.features.recordOpsInLoops) {
+							// Gated exactly like the real in-loop detectors
+							// (source-patterns.ts): a temp record has no SQL load/write
+							// to report, and a receiver known NOT to be a Record (e.g.
+							// HttpClient, List of [Text]) is not a record op at all —
+							// RECORD_OPS matches method names only, and names like
+							// Get/Delete collide with non-Record types.
+							if (
+								isTemporaryOp(op, member.features.variables) ||
+								isKnownNonRecordOp(op, member.features.variables)
+							) {
+								continue;
+							}
 							findings.push({
-								severity:
-									op.type === "CalcFields" || op.type === "Modify"
-										? "warning"
-										: "info",
+								severity: recordOpInLoopSeverity(op),
 								objectType: obj.objectType,
 								objectName: obj.objectName,
 								objectId: obj.objectId,
 								procedure: member.name,
-								finding: `${op.type}() on ${op.recordVariable ?? "Record"} inside a loop`,
+								finding: `${op.type}() on ${op.recordVariable ?? "Record"} ${loopLocationPhrase(op, op.line, member.file)}`,
 								file: member.file,
 								line: op.line,
 							});

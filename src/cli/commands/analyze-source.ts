@@ -4,6 +4,10 @@ import { sortPatterns } from "../../core/patterns.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import { buildSourceIndex } from "../../source/indexer.js";
 import { runSourceOnlyDetectors } from "../../source/source-only-patterns.js";
+import {
+	runSourceDetectors,
+	syntheticMethodsFromIndex,
+} from "../../source/source-patterns.js";
 import type { DetectedPattern } from "../../types/patterns.js";
 
 export interface SourceAnalysisResult {
@@ -105,42 +109,26 @@ export function registerAnalyzeSourceCommand(program: Command) {
 			}
 			const findings = runSourceOnlyDetectors(index);
 
-			// Also run the inline structural checks (record ops in loops) from the index
-			const inlineFindings: DetectedPattern[] = [];
-			for (const obj of index.objects.values()) {
-				const allMembers = [...obj.procedures, ...obj.triggers];
-				for (const member of allMembers) {
-					for (const op of member.features.recordOpsInLoops) {
-						inlineFindings.push({
-							id: `${op.type.toLowerCase()}-in-loop`,
-							severity:
-								op.type === "CalcFields" || op.type === "Modify"
-									? "warning"
-									: "info",
-							title: `${op.type} inside loop in ${member.name}`,
-							description: `${op.type}() on ${op.recordVariable ?? "Record"} inside a loop at line ${op.line} in ${member.file}.`,
-							impact: 0,
-							involvedMethods: [
-								`${member.name} (${obj.objectType} ${obj.objectId})`,
-							],
-							evidence: `${op.type}() at line ${op.line} inside loop`,
-							suggestion:
-								op.type === "CalcFields"
-									? "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved, or filter on the FlowField instead of calculating it per row. Note SetLoadFields() does NOT help here — it does not accept FlowFields."
-									: op.type === "Modify"
-										? "Collect changes and apply after the loop, or use ModifyAll()."
-										: "Consider loading data before the loop with a single query.",
-						});
-					}
-				}
-			}
+			// Run the real source-correlated detectors (calcfields/modify/insert/
+			// delete/record-op-in-loop, missing/incomplete-setloadfields) against
+			// synthetic zero-impact methods built from the index itself. This used
+			// to be a hand-rolled loop over recordOpsInLoops that minted its own
+			// ids/severities straight from op.type -- drifting from the real
+			// detectors (e.g. insert-in-loop/delete-in-loop always "info", Delete
+			// included even on temporary records, no implicit-loop
+			// self-explanation). Calling the real detectors means this surface can
+			// never disagree with them again.
+			const structuralFindings = runSourceDetectors(
+				syntheticMethodsFromIndex(index),
+				index,
+			);
 
 			// Every finding on this path carries impact: 0 — there is no profile,
 			// so there is no measured time. sortPatterns falls back to severity,
 			// then to id for a deterministic order (previously: severity only,
 			// with no tiebreak, so equal-severity findings kept arbitrary array
 			// order).
-			const allFindings = sortPatterns([...findings, ...inlineFindings]);
+			const allFindings = sortPatterns([...findings, ...structuralFindings]);
 
 			const tableClusters = buildTableClusters(allFindings);
 

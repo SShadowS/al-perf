@@ -196,15 +196,23 @@ describe("detectSingleMethodDominance", () => {
 
 describe("single-method-dominance — aggregation", () => {
 	test("flags a method that dominates via several call sites, not one", () => {
-		// 3 call sites at 45/30/15% self-time = 90% of the profile in one
+		// 3 call sites at 15/45/30% self-time = 90% of the profile in one
 		// method, with no single call site above the 50% threshold.
 		// Per-node thresholding sees three sub-50% nodes and reports nothing.
-		// The sites are deliberately asymmetric (not 30/30/30) so the
-		// "representative" (highest self-time) call site is observable: if the
-		// representative-selection reduce were inverted to pick the LOWEST
-		// self-time node, or the evidence's "largest single call site" clause
-		// were deleted, this test must fail.
+		// The sites are deliberately asymmetric (not 30/30/30) AND the largest
+		// (45%) is deliberately NOT first in the array: a whole-branch review
+		// found that an earlier 45/30/15 ordering left "pick the max-selfTime
+		// call site" and "pick callSites[0]" indistinguishable on every input,
+		// so mutating the representative-selection reduce to `callSites[0]`
+		// passed the full suite. With the largest call site in the middle, that
+		// mutation now picks the WRONG (15%) call site and this test goes red.
 		const profile = makeProfileWith([
+			{
+				objectType: "Codeunit",
+				objectId: 50000,
+				functionName: "Post",
+				selfTimePercent: 15,
+			},
 			{
 				objectType: "Codeunit",
 				objectId: 50000,
@@ -216,12 +224,6 @@ describe("single-method-dominance — aggregation", () => {
 				objectId: 50000,
 				functionName: "Post",
 				selfTimePercent: 30,
-			},
-			{
-				objectType: "Codeunit",
-				objectId: 50000,
-				functionName: "Post",
-				selfTimePercent: 15,
 			},
 		]);
 

@@ -116,6 +116,21 @@ describe("insert-in-loop", () => {
 		expect(patterns.find((p) => p.id === "insert-in-loop")).toBeUndefined();
 	});
 
+	it("does not flag Insert() on a resolved non-Record variable (List of [Text])", () => {
+		// Whole-branch review Blocker 1: RECORD_OPS (indexer.ts) matches the
+		// method NAME only, and Insert() is a real method on List of [Text]
+		// too. `Names` resolves in InsertOnNonRecordInLoop's own var_section
+		// with isRecord === false, so isKnownNonRecordOp must exclude it. That
+		// code touches no database.
+		const method = makeMethod({
+			functionName: "InsertOnNonRecordInLoop",
+			objectType: "Codeunit",
+			objectId: 50920,
+		});
+		const patterns = detectInsertInLoop([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "insert-in-loop")).toBeUndefined();
+	});
+
 	it("is wired into runSourceDetectors", () => {
 		const method = makeMethod({
 			functionName: "InsertInLoop",
@@ -156,6 +171,25 @@ describe("delete-in-loop", () => {
 			functionName: "DeleteInLoopTemp",
 			objectType: "Codeunit",
 			objectId: 50920,
+		});
+		const patterns = detectDeleteInLoop([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "delete-in-loop")).toBeUndefined();
+	});
+
+	it("does not double-report an HttpClient.Delete() as a record delete-in-loop", () => {
+		// Whole-branch review Blocker 1: CodeUnit50300.al's HttpMethodsInLoop
+		// calls Client.Delete(...) where Client: HttpClient. Get/Delete collide
+		// with RECORD_OPS' method names by name alone (documented at
+		// indexer.ts:566-568), so this used to ALSO produce a critical
+		// delete-in-loop finding claiming a SQL DELETE, right next to the
+		// correct external-call-in-loop finding on the same line — a single
+		// HTTP call double-reported, once correctly and once as a fabricated
+		// database write. Client resolves with isRecord === false, so
+		// isKnownNonRecordOp must exclude it here.
+		const method = makeMethod({
+			functionName: "HttpMethodsInLoop",
+			objectType: "Codeunit",
+			objectId: 50300,
 		});
 		const patterns = detectDeleteInLoop([method], sourceIndex);
 		expect(patterns.find((p) => p.id === "delete-in-loop")).toBeUndefined();
@@ -813,6 +847,27 @@ describe("per-row triggers are loop bodies", () => {
 		expect(finding!.evidence).toContain("Page.OnAfterGetRecord");
 		expect(finding!.suggestion).toContain("SetAutoCalcFields");
 		expect(finding!.suggestion).not.toContain("This table has");
+	});
+
+	it("flags CalcFields in a PageExtension OnAfterGetRecord at reduced (warning) severity too", () => {
+		// Whole-branch review Blocker 2: downgradePageImplicitLoop matched
+		// implicitLoop?.startsWith("Page.") only. A pageextension's marker is
+		// "PageExtension.OnAfterGetRecord", which does NOT start with "Page." —
+		// so identical code (a bare CalcFields in OnAfterGetRecord) kept the
+		// report/XMLport-level `critical` severity on a PageExtension while a
+		// base Page got `warning`. Base pages can't be modified in place in
+		// BC, so pageextensions are where almost all real page code lives —
+		// this bug hit most real users, not the rare base-page override.
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "PageExtension",
+			objectId: 50906,
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(finding).toBeDefined();
+		expect(finding!.severity).toBe("warning");
+		expect(finding!.evidence).toContain("PageExtension.OnAfterGetRecord");
 	});
 
 	it("flags Modify in a Page OnAfterGetRecord at reduced (warning) severity", () => {

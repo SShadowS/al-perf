@@ -78,13 +78,18 @@ describe("CLI analyze-source command", () => {
 			expect(rank[result.findings[i].severity]).toBeLessThanOrEqual(
 				rank[result.findings[i - 1].severity],
 			);
-			// Within the same severity, ids break ties deterministically.
+			// Within the same severity, ids break ties deterministically by
+			// codepoint order — NOT localeCompare(), which resolves the host's
+			// ambient locale (e.g. Danish collation sorts "aa" after "z"). The
+			// production tiebreak (sortPatterns, core/patterns.ts) compares ids
+			// with plain `<`/`>`, so this assertion must use the same comparison
+			// or it can fail on a host whose locale disagrees with codepoint order
+			// while the production code is perfectly correct.
 			if (result.findings[i].severity === result.findings[i - 1].severity) {
-				expect(
-					String(result.findings[i - 1].id).localeCompare(
-						result.findings[i].id,
-					),
-				).toBeLessThanOrEqual(0);
+				const prevId = String(result.findings[i - 1].id);
+				const currId = String(result.findings[i].id);
+				const cmp = prevId < currId ? -1 : prevId > currId ? 1 : 0;
+				expect(cmp).toBeLessThanOrEqual(0);
 			}
 		}
 

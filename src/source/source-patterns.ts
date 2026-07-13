@@ -17,12 +17,46 @@ import { matchToSource } from "./locator.js";
 /**
  * Check if a record operation targets a temporary variable.
  */
-function isTemporaryOp(op: RecordOpInfo, variables: VariableInfo[]): boolean {
+export function isTemporaryOp(
+	op: RecordOpInfo,
+	variables: VariableInfo[],
+): boolean {
 	if (!op.recordVariable) return false;
 	const variable = variables.find(
 		(v) => v.name.toLowerCase() === op.recordVariable!.toLowerCase(),
 	);
 	return variable?.isTemporary === true;
+}
+
+/**
+ * Check if a record operation's receiver resolves to a variable that is
+ * definitively NOT a Record -- e.g. `List of [Text]`, `JsonArray`,
+ * `HttpClient`. `RECORD_OPS` (indexer.ts) matches method NAMES only
+ * (`Insert`, `Delete`, `Get`, `Find`, ...), and every one of those names is
+ * also a real method on several non-Record BC types -- without this guard, a
+ * `List of [Text]`'s `.Insert()` in a loop reads as a SQL INSERT, and an
+ * `HttpClient`'s `.Delete()` double-reports next to the correct
+ * `external-call-in-loop` finding on the same line (see
+ * `CodeUnit50300.al`'s `HttpMethodsInLoop`).
+ *
+ * Fails OPEN (returns false -- "could still be a record, don't exclude it")
+ * whenever the variable does not resolve in `variables` -- e.g. an
+ * object-level global (see `extractVariables`'s KNOWN LIMITATION in
+ * indexer.ts), or a Page/Report/XMLport's implicit `Rec`, which has no `var`
+ * declaration at all. Both keep exactly today's behavior: an unresolved
+ * receiver is still treated as a possible record, same as before this guard
+ * existed.
+ */
+export function isKnownNonRecordOp(
+	op: RecordOpInfo,
+	variables: VariableInfo[],
+): boolean {
+	if (!op.recordVariable) return false;
+	const variable = variables.find(
+		(v) => v.name.toLowerCase() === op.recordVariable!.toLowerCase(),
+	);
+	if (!variable) return false; // unresolved -- fail open
+	return !variable.isRecord;
 }
 
 /**
@@ -185,7 +219,8 @@ export function detectCalcFieldsInLoop(
 		const opsInLoop = match.features.recordOpsInLoops.filter(
 			(op) =>
 				(op.type === "CalcFields" || op.type === "CalcSums") &&
-				!isTemporaryOp(op, match.features.variables),
+				!isTemporaryOp(op, match.features.variables) &&
+				!isKnownNonRecordOp(op, match.features.variables),
 		);
 
 		for (const op of opsInLoop) {
@@ -239,7 +274,8 @@ export function detectModifyInLoop(
 		const opsInLoop = match.features.recordOpsInLoops.filter(
 			(op) =>
 				(op.type === "Modify" || op.type === "ModifyAll") &&
-				!isTemporaryOp(op, match.features.variables),
+				!isTemporaryOp(op, match.features.variables) &&
+				!isKnownNonRecordOp(op, match.features.variables),
 		);
 
 		for (const op of opsInLoop) {
@@ -287,7 +323,9 @@ export function detectInsertInLoop(
 
 		const opsInLoop = match.features.recordOpsInLoops.filter(
 			(op) =>
-				op.type === "Insert" && !isTemporaryOp(op, match.features.variables),
+				op.type === "Insert" &&
+				!isTemporaryOp(op, match.features.variables) &&
+				!isKnownNonRecordOp(op, match.features.variables),
 		);
 
 		for (const op of opsInLoop) {
@@ -336,7 +374,8 @@ export function detectDeleteInLoop(
 		const opsInLoop = match.features.recordOpsInLoops.filter(
 			(op) =>
 				(op.type === "Delete" || op.type === "DeleteAll") &&
-				!isTemporaryOp(op, match.features.variables),
+				!isTemporaryOp(op, match.features.variables) &&
+				!isKnownNonRecordOp(op, match.features.variables),
 		);
 
 		for (const op of opsInLoop) {
@@ -387,7 +426,9 @@ export function detectRecordOpInLoop(
 
 		const opsInLoop = match.features.recordOpsInLoops.filter(
 			(op) =>
-				LOOKUP_OPS.has(op.type) && !isTemporaryOp(op, match.features.variables),
+				LOOKUP_OPS.has(op.type) &&
+				!isTemporaryOp(op, match.features.variables) &&
+				!isKnownNonRecordOp(op, match.features.variables),
 		);
 
 		for (const op of opsInLoop) {
@@ -656,6 +697,51 @@ export function detectIncompleteSetLoadFields(
 	}
 
 	return patterns;
+}
+
+/**
+ * Build a synthetic `MethodBreakdown` per procedure/trigger indexed in a
+ * `SourceIndex`, for running the source-correlated detectors with no profile
+ * at all (the `analyze-source` CLI command). Every profile-derived field is
+ * zeroed — there is no captured timing here, only structure — but
+ * `functionName`/`objectType`/`objectId` are exactly what `matchToSource`
+ * needs to resolve each synthetic method straight back to the SAME
+ * procedure/trigger it was built from, so `runSourceDetectors` sees the real
+ * `recordOpsInLoops`/`recordOps` for every member in the index.
+ *
+ * Exists so a profile-less caller can reuse the real detectors — with their
+ * real severities, real implicit-loop self-explanation, and real
+ * temp/non-record guards — instead of re-deriving a second, drifting copy of
+ * that logic inline (see the whole-branch review that found exactly that
+ * drift: `insert-in-loop | info` and `delete-in-loop | info` — including on
+ * temporary records — where the real detectors say `critical` and exclude
+ * temp records).
+ */
+export function syntheticMethodsFromIndex(
+	index: SourceIndex,
+): MethodBreakdown[] {
+	const methods: MethodBreakdown[] = [];
+	for (const obj of index.objects.values()) {
+		for (const member of [...obj.procedures, ...obj.triggers]) {
+			methods.push({
+				functionName: member.name,
+				objectType: obj.objectType,
+				objectName: obj.objectName,
+				objectId: obj.objectId,
+				appName: "",
+				selfTime: 0,
+				selfTimePercent: 0,
+				totalTime: 0,
+				totalTimePercent: 0,
+				hitCount: 0,
+				calledBy: [],
+				calls: [],
+				costPerHit: 0,
+				efficiencyScore: 0,
+			});
+		}
+	}
+	return methods;
 }
 
 /**
