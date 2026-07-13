@@ -199,6 +199,70 @@ describe("detectMissingSetLoadFields", () => {
 	});
 });
 
+describe("missing-setloadfields — ordering", () => {
+	it("still flags the FindSet when SetLoadFields comes AFTER it", () => {
+		// LateSetLoadFields (CodeUnit50700): FindSet() on line 44, SetLoadFields()
+		// on line 51. The bug is AT the FindSet -- at that moment no fields were
+		// restricted yet. A SetLoadFields() further down the method does not
+		// retroactively fix the find that already ran.
+		const method = makeMethod({
+			functionName: "LateSetLoadFields",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "missing-setloadfields"),
+		).toBeDefined();
+	});
+
+	it("does not flag when SetLoadFields precedes the FindSet", () => {
+		// FilteredQuery (CodeUnit50200): SetLoadFields() on line 34, FindSet() on
+		// line 35 -- genuinely covered by the time the find runs.
+		const method = makeMethod({
+			functionName: "FilteredQuery",
+			objectType: "Codeunit",
+			objectId: 50200,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "missing-setloadfields"),
+		).toBeUndefined();
+	});
+
+	it("does not flag a temporary record", () => {
+		// ProcessWithTempTable (CodeUnit50400): TempBuffer.FindSet() with no
+		// SetLoadFields anywhere in the method. SetLoadFields is a no-op on a
+		// temp record -- no SQL load happens -- so there is nothing to warn
+		// about, regardless of ordering.
+		const method = makeMethod({
+			functionName: "ProcessWithTempTable",
+			objectId: 50400,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "missing-setloadfields"),
+		).toBeUndefined();
+	});
+});
+
+describe("missing-setloadfields — bare SetLoadFields() reset", () => {
+	it("does not treat a bare SetLoadFields() as coverage — it resets to loading all fields", () => {
+		// BareSetLoadFieldsReset (CodeUnit50700): SetLoadFields() with zero
+		// arguments resets to loading ALL fields (Microsoft docs) -- it is not a
+		// restriction, so it must not suppress the warning.
+		const method = makeMethod({
+			functionName: "BareSetLoadFieldsReset",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(
+			patterns.find((p) => p.id === "missing-setloadfields"),
+		).toBeDefined();
+	});
+});
+
 describe("temporary table exclusion", () => {
 	it("skips CalcFields-in-loop for temporary record variables", () => {
 		const method = makeMethod({

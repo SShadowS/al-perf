@@ -432,17 +432,28 @@ export function detectMissingSetLoadFields(
 		const allOps = match.features.recordOps;
 		const findOps = allOps.filter((op) => FIND_OPS.has(op.type));
 
-		// Collect all record variables that have SetLoadFields
-		const setLoadFieldsVars = new Set<string>();
+		// The bug is AT the find: a SetLoadFields further down the method does not
+		// retroactively restrict the fields that find already loaded. Track the
+		// EARLIEST SetLoadFields line per variable and compare, rather than asking
+		// "does this variable have one anywhere in the method". A bare
+		// SetLoadFields() (no field arguments) resets to loading ALL fields
+		// (Microsoft docs) -- it does not restrict anything, so it must not count
+		// as coverage either.
+		const setLoadFieldsLine = new Map<string, number>();
 		for (const op of allOps) {
-			if (op.type === "SetLoadFields" && op.recordVariable) {
-				setLoadFieldsVars.add(op.recordVariable.toLowerCase());
-			}
+			if (op.type !== "SetLoadFields" || !op.recordVariable) continue;
+			if (op.allFieldArguments && op.allFieldArguments.length === 0) continue; // bare reset, not a restriction
+			const key = op.recordVariable.toLowerCase();
+			const prev = setLoadFieldsLine.get(key);
+			if (prev === undefined || op.line < prev)
+				setLoadFieldsLine.set(key, op.line);
 		}
 
 		for (const op of findOps) {
+			if (isTemporaryOp(op, match.features.variables)) continue; // no SQL load on a temp record
 			const recVarLower = op.recordVariable?.toLowerCase() ?? "";
-			if (!setLoadFieldsVars.has(recVarLower)) {
+			const slfLine = setLoadFieldsLine.get(recVarLower);
+			if (slfLine === undefined || slfLine >= op.line) {
 				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
 				patterns.push({
 					id: "missing-setloadfields",
