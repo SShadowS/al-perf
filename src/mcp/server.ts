@@ -1277,4 +1277,26 @@ on the same record variable. This queries all records in the table.
 An event subscriber procedure that contains loops or record operations inside loops.
 Event subscribers are implicit call points that are easy to overlook during tuning.
 **Fix:** Review the subscriber for performance impact and consider batching operations.
+
+### Dangerous Call in Loop
+**Severity:** critical (warning for a Page's implicit per-row loop)
+A Commit(), Error(), or TestField() call inside a loop body — including a
+Report/XMLport/Page \`OnAfterGetRecord\` trigger, which the platform calls once
+per row even with no syntactic loop in the source. Commit() breaks one write
+transaction into N; Error() aborts mid-loop; TestField() is expensive per row.
+**Fix:** Move Commit() outside the loop and commit once. Collect validation
+failures and report them after the loop instead of calling Error()/TestField()
+on every iteration.
+
+### External Call in Loop
+**Severity:** critical (warning for a Page's implicit per-row loop)
+An HttpClient.{Send,Get,Post,Put,Patch,Delete} call (recognized by the receiver
+variable's declared type, not by method name alone) or a bare Sleep(...) call
+inside a loop body — including an implicit per-row trigger. Each iteration is
+a separate network round-trip (or a blocking delay for Sleep); network latency
+dominates everything else in the profile. A separate pattern from Dangerous
+Call in Loop: this is a latency problem, not a transactional one, so the fix
+is different.
+**Fix:** Hoist the call outside the loop, or batch the payload into a single
+request.
 `;

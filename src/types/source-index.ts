@@ -135,6 +135,7 @@ export interface ProcedureFeatures {
 	recordOps: RecordOpInfo[];
 	recordOpsInLoops: RecordOpInfo[];
 	dangerousCallsInLoops: DangerousCallInfo[];
+	externalCallsInLoops: ExternalCallInfo[];
 	variables: VariableInfo[];
 	fieldAccesses: FieldAccessInfo[];
 	nestingDepth: number;
@@ -167,6 +168,39 @@ export interface DangerousCallInfo {
 	line: number;
 	column: number;
 	insideLoop: boolean;
+	/**
+	 * Same meaning as `RecordOpInfo.implicitLoop`: set when `insideLoop` is
+	 * true because this call sits in a per-row trigger (Report/XMLport/Page
+	 * `OnAfterGetRecord`) rather than a syntactic loop. A `Commit()` in a
+	 * report's `OnAfterGetRecord` is commit-per-row — one of the worst BC
+	 * performance bugs there is — and a finding that just says "inside a
+	 * loop" against a trigger with no visible loop reads as a tool bug.
+	 */
+	implicitLoop?: string;
+}
+
+/**
+ * `HttpClient.{Send,Get,Post,Put,Patch,Delete}` calls (recognized by the
+ * receiver variable's declared type, since `Get`/`Delete` collide with
+ * record-op method names) and bare `Sleep(...)` calls. A completely
+ * different bug shape from `DangerousCallInfo`'s Commit/Error/TestField:
+ * those are transactional problems, this is a latency problem -- one
+ * network round-trip (or blocking delay) per iteration.
+ */
+export interface ExternalCallInfo {
+	type:
+		| "HttpClient.Send"
+		| "HttpClient.Get"
+		| "HttpClient.Post"
+		| "HttpClient.Put"
+		| "HttpClient.Patch"
+		| "HttpClient.Delete"
+		| "Sleep";
+	line: number;
+	column: number;
+	insideLoop: boolean;
+	/** Same meaning as `RecordOpInfo.implicitLoop` / `DangerousCallInfo.implicitLoop`. */
+	implicitLoop?: string;
 }
 
 export interface LoopInfo {

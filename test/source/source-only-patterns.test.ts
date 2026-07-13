@@ -3,6 +3,7 @@ import { buildSourceIndex } from "../../src/source/indexer.js";
 import {
 	detectDangerousCallsInLoop,
 	detectEventSubscriberIssues,
+	detectExternalCallInLoop,
 	detectNestedLoops,
 	detectUnfilteredFindSet,
 	detectUnindexedFilters,
@@ -143,6 +144,147 @@ describe("detectDangerousCallsInLoop", () => {
 		const patterns = detectDangerousCallsInLoop(index);
 		const safeCommit = patterns.find((p) => p.title.includes("SafeCommit"));
 		expect(safeCommit).toBeUndefined();
+	});
+});
+
+describe("dangerous-call-in-loop implicit loops (Part B)", () => {
+	test("flags Commit in a report OnAfterGetRecord — commit-per-row", async () => {
+		// A Commit() in a report's OnAfterGetRecord is commit-per-row — one of
+		// the worst BC performance bugs there is. There is no repeat/for/
+		// foreach/while anywhere in the source (SlowReport.al, report 50800):
+		// the platform itself is the loop. Before Part B, dangerousCallsInLoops
+		// was built from syntactic loops only, so this was completely invisible.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectDangerousCallsInLoop(index);
+		const found = patterns.find(
+			(p) =>
+				p.id === "dangerous-call-in-loop" &&
+				p.title.includes("Commit") &&
+				p.involvedMethods.some((m) => m.includes("50800")),
+		);
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("critical");
+		expect(found!.evidence).toContain("Report.OnAfterGetRecord");
+		expect(found!.evidence).toContain("runs once per row");
+		expect(found!.description).toContain("Report.OnAfterGetRecord");
+	});
+
+	test("flags Commit in a Page OnAfterGetRecord at reduced (warning) severity", async () => {
+		// A page renders tens of rows, not a report's millions — same
+		// implicit-loop shape, dropped one severity level, same as the
+		// record-op detectors' Page downgrade.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectDangerousCallsInLoop(index);
+		const found = patterns.find(
+			(p) =>
+				p.id === "dangerous-call-in-loop" &&
+				p.title.includes("Commit") &&
+				p.involvedMethods.some((m) => m.includes("50803")),
+		);
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("warning");
+		expect(found!.evidence).toContain("Page.OnAfterGetRecord");
+	});
+});
+
+describe("external-call-in-loop", () => {
+	test("flags HttpClient.Send() inside a loop", async () => {
+		// One network round-trip per iteration.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		const f = patterns.find(
+			(p) =>
+				p.id === "external-call-in-loop" &&
+				p.involvedMethods.some((m) => m.includes("HttpSendInLoop")),
+		);
+		expect(f).toBeDefined();
+		expect(f?.severity).toBe("critical");
+		expect(f?.suggestion).toMatch(/batch|outside the loop|single request/i);
+	});
+
+	test("does not flag an HttpClient.Send() outside a loop", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		expect(
+			patterns.find((p) =>
+				p.involvedMethods.some((m) => m.includes("HttpSendNoLoop")),
+			),
+		).toBeUndefined();
+	});
+
+	test("leaves dangerous-call-in-loop reporting only Commit/Error/TestField", async () => {
+		// Transactional problems, different fix, separate id. Not merged.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectDangerousCallsInLoop(index);
+		expect(
+			patterns.find((p) =>
+				p.involvedMethods.some((m) => m.includes("HttpSendInLoop")),
+			),
+		).toBeUndefined();
+	});
+
+	test("does not conflate a record Get() with an HttpClient Get() in the same loop", async () => {
+		// Get()/Delete() collide with record-op method names by name alone —
+		// only the HttpClient-typed variable's Get() may become an
+		// external-call-in-loop finding here.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index).filter((p) =>
+			p.involvedMethods.some((m) => m.includes("HttpGetVsRecordGetInLoop")),
+		);
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].id).toBe("external-call-in-loop");
+	});
+
+	test("flags Post/Put/Patch/Delete on an HttpClient, not just Send/Get", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index).filter((p) =>
+			p.involvedMethods.some((m) => m.includes("HttpMethodsInLoop")),
+		);
+		expect(patterns).toHaveLength(4);
+	});
+
+	test("flags a bare Sleep() inside a loop", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		const f = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("SleepInLoop")),
+		);
+		expect(f).toBeDefined();
+		expect(f?.severity).toBe("critical");
+	});
+
+	test("flags HttpClient.Send() in a report OnAfterGetRecord — implicit loop", async () => {
+		// Same implicit-loop shape as the record-op / dangerous-call detectors:
+		// SlowReport.al's OnAfterGetRecord has no repeat/for/foreach/while.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		const f = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("50800")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.severity).toBe("critical");
+		expect(f!.evidence).toContain("Report.OnAfterGetRecord");
+		expect(f!.evidence).toContain("runs once per row");
+		expect(f!.description).toContain("Report.OnAfterGetRecord");
+	});
+
+	test("flags HttpClient.Send() in a Page OnAfterGetRecord at reduced (warning) severity", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		const f = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("50803")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.severity).toBe("warning");
+		expect(f!.evidence).toContain("Page.OnAfterGetRecord");
+	});
+
+	test("is wired into runSourceOnlyDetectors", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = runSourceOnlyDetectors(index);
+		expect(
+			patterns.find((p) => p.id === "external-call-in-loop"),
+		).toBeDefined();
 	});
 });
 

@@ -5,6 +5,11 @@ import type {
 	SourceIndex,
 	TriggerInfo,
 } from "../types/source-index.js";
+import {
+	downgradePageImplicitLoop,
+	loopEvidencePhrase,
+	loopLocationPhrase,
+} from "./implicit-loop.js";
 
 /**
  * Format a member label for use in involvedMethods arrays.
@@ -166,7 +171,7 @@ export function detectEventSubscriberIssues(
  * Detect Commit(), Error(), TestField() calls inside loops.
  * These are severe anti-patterns: Commit flushes the transaction per iteration,
  * Error can abort mid-loop, TestField is expensive per-row.
- * Severity: critical.
+ * Severity: critical (warning for a Page's implicit per-row loop — Task 9 Part B).
  */
 export function detectDangerousCallsInLoop(
 	index: SourceIndex,
@@ -178,20 +183,71 @@ export function detectDangerousCallsInLoop(
 		for (const member of members) {
 			for (const call of member.features.dangerousCallsInLoops) {
 				if (!call.insideLoop) continue;
+				const severity = downgradePageImplicitLoop("critical", call);
 				patterns.push({
 					id: "dangerous-call-in-loop",
-					severity: "critical",
+					severity,
 					title: `${call.type}() inside loop in ${member.name}`,
-					description: `${call.type}() on line ${call.line} is called inside a loop in ${obj.objectType} ${obj.objectName} (${obj.objectId}). Each iteration triggers a separate ${call.type === "Commit" ? "transaction flush" : "error evaluation"}.`,
+					description: `${call.type}() ${loopLocationPhrase(call, call.line, member.file)}. Each iteration triggers a separate ${call.type === "Commit" ? "transaction flush" : "error evaluation"} in ${obj.objectType} ${obj.objectName} (${obj.objectId}).`,
 					impact: 0,
 					involvedMethods: [
 						`${member.name} (${obj.objectType} ${obj.objectId})`,
 					],
-					evidence: `${call.type} at line ${call.line}, column ${call.column}`,
+					evidence: `${call.type} at line ${call.line}, column ${call.column} — ${loopEvidencePhrase(call)}`,
 					suggestion:
 						call.type === "Commit"
 							? "Move Commit() outside the loop. Process all records first, then commit once."
 							: `Consider collecting validation results and reporting ${call.type}() once after the loop.`,
+				});
+			}
+		}
+	}
+
+	return patterns;
+}
+
+/**
+ * Detect HttpClient.{Send,Get,Post,Put,Patch,Delete} calls (recognized by the
+ * receiver variable's declared type) and bare Sleep(...) calls inside loops.
+ *
+ * A separate pattern id from `dangerous-call-in-loop`, not a widened
+ * `DANGEROUS_CALLS` set: Commit/Error/TestField in a loop are *transactional*
+ * problems (a Commit in a loop breaks one write transaction into N); an
+ * external call in a loop is a *latency* problem (N network round-trips, or N
+ * blocking delays) fixed by batching or hoisting — a completely different
+ * suggestion. `Codeunit.Run` in a loop is a transaction-boundary problem and
+ * is deliberately out of scope here (needs its own thinking, per the brief).
+ * Severity: critical (warning for a Page's implicit per-row loop).
+ */
+export function detectExternalCallInLoop(
+	index: SourceIndex,
+): DetectedPattern[] {
+	const patterns: DetectedPattern[] = [];
+
+	for (const obj of index.objects.values()) {
+		const members = [...obj.procedures, ...obj.triggers];
+		for (const member of members) {
+			for (const call of member.features.externalCallsInLoops) {
+				if (!call.insideLoop) continue;
+				const severity = downgradePageImplicitLoop("critical", call);
+				const costPhrase =
+					call.type === "Sleep"
+						? "Each iteration blocks for the full delay, multiplying total run time by the iteration count"
+						: "Each iteration is a separate network round-trip";
+				patterns.push({
+					id: "external-call-in-loop",
+					severity,
+					title: `${call.type}() inside loop in ${member.name}`,
+					description: `${call.type}() ${loopLocationPhrase(call, call.line, member.file)} in ${obj.objectType} ${obj.objectName} (${obj.objectId}). ${costPhrase} — latency dominates everything else in the profile.`,
+					impact: 0,
+					involvedMethods: [
+						`${member.name} (${obj.objectType} ${obj.objectId})`,
+					],
+					evidence: `${call.type}() at line ${call.line}, column ${call.column} — ${loopEvidencePhrase(call)}`,
+					suggestion:
+						call.type === "Sleep"
+							? "Remove Sleep() from the loop, or hoist it outside — a fixed delay per iteration multiplies directly by the iteration count."
+							: "Hoist the call outside the loop, or batch the payload into a single request — N iterations means N round-trips, and network latency dominates everything else in the profile.",
 				});
 			}
 		}
@@ -269,6 +325,7 @@ export function runSourceOnlyDetectors(index: SourceIndex): DetectedPattern[] {
 		...detectUnfilteredFindSet(index),
 		...detectEventSubscriberIssues(index),
 		...detectDangerousCallsInLoop(index),
+		...detectExternalCallInLoop(index),
 		...detectUnindexedFilters(index),
 	];
 

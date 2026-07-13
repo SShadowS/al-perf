@@ -4,6 +4,7 @@ import type { Node as SyntaxNode } from "web-tree-sitter";
 import type {
 	ALFileInfo,
 	DangerousCallInfo,
+	ExternalCallInfo,
 	FieldAccessInfo,
 	LoopInfo,
 	ObjectInfo,
@@ -17,6 +18,7 @@ import type {
 	TriggerInfo,
 	VariableInfo,
 } from "../types/source-index.js";
+import type { ImplicitLoopAware } from "./implicit-loop.js";
 import { parseALSource } from "./parser-init.js";
 
 const RECORD_OPS: Set<string> = new Set([
@@ -549,6 +551,120 @@ function collectDangerousCalls(
 }
 
 /**
+ * The declared type name (as it appears in a `var` section, lowercased) that
+ * marks a variable as an HTTP client. `HttpClient.{Send,Get,Post,Put,Patch,
+ * Delete}` are recognized by this declared type, NOT by method name alone --
+ * `Get`/`Delete` collide with `RECORD_OPS`' method names, so a plain
+ * `Record`-typed variable's `Get()`/`Delete()` must never match here.
+ */
+const HTTPCLIENT_TYPE_NAME = "httpclient";
+
+/** HttpClient method name (lowercase) -> ExternalCallInfo type. */
+const EXTERNAL_HTTP_CALL_CASE_MAP: Record<string, ExternalCallInfo["type"]> = {
+	send: "HttpClient.Send",
+	get: "HttpClient.Get",
+	post: "HttpClient.Post",
+	put: "HttpClient.Put",
+	patch: "HttpClient.Patch",
+	delete: "HttpClient.Delete",
+};
+
+/**
+ * Build a lookup from variable name (lowercase) to declared type string
+ * (lowercase, trimmed) for the variables in scope of the procedure/trigger
+ * currently being walked. Used to gate `HttpClient` member calls by the
+ * receiver's actual declared type rather than by method name alone.
+ */
+function buildVariableTypeMap(
+	variables: VariableInfo[] | undefined,
+): Map<string, string> {
+	const map = new Map<string, string>();
+	if (!variables) return map;
+	for (const v of variables) {
+		map.set(v.name.toLowerCase(), v.typeStr.trim().toLowerCase());
+	}
+	return map;
+}
+
+/**
+ * Collect external-call_expression nodes within a subtree: `HttpClient.
+ * {Send,Get,Post,Put,Patch,Delete}` (gated on the receiver's declared type
+ * via `variableTypes`) and bare `Sleep(...)` (a global BC procedure, no
+ * receiver, no type resolution needed -- and no collision with `RECORD_OPS`,
+ * since "sleep" isn't one of them).
+ */
+function collectExternalCalls(
+	node: SyntaxNode,
+	variableTypes: Map<string, string>,
+): Array<{ node: SyntaxNode; callType: ExternalCallInfo["type"] }> {
+	const calls: Array<{ node: SyntaxNode; callType: ExternalCallInfo["type"] }> =
+		[];
+
+	function walk(n: SyntaxNode) {
+		if (n.type === "call_expression") {
+			const funcNode = n.childForFieldName("function") ?? n.namedChildren[0];
+			if (funcNode) {
+				if (funcNode.type === "member_expression") {
+					const objNode =
+						funcNode.childForFieldName("object") ?? funcNode.namedChildren[0];
+					const propNode =
+						funcNode.childForFieldName("member") ?? funcNode.namedChildren[1];
+					if (objNode && propNode) {
+						const methodName = stripQuotes(propNode.text).toLowerCase();
+						const declaredType = variableTypes.get(objNode.text.toLowerCase());
+						if (
+							declaredType === HTTPCLIENT_TYPE_NAME &&
+							methodName in EXTERNAL_HTTP_CALL_CASE_MAP
+						) {
+							calls.push({
+								node: n,
+								callType: EXTERNAL_HTTP_CALL_CASE_MAP[methodName],
+							});
+						}
+					}
+				} else if (
+					funcNode.type === "identifier" ||
+					funcNode.type === "quoted_identifier"
+				) {
+					const name = stripQuotes(funcNode.text).toLowerCase();
+					if (name === "sleep") {
+						calls.push({ node: n, callType: "Sleep" });
+					}
+				}
+			}
+		}
+		for (const child of n.namedChildren) {
+			walk(child);
+		}
+	}
+
+	walk(node);
+	return calls;
+}
+
+/**
+ * Promote items not already inside a syntactic loop into `insideLoop` when
+ * the enclosing member is a per-row trigger (Task 7 — Report/XMLport/Page
+ * `OnAfterGetRecord`). Mutates each promoted item in place and appends it to
+ * `inLoopList`. Shared across `recordOps`, `dangerousCalls`, and
+ * `externalCalls` -- all three carry the identical `{ insideLoop,
+ * implicitLoop }` shape and need the identical promotion + self-explanation.
+ */
+function promoteImplicitLoopItems<T extends ImplicitLoopAware>(
+	items: T[],
+	inLoopList: T[],
+	implicitLoop: string,
+): void {
+	for (const item of items) {
+		if (!item.insideLoop) {
+			item.insideLoop = true;
+			item.implicitLoop = implicitLoop;
+			inLoopList.push(item);
+		}
+	}
+}
+
+/**
  * Collect field access nodes: Rec.Field or Rec."Field Name" (member_expression not in call).
  */
 function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
@@ -705,6 +821,14 @@ interface ObjectContext {
 	 * not a dataitem name.
 	 */
 	dataitemName?: string;
+	/**
+	 * This member's own `var`-section declarations, extracted by the caller
+	 * *before* calling `extractFeatures` (order matters — see call sites in
+	 * `walkForMembers`). Threaded in so `collectExternalCalls` can resolve a
+	 * receiver variable's declared type (e.g. distinguishing an `HttpClient`
+	 * variable's `.Get()` from a `Record`-typed variable's `.Get()`).
+	 */
+	variables?: VariableInfo[];
 }
 
 /**
@@ -720,6 +844,7 @@ function extractFeatures(
 			recordOps: [],
 			recordOpsInLoops: [],
 			dangerousCallsInLoops: [],
+			externalCallsInLoops: [],
 			variables: [],
 			fieldAccesses: [],
 			nestingDepth: 0,
@@ -756,9 +881,46 @@ function extractFeatures(
 		}
 	}
 
+	// Collect dangerous calls (Commit, Error, TestField)
+	const rawDangerousCalls = collectDangerousCalls(codeBlock);
+	const dangerousCalls: DangerousCallInfo[] = [];
+	const dangerousCallsInLoops: DangerousCallInfo[] = [];
+	for (const dc of rawDangerousCalls) {
+		const insideLoop = loopNodes.some((ln) => isDescendantOf(dc.node, ln));
+		const dcInfo: DangerousCallInfo = {
+			type: dc.callType,
+			line: dc.node.startPosition.row + 1,
+			column: dc.node.startPosition.column,
+			insideLoop,
+		};
+		dangerousCalls.push(dcInfo);
+		if (insideLoop) {
+			dangerousCallsInLoops.push(dcInfo);
+		}
+	}
+
+	// Collect external calls (HttpClient.{Send,Get,Post,Put,Patch,Delete}, Sleep)
+	const variableTypes = buildVariableTypeMap(context?.variables);
+	const rawExternalCalls = collectExternalCalls(codeBlock, variableTypes);
+	const externalCalls: ExternalCallInfo[] = [];
+	const externalCallsInLoops: ExternalCallInfo[] = [];
+	for (const ec of rawExternalCalls) {
+		const insideLoop = loopNodes.some((ln) => isDescendantOf(ec.node, ln));
+		const ecInfo: ExternalCallInfo = {
+			type: ec.callType,
+			line: ec.node.startPosition.row + 1,
+			column: ec.node.startPosition.column,
+			insideLoop,
+		};
+		externalCalls.push(ecInfo);
+		if (insideLoop) {
+			externalCallsInLoops.push(ecInfo);
+		}
+	}
+
 	// Per-row triggers (Report/XMLport/Page OnAfterGetRecord): the platform
 	// calls this trigger once per row, so its whole body is a loop body even
-	// though nothing here is syntactically a loop. Promote every op that
+	// though nothing here is syntactically a loop. Promote every op/call that
 	// isn't already inside a real loop, and tag it so findings can explain
 	// themselves — "inside a loop" with no visible loop reads as a tool bug.
 	if (
@@ -766,28 +928,13 @@ function extractFeatures(
 		isPerRowTrigger(context.objectType, context.triggerName)
 	) {
 		const implicitLoop = `${context.objectType}.${context.triggerName}`;
-		for (const opInfo of recordOps) {
-			if (!opInfo.insideLoop) {
-				opInfo.insideLoop = true;
-				opInfo.implicitLoop = implicitLoop;
-				recordOpsInLoops.push(opInfo);
-			}
-		}
-	}
-
-	// Collect dangerous calls (Commit, Error, TestField)
-	const rawDangerousCalls = collectDangerousCalls(codeBlock);
-	const dangerousCallsInLoops: DangerousCallInfo[] = [];
-	for (const dc of rawDangerousCalls) {
-		const insideLoop = loopNodes.some((ln) => isDescendantOf(dc.node, ln));
-		if (insideLoop) {
-			dangerousCallsInLoops.push({
-				type: dc.callType,
-				line: dc.node.startPosition.row + 1,
-				column: dc.node.startPosition.column,
-				insideLoop: true,
-			});
-		}
+		promoteImplicitLoopItems(recordOps, recordOpsInLoops, implicitLoop);
+		promoteImplicitLoopItems(
+			dangerousCalls,
+			dangerousCallsInLoops,
+			implicitLoop,
+		);
+		promoteImplicitLoopItems(externalCalls, externalCallsInLoops, implicitLoop);
 	}
 
 	// Collect field accesses
@@ -801,6 +948,7 @@ function extractFeatures(
 		recordOps,
 		recordOpsInLoops,
 		dangerousCallsInLoops,
+		externalCallsInLoops,
 		variables: [],
 		fieldAccesses,
 		nestingDepth,
@@ -1084,11 +1232,16 @@ export async function indexALFile(
 			if (child.type === "procedure") {
 				const name = extractProcedureName(child);
 				const codeBlock = findCodeBlock(child);
+				// Variables must be extracted BEFORE extractFeatures — it needs
+				// them (via context.variables) to resolve a receiver variable's
+				// declared type for external-call detection (e.g. HttpClient).
+				const variables = extractVariables(child);
 				const features = extractFeatures(codeBlock, {
 					objectType,
 					dataitemName,
+					variables,
 				});
-				features.variables = extractVariables(child);
+				features.variables = variables;
 
 				procedures.push({
 					name,
@@ -1107,12 +1260,14 @@ export async function indexALFile(
 			} else if (child.type === "trigger_declaration") {
 				const name = extractTriggerName(child);
 				const codeBlock = findCodeBlock(child);
+				const variables = extractVariables(child);
 				const features = extractFeatures(codeBlock, {
 					objectType,
 					triggerName: name,
 					dataitemName,
+					variables,
 				});
-				features.variables = extractVariables(child);
+				features.variables = variables;
 
 				triggers.push({
 					name,

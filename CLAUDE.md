@@ -100,12 +100,13 @@ Pattern detectors are composable functions with signature:
 type PatternDetector = (profile: ProcessedProfile, sourceIndex?: SourceIndex) => DetectedPattern[];
 ```
 
-Three categories (20 detectors):
+Three categories (21 detectors):
 - **Profile-only** (7): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, recursive-call, event-chain
 - **Source-correlated** (7): calcfields-in-loop (with CalcFormula severity graduation), modify-in-loop, insert-in-loop, delete-in-loop, record-op-in-loop, missing-setloadfields, incomplete-setloadfields
   - "Loop" here includes **implicit** loops, not just `repeat`/`for`/`foreach`/`while`: a `Report`/`XMLport`/`Page` `OnAfterGetRecord` trigger runs once per row by platform contract, even with no syntactic loop in the source. `PER_ROW_TRIGGERS` in `src/source/indexer.ts` promotes these trigger bodies to loop bodies (`OnPreDataItem`/`OnPostDataItem` and table triggers like `OnValidate`/`OnInsert`/`OnModify` are excluded — they run once, or once per operation, not once per row). Findings raised from an implicit loop say so explicitly in their evidence/description (`RecordOpInfo.implicitLoop`), and a Page-sourced implicit-loop finding is one severity level below the same finding on a Report/XMLport.
   - `insert-in-loop` and `delete-in-loop` are separate detectors from `modify-in-loop` (not one widened detector): the fixes differ (temp table / bulk insert vs. `DeleteAll` with a filter), and separate pattern ids keep each detector's finding-lifecycle history independent. `delete-in-loop` also fires on `DeleteAll()` found inside a loop — deliberately, since `DeleteAll` is meant to replace the loop, not live inside one.
-- **Source-only** (6): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, dangerous-call-in-loop, unindexed-filter
+- **Source-only** (7): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, dangerous-call-in-loop, external-call-in-loop, unindexed-filter
+  - `dangerous-call-in-loop` (`Commit`/`Error`/`TestField`) and `external-call-in-loop` (`HttpClient.{Send,Get,Post,Put,Patch,Delete}`, recognized by the receiver variable's **declared type** — not by method name alone, since `Get`/`Delete` collide with record-op method names — plus bare `Sleep(...)`) are separate detectors, not one widened set: `Commit` in a loop is a *transactional* problem (one write transaction becomes N); an external call in a loop is a *latency* problem (N network round-trips, or N blocking delays), fixed by batching the request or hoisting it out of the loop — a completely different suggestion. Both detectors inherit the same implicit-loop promotion/evidence (`DangerousCallInfo.implicitLoop` / `ExternalCallInfo.implicitLoop`, shared helpers in `src/source/implicit-loop.ts`) and the same Page severity downgrade as the source-correlated record-op detectors above. `Codeunit.Run` in a loop is a transaction-boundary problem and is deliberately out of scope for `external-call-in-loop`.
 
 ### ir-json Ingestion
 

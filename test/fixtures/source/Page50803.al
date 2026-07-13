@@ -15,6 +15,9 @@ page 50803 "Slow Page"
         LedgerEntry: Record "Cust. Ledger Entry";
         NewEntry: Record "Cust. Ledger Entry";
         OldEntry: Record "Cust. Ledger Entry";
+        Client: HttpClient;
+        Request: HttpRequestMessage;
+        Response: HttpResponseMessage;
     begin
         // A page's OnAfterGetRecord runs once per row RENDERED (tens), not
         // per table row (millions) like a report -- same implicit-loop
@@ -25,5 +28,9 @@ page 50803 "Slow Page"
         // modify-in-loop does.
         NewEntry.Insert();
         OldEntry.Delete();
+        // Same downgrade shape for dangerous-call-in-loop and
+        // external-call-in-loop (Task 9 Part B).
+        Client.Send(Request, Response);
+        Commit();
     end;
 }

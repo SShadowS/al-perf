@@ -6,6 +6,11 @@ import type {
 	TableFieldInfo,
 	VariableInfo,
 } from "../types/source-index.js";
+import {
+	downgradePageImplicitLoop,
+	loopEvidencePhrase,
+	loopLocationPhrase,
+} from "./implicit-loop.js";
 import { matchToSource } from "./locator.js";
 
 /**
@@ -24,47 +29,6 @@ function isTemporaryOp(op: RecordOpInfo, variables: VariableInfo[]): boolean {
  */
 function methodLabel(m: MethodBreakdown): string {
 	return `${m.functionName} (${m.objectType} ${m.objectId})`;
-}
-
-/**
- * Describe where a record op runs, for use inside a finding's `description`.
- *
- * An op promoted from a per-row trigger (Task 7 — Report/XMLport/Page
- * `OnAfterGetRecord`) has no `repeat`/`for`/`foreach`/`while` anywhere in the
- * source. A finding that just says "inside a loop" in that case reads as a
- * tool bug, so implicit-loop findings say explicitly what actually runs it
- * once per row instead.
- */
-function loopLocationPhrase(
-	op: RecordOpInfo,
-	line: number,
-	file: string,
-): string {
-	return op.implicitLoop
-		? `executes once per row at line ${line} in ${file} — ${op.implicitLoop} is called once per row by the platform, even though there is no repeat/for/foreach/while anywhere in the source`
-		: `is called inside a loop at line ${line} in ${file}`;
-}
-
-/** Evidence-string counterpart of `loopLocationPhrase`. */
-function loopEvidencePhrase(op: RecordOpInfo): string {
-	return op.implicitLoop
-		? `${op.implicitLoop} runs once per row — this call executes once per row (implicit loop; no syntactic loop in the source)`
-		: "inside loop";
-}
-
-/**
- * A Page's `OnAfterGetRecord` is bounded by rows rendered (tens), not table
- * rows (millions) like a Report or XMLport dataitem. Same bug shape, an order
- * of magnitude less costly — still worth flagging, but one severity level
- * below the report/XMLport case.
- */
-function downgradePageImplicitLoop(
-	severity: "critical" | "warning",
-	op: RecordOpInfo,
-): "critical" | "warning" {
-	return severity === "critical" && op.implicitLoop?.startsWith("Page.")
-		? "warning"
-		: severity;
 }
 
 /** Aggregation CalcFormula types that cause full table scans */
