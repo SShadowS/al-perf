@@ -1,5 +1,7 @@
+import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern, PatternDetector } from "../types/patterns.js";
 import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
+import { aggregateByMethod } from "./aggregator.js";
 import { isIdleNode } from "./processor.js";
 
 /**
@@ -12,7 +14,45 @@ export function formatMethodRef(node: ProcessedNode): string {
 }
 
 /**
- * Detect any single method consuming >50% of total selfTime.
+ * Format an aggregated method (from aggregateByMethod) the same way as
+ * formatMethodRef. MethodBreakdown does not carry a ProcessedNode's
+ * callFrame/applicationDefinition, so it gets its own formatter rather than
+ * a cast.
+ */
+export function formatMethodBreakdownRef(
+	method: Pick<MethodBreakdown, "functionName" | "objectType" | "objectId">,
+): string {
+	return `${method.functionName} (${method.objectType} ${method.objectId})`;
+}
+
+function callSiteWord(count: number): string {
+	return count === 1 ? "call site" : "call sites";
+}
+
+/**
+ * Group key for a profile node's method. MUST match aggregateByMethod's key
+ * (src/core/aggregator.ts) so per-method call-site counts line up with the
+ * aggregate they describe.
+ */
+function methodGroupKey(node: ProcessedNode): string {
+	const { objectType, objectId } = node.applicationDefinition;
+	return `${node.callFrame.functionName}_${objectType}_${objectId}`;
+}
+
+/**
+ * Detect any single method consuming >50% of total selfTime, aggregated
+ * across all of its call sites.
+ *
+ * A profile node is one call site — the same method invoked from three
+ * places is three nodes. Thresholding per node (the old implementation)
+ * misses a method that burns 90% of total self-time spread 30/30/30 across
+ * three call sites: no single node ever crosses 50%, so the tool reported no
+ * dominant method while one method ate the whole profile.
+ * `aggregateByMethod` already sums self-time by
+ * (functionName, objectType, objectId) for the breakdown table (see
+ * analyzer.ts) — this detector now thresholds on that same aggregate, so the
+ * detector and the breakdown table agree on what a "method" is.
+ *
  * Severity: critical.
  */
 export const detectSingleMethodDominance: PatternDetector = (
@@ -20,21 +60,47 @@ export const detectSingleMethodDominance: PatternDetector = (
 ): DetectedPattern[] => {
 	const patterns: DetectedPattern[] = [];
 
+	// Per-method call sites, needed to disclose the call-site count and to
+	// find the representative (highest self-time) node for the evidence
+	// string. The aggregate's own selfTime/selfTimePercent — not the
+	// representative node's — drive impact/evidence: using the
+	// representative's own (smaller) numbers would silently drop the other
+	// call sites and under-report the true aggregate.
+	const callSitesByMethod = new Map<string, ProcessedNode[]>();
 	for (const node of profile.allNodes) {
 		if (isIdleNode(node)) continue;
-		if (node.selfTimePercent > 50) {
-			patterns.push({
-				id: "single-method-dominance",
-				severity: "critical",
-				title: `${node.callFrame.functionName} dominates profile`,
-				description: `${formatMethodRef(node)} accounts for ${node.selfTimePercent.toFixed(1)}% of total self-time.`,
-				impact: node.selfTime,
-				involvedMethods: [formatMethodRef(node)],
-				evidence: `selfTimePercent = ${node.selfTimePercent.toFixed(1)}% (threshold: 50%)`,
-				suggestion:
-					"Investigate this method for tight computation loops or excessive calls. Consider caching results or reducing call frequency.",
-			});
+		const key = methodGroupKey(node);
+		let sites = callSitesByMethod.get(key);
+		if (!sites) {
+			sites = [];
+			callSitesByMethod.set(key, sites);
 		}
+		sites.push(node);
+	}
+
+	for (const method of aggregateByMethod(profile)) {
+		if (method.selfTimePercent <= 50) continue;
+
+		const key = `${method.functionName}_${method.objectType}_${method.objectId}`;
+		const callSites = callSitesByMethod.get(key);
+		if (!callSites || callSites.length === 0) continue;
+
+		const representative = callSites.reduce((max, node) =>
+			node.selfTime > max.selfTime ? node : max,
+		);
+		const sites = callSiteWord(callSites.length);
+
+		patterns.push({
+			id: "single-method-dominance",
+			severity: "critical",
+			title: `${method.functionName} dominates profile`,
+			description: `${formatMethodBreakdownRef(method)} accounts for ${method.selfTimePercent.toFixed(1)}% of total self-time, aggregated across ${callSites.length} ${sites}.`,
+			impact: method.selfTime,
+			involvedMethods: [formatMethodBreakdownRef(method)],
+			evidence: `selfTimePercent = ${method.selfTimePercent.toFixed(1)}% aggregated across ${callSites.length} ${sites} (largest single call site: ${representative.selfTimePercent.toFixed(1)}%) (threshold: 50%)`,
+			suggestion:
+				"Investigate this method for tight computation loops or excessive calls. Consider caching results or reducing call frequency.",
+		});
 	}
 
 	return patterns;
@@ -254,41 +320,88 @@ export const detectRepeatedSiblings: PatternDetector = (
 
 /**
  * Detect event subscriber hotspots: methods starting with OnBefore/OnAfter/HandleOn
- * that collectively consume >10% of total selfTime.
+ * that collectively consume >10% of total selfTime, aggregated across call sites.
+ *
+ * Has the identical per-node blindness detectSingleMethodDominance had: the
+ * same subscriber invoked from several call sites used to be listed (and
+ * counted) once per call site instead of once per method. Grouped here by
+ * method before the involvedMethods list and counts are built, the same fix
+ * applied to detectSingleMethodDominance.
+ *
+ * Aggregation is done inline rather than via aggregateByMethod: that helper
+ * sorts its result by selfTime descending, but involvedMethods[0] is the
+ * fingerprint anchor (see wire.ts ANCHOR POLICY) and must stay a
+ * deterministic, tree-traversal-ordered representative — re-sorting by heat
+ * would split identities whenever two subscribers traded places. The Map
+ * below is built by iterating profile.allNodes in order, so insertion order
+ * (and therefore Array.from(...values())) is first-appearance order.
+ *
  * Severity: warning.
  */
 export const detectEventSubscriberHotspot: PatternDetector = (
 	profile: ProcessedProfile,
 ): DetectedPattern[] => {
 	const eventPrefixes = ["OnBefore", "OnAfter", "HandleOn"];
+	const isEventName = (name: string) =>
+		eventPrefixes.some((prefix) => name.startsWith(prefix));
 
-	const eventNodes = profile.allNodes.filter((node) =>
-		eventPrefixes.some((prefix) =>
-			node.callFrame.functionName.startsWith(prefix),
-		),
-	);
+	interface EventMethodAggregate {
+		functionName: string;
+		objectType: string;
+		objectId: number;
+		selfTime: number;
+		selfTimePercent: number;
+		callSiteCount: number;
+	}
+	const methods = new Map<string, EventMethodAggregate>();
 
-	if (eventNodes.length === 0) return [];
+	for (const node of profile.allNodes) {
+		if (isIdleNode(node) || !isEventName(node.callFrame.functionName)) continue;
+		const key = methodGroupKey(node);
+		let entry = methods.get(key);
+		if (!entry) {
+			const { objectType, objectId } = node.applicationDefinition;
+			entry = {
+				functionName: node.callFrame.functionName,
+				objectType,
+				objectId,
+				selfTime: 0,
+				selfTimePercent: 0,
+				callSiteCount: 0,
+			};
+			methods.set(key, entry);
+		}
+		entry.selfTime += node.selfTime;
+		entry.selfTimePercent += node.selfTimePercent;
+		entry.callSiteCount += 1;
+	}
 
-	const totalSelfTimePercent = eventNodes.reduce(
-		(sum, n) => sum + n.selfTimePercent,
+	if (methods.size === 0) return [];
+
+	const aggregated = Array.from(methods.values());
+	const totalSelfTimePercent = aggregated.reduce(
+		(sum, m) => sum + m.selfTimePercent,
 		0,
 	);
 
 	if (totalSelfTimePercent <= 10) return [];
 
-	const totalImpact = eventNodes.reduce((sum, n) => sum + n.selfTime, 0);
-	const involvedMethods = eventNodes.map(formatMethodRef);
+	const totalImpact = aggregated.reduce((sum, m) => sum + m.selfTime, 0);
+	const totalCallSites = aggregated.reduce(
+		(sum, m) => sum + m.callSiteCount,
+		0,
+	);
+	const involvedMethods = aggregated.map(formatMethodBreakdownRef);
 
 	return [
 		{
 			id: "event-subscriber-hotspot",
 			severity: "warning",
 			title: `Event subscribers consume ${totalSelfTimePercent.toFixed(1)}% of self-time`,
-			description: `${eventNodes.length} event subscriber methods (OnBefore/OnAfter/HandleOn) collectively account for ${totalSelfTimePercent.toFixed(1)}% of total self-time.`,
+			description: `${aggregated.length} event subscriber method(s) (OnBefore/OnAfter/HandleOn), aggregated across ${totalCallSites} ${callSiteWord(totalCallSites)}, collectively account for ${totalSelfTimePercent.toFixed(1)}% of total self-time.`,
 			impact: totalImpact,
 			involvedMethods,
-			evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${eventNodes.length} methods (threshold: 10%)`,
+			evidence: `Combined selfTimePercent = ${totalSelfTimePercent.toFixed(1)}% across ${aggregated.length} method(s), aggregated across ${totalCallSites} ${callSiteWord(totalCallSites)} (threshold: 10%)`,
 			suggestion:
 				"This event subscriber is consuming significant time. Review whether it needs to run for every event, or if it can be filtered or optimized.",
 		},
