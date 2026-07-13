@@ -1215,6 +1215,21 @@ A Modify() call inside a loop body. Each Modify causes a database write. Inside 
 this can cause severe performance degradation.
 **Fix:** Collect changes and apply them after the loop, or use ModifyAll if possible.
 
+### Insert in Loop
+**Severity:** critical
+An Insert() call inside a loop body. Each Insert causes a separate database write. Inside
+a loop, this is the same N+1 shape as Modify in Loop, but the fix is different: batching
+inserts, not batching updates.
+**Fix:** Build a temporary table and insert the records once after the loop, or use a
+bulk-insert pattern.
+
+### Delete in Loop
+**Severity:** critical
+A Delete() or DeleteAll() call inside a loop body. Each call causes a separate database
+write. DeleteAll() inside a loop is flagged too — a loop around DeleteAll() is already the
+bug, since DeleteAll() exists to replace the loop, not to run inside one.
+**Fix:** Use DeleteAll() with a filter instead of deleting row by row.
+
 ### Record Operation in Loop
 **Severity:** critical
 A record operation (FindSet, FindFirst, Get, etc.) inside a loop body. Each call is a

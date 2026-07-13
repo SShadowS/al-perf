@@ -58,12 +58,14 @@ codeunit 50920 "Insert Delete Loop Patterns"
     var
         SalesLine: Record "Sales Line";
         NewLine: Record "Sales Line";
+        OldLine: Record "Sales Line";
     begin
         SalesLine.SetRange("Document No.", 'TEST');
         if SalesLine.FindSet() then
             repeat
                 SalesLine.Modify();
                 NewLine.Insert();
+                OldLine.Delete();
             until SalesLine.Next() = 0;
     end;
 }

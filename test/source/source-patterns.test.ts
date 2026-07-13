@@ -85,8 +85,10 @@ describe("detectModifyInLoop", () => {
 		const patterns = runSourceDetectors([method], sourceIndex);
 		const modify = patterns.filter((p) => p.id === "modify-in-loop");
 		const insert = patterns.filter((p) => p.id === "insert-in-loop");
+		const del = patterns.filter((p) => p.id === "delete-in-loop");
 		expect(modify.length).toBe(1);
 		expect(insert.length).toBe(1);
+		expect(del.length).toBe(1);
 	});
 });
 
@@ -388,6 +390,67 @@ describe("per-row triggers are loop bodies", () => {
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].severity).toBe("warning");
 		expect(patterns[0].evidence).toContain("Page.OnAfterGetRecord");
+	});
+
+	it("flags Insert in a report OnAfterGetRecord — insert-in-loop inherits the implicit-loop explanation", () => {
+		// Same shape as the calcfields-in-loop test above: Insert() here has no
+		// visible loop in the source either. The two new detectors (Task 2)
+		// must not be exempt from the implicit-loop explanation (Task 7).
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Report",
+			objectId: 50800,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		const found = patterns.find((p) => p.id === "insert-in-loop");
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("critical");
+		expect(found!.evidence).toContain("Report.OnAfterGetRecord");
+		expect(found!.evidence).toContain("runs once per row");
+		expect(found!.description).toContain("Report.OnAfterGetRecord");
+	});
+
+	it("flags Delete in a report OnAfterGetRecord — delete-in-loop inherits the implicit-loop explanation", () => {
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Report",
+			objectId: 50800,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		const found = patterns.find((p) => p.id === "delete-in-loop");
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("critical");
+		expect(found!.evidence).toContain("Report.OnAfterGetRecord");
+		expect(found!.evidence).toContain("runs once per row");
+		expect(found!.description).toContain("Report.OnAfterGetRecord");
+	});
+
+	it("flags Insert in a Page OnAfterGetRecord at reduced (warning) severity", () => {
+		// Same downgrade shape as the Modify-in-a-Page test above: a page
+		// renders tens of rows, not a report's millions.
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Page",
+			objectId: 50803,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		const found = patterns.find((p) => p.id === "insert-in-loop");
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("warning");
+		expect(found!.evidence).toContain("Page.OnAfterGetRecord");
+	});
+
+	it("flags Delete in a Page OnAfterGetRecord at reduced (warning) severity", () => {
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Page",
+			objectId: 50803,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		const found = patterns.find((p) => p.id === "delete-in-loop");
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("warning");
+		expect(found!.evidence).toContain("Page.OnAfterGetRecord");
 	});
 
 	it("does not promote table triggers (OnModify) to implicit loops", () => {
