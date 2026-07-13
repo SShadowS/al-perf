@@ -83,6 +83,28 @@ const OBJECT_TYPE_MAP: Record<string, string> = {
 	permissionset_declaration: "PermissionSet",
 };
 
+/**
+ * Object types whose procedures/triggers see an implicit, unqualified record
+ * variable -- a bare `FindSet();`, `Modify();`, `CalcFields(Amount);` with no
+ * receiver is a record operation there, not a local procedure call. A
+ * Codeunit has no implicit record, so a bare `Get(...)` there is a normal
+ * procedure call and must NOT be collected.
+ *
+ * Values are exactly the reachable strings `OBJECT_TYPE_MAP` produces above
+ * (note `"XMLport"`, not `"XmlPort"`). A standalone request page (`PageType =
+ * RequestPage`) is still a `page_declaration` -- objectType `"Page"` -- so it
+ * is already covered by `"Page"` and does not need its own entry; there is no
+ * `OBJECT_TYPE_MAP` value that is literally `"RequestPage"`. A key that can
+ * never match type-checks fine and silently does nothing (per Task 7's own
+ * casing warning), so it is deliberately left out here.
+ */
+const IMPLICIT_RECORD_OBJECT_TYPES = new Set([
+	"Table",
+	"Page",
+	"Report",
+	"XMLport",
+]);
+
 const LOOP_NODE_TYPES = new Set([
 	"repeat_statement",
 	"for_statement",
@@ -317,8 +339,17 @@ function collectLoopNodes(node: SyntaxNode): SyntaxNode[] {
 /**
  * Collect all record operation call_expression nodes within a subtree.
  * Returns [node, methodName, recordVariable, fieldArgument] tuples.
+ *
+ * `context` lets this recognize bare, receiver-less calls (`CalcFields(Amount);`)
+ * as record ops on the implicit record -- idiomatic in Table/Page/Report/XMLport
+ * code -- as opposed to a `member_expression` call on an explicit variable
+ * (`SomeRec.CalcFields(...)`). Without `context` (or outside an object with an
+ * implicit record), only `member_expression` calls are collected.
  */
-function collectRecordOps(node: SyntaxNode): Array<{
+function collectRecordOps(
+	node: SyntaxNode,
+	context?: ObjectContext,
+): Array<{
 	node: SyntaxNode;
 	methodName: string;
 	recordVariable: string;
@@ -332,6 +363,14 @@ function collectRecordOps(node: SyntaxNode): Array<{
 		fieldArgument?: string;
 		allFieldArguments?: string[];
 	}> = [];
+
+	const hasImplicitRecord =
+		!!context && IMPLICIT_RECORD_OBJECT_TYPES.has(context.objectType);
+	// The implicit record's own name: a Report/XMLport dataitem's instance name
+	// (e.g. "CustLedgerEntry") when the bare call sits inside that dataitem --
+	// reports/XMLports have no variable literally named `Rec`. A Table/Page has
+	// no dataitem wrapper, so its implicit record genuinely is `Rec`.
+	const implicitRecordVariable = context?.dataitemName ?? "Rec";
 
 	function extractFieldArgument(
 		callNode: SyntaxNode,
@@ -388,6 +427,31 @@ function collectRecordOps(node: SyntaxNode): Array<{
 								allFieldArguments: extractAllFieldArguments(n, methodName),
 							});
 						}
+					}
+				} else if (
+					hasImplicitRecord &&
+					(funcNode.type === "identifier" ||
+						funcNode.type === "quoted_identifier")
+				) {
+					// A plain-identifier call with no receiver -- `CalcFields(Amount);`,
+					// `FindSet();`, `Modify();` -- is a record op on the implicit record
+					// here, gated on the enclosing object actually having one (see
+					// IMPLICIT_RECORD_OBJECT_TYPES).
+					//
+					// Residual false positive, accepted and documented rather than
+					// dropping every implicit-record call in every table, page, report
+					// and XMLport: a *local procedure* named `Get` or `Count` inside one
+					// of these objects now also reads as a record op. That is rare, and
+					// a far smaller error than the silent blind spot this branch fixes.
+					const methodName = stripQuotes(funcNode.text);
+					if (RECORD_OPS.has(methodName.toLowerCase())) {
+						ops.push({
+							node: n,
+							methodName,
+							recordVariable: implicitRecordVariable,
+							fieldArgument: extractFieldArgument(n, methodName),
+							allFieldArguments: extractAllFieldArguments(n, methodName),
+						});
 					}
 				}
 			}
@@ -579,6 +643,14 @@ interface ObjectContext {
 	objectType: string;
 	/** The trigger name, e.g. "OnAfterGetRecord". Undefined for procedures. */
 	triggerName?: string;
+	/**
+	 * Name of the nearest enclosing Report `dataitem` or XMLport `tableelement`
+	 * instance (e.g. `"CustLedgerEntry"` in `dataitem(CustLedgerEntry; "Cust.
+	 * Ledger Entry")`). Undefined outside a dataitem/tableelement — which
+	 * includes Table and Page, where the implicit record genuinely is `Rec`,
+	 * not a dataitem name.
+	 */
+	dataitemName?: string;
 }
 
 /**
@@ -609,7 +681,7 @@ function extractFeatures(
 	}));
 
 	// Collect record ops
-	const rawOps = collectRecordOps(codeBlock);
+	const rawOps = collectRecordOps(codeBlock, context);
 	const recordOps: RecordOpInfo[] = [];
 	const recordOpsInLoops: RecordOpInfo[] = [];
 
@@ -884,6 +956,30 @@ function extractTableKeys(declNode: SyntaxNode): TableKeyInfo[] {
 }
 
 /**
+ * If `node` is a Report dataitem or an XMLport tableelement, return its
+ * instance name (e.g. `"CustLedgerEntry"` in `dataitem(CustLedgerEntry; "Cust.
+ * Ledger Entry")`); otherwise undefined.
+ *
+ * A Report dataitem is its own node type, `report_dataitem`. An XMLport
+ * tableelement shares its node type, `xmlport_element`, with textelement and
+ * fieldelement -- those have no table binding (just a name, no
+ * `quoted_identifier` child), so only treat an `xmlport_element` as
+ * record-bearing when a table reference is actually present.
+ */
+function findDataitemName(node: SyntaxNode): string | undefined {
+	if (node.type === "report_dataitem") {
+		return node.namedChildren.find((c) => c.type === "identifier")?.text;
+	}
+	if (
+		node.type === "xmlport_element" &&
+		node.namedChildren.some((c) => c.type === "quoted_identifier")
+	) {
+		return node.namedChildren.find((c) => c.type === "identifier")?.text;
+	}
+	return undefined;
+}
+
+/**
  * Parse a single AL file and return its ObjectInfo.
  */
 export async function indexALFile(
@@ -922,13 +1018,22 @@ export async function indexALFile(
 	const procedures: ProcedureInfo[] = [];
 	const triggers: TriggerInfo[] = [];
 
-	// Walk children of the declaration node to find procedures and triggers
-	function walkForMembers(node: SyntaxNode) {
+	// Walk children of the declaration node to find procedures and triggers.
+	// `dataitemName` is the nearest enclosing Report dataitem / XMLport
+	// tableelement instance name, threaded down so triggers nested inside one
+	// (e.g. a dataitem's OnAfterGetRecord) know their implicit record is that
+	// dataitem, not `Rec`. Updated only when descending into a node that is
+	// itself one; preserved for every other container node in between
+	// (report_body, xmlport_body, declaration_body, ...).
+	function walkForMembers(node: SyntaxNode, dataitemName?: string) {
 		for (const child of node.namedChildren) {
 			if (child.type === "procedure") {
 				const name = extractProcedureName(child);
 				const codeBlock = findCodeBlock(child);
-				const features = extractFeatures(codeBlock, { objectType });
+				const features = extractFeatures(codeBlock, {
+					objectType,
+					dataitemName,
+				});
 				features.variables = extractVariables(child);
 
 				procedures.push({
@@ -951,6 +1056,7 @@ export async function indexALFile(
 				const features = extractFeatures(codeBlock, {
 					objectType,
 					triggerName: name,
+					dataitemName,
 				});
 				features.variables = extractVariables(child);
 
@@ -965,8 +1071,8 @@ export async function indexALFile(
 					features,
 				});
 			} else {
-				// Recurse into other container nodes (e.g., fields, keys, etc.)
-				walkForMembers(child);
+				// Recurse into other container nodes (e.g., fields, keys, dataitems, etc.)
+				walkForMembers(child, findDataitemName(child) ?? dataitemName);
 			}
 		}
 	}

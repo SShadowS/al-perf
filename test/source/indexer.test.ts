@@ -1,8 +1,27 @@
 import { describe, expect, it, test } from "bun:test";
 import { resolve } from "path";
 import { buildSourceIndex, indexALFile } from "../../src/source/indexer.js";
+import type { RecordOpInfo } from "../../src/types/source-index.js";
 
 const fixturesDir = resolve(import.meta.dir, "../fixtures/source");
+
+/**
+ * Index a fixture (given by its brief-style repo-relative path, e.g.
+ * "test/fixtures/source/ImplicitRec.al") and flatten every procedure's and
+ * trigger's recordOps into one array -- these tests only care whether an op
+ * was collected at all, not which member it lives on.
+ */
+async function indexFixture(
+	repoRelativePath: string,
+): Promise<{ recordOps: RecordOpInfo[] }> {
+	const fileName = repoRelativePath.split("/").pop()!;
+	const result = await indexALFile(resolve(fixturesDir, fileName), fixturesDir);
+	const recordOps = [
+		...(result?.procedures.flatMap((p) => p.features.recordOps) ?? []),
+		...(result?.triggers.flatMap((t) => t.features.recordOps) ?? []),
+	];
+	return { recordOps };
+}
 
 describe("indexALFile", () => {
 	it("should index a codeunit file", async () => {
@@ -269,12 +288,45 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(15);
-		expect(index.objects.size).toBe(15);
+		expect(index.files.length).toBe(18);
+		expect(index.objects.size).toBe(18);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
 		expect(procList!.length).toBe(1);
 		expect(procList![0].objectId).toBe(50100);
+	});
+});
+
+describe("implicit Rec", () => {
+	it("collects a bare CalcFields() in table code", async () => {
+		// `CalcFields(Amount);` with no receiver — the implicit Rec. Idiomatic in
+		// table/page/report code and previously invisible to every detector.
+		const feats = await indexFixture("test/fixtures/source/ImplicitRec.al");
+		expect(feats.recordOps.some((op) => op.type === "CalcFields")).toBe(true);
+	});
+
+	it("does not collect a bare call in a codeunit, which has no implicit Rec", async () => {
+		// A codeunit's `Get(...)` is a local procedure, not a record op.
+		const feats = await indexFixture(
+			"test/fixtures/source/CodeunitLocalGet.al",
+		);
+		expect(feats.recordOps).toHaveLength(0);
+	});
+
+	it('resolves a bare call in a report dataitem to the dataitem\'s own name, not "Rec"', async () => {
+		// Correction from Task 7's review: reports/XMLports have no variable
+		// literally named Rec. The implicit record inside a dataitem's trigger
+		// is the dataitem's own instance name. Getting this wrong doesn't fail
+		// loudly — it silently breaks downstream variable resolution
+		// (isTemporaryOp, calcFieldSeverity's table lookup, SetLoadFields
+		// coverage matching) for every bare call in report/XMLport code.
+		const feats = await indexFixture(
+			"test/fixtures/source/ImplicitRecReport.al",
+		);
+		const calcFields = feats.recordOps.find((op) => op.type === "CalcFields");
+		expect(calcFields).toBeDefined();
+		expect(calcFields!.recordVariable).toBe("CustLedgerEntry");
+		expect(calcFields!.recordVariable).not.toBe("Rec");
 	});
 });
