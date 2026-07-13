@@ -424,57 +424,112 @@ function isPositionBefore(
 }
 
 /**
- * Earliest *restrictive* SetLoadFields() call per (lowercased) record
- * variable in a method.
- *
- * Shared by detectMissingSetLoadFields (is there a restrictive call before
- * this find?) and detectIncompleteSetLoadFields (does the earliest
- * restrictive call's field list cover everything accessed after it?), so the
- * two detectors cannot silently disagree about what "covered" means. They
- * used to keep two separate copies of this logic -- detectIncompleteSetLoadFields's
- * copy kept every bug the first copy had just been fixed for, including one
- * that produced a live critical false positive (a bare `SetLoadFields()` call
- * treated as "loads zero fields" instead of "loads all fields").
- *
- * Two things never anchor coverage:
- * - Temporary records: SetLoadFields is a no-op on a temp record (no SQL
- *   load happens), so neither detector has anything to say about them.
- * - A bare `SetLoadFields()` call with zero field arguments: per Microsoft's
- *   docs it resets to loading ALL fields, so it restricts nothing.
- *
- * "Earliest" beats "latest" as the anchor: a find/access is
- * reachable-with-restriction as soon as ANY restrictive call has executed
- * before it. Anchoring on the latest call instead would evaluate an early
- * find/access against a SetLoadFields call that has not even run yet at that
- * point in the method.
+ * A single `SetLoadFields()` call, tracked with its position and (for a
+ * restrictive call) the field set it loads.
  */
-function earliestSetLoadFieldsByVar(
+interface SetLoadFieldsOp {
+	line: number;
+	column: number;
+	/** Lowercased field names this call loads. Empty for a bare reset -- see `isBareReset`; that means "loads ALL fields", never "loads zero fields". */
+	fields: Set<string>;
+	/** True for a bare `SetLoadFields()` call with no arguments -- per Microsoft's docs it resets to loading ALL fields, not zero. */
+	isBareReset: boolean;
+}
+
+/**
+ * Every `SetLoadFields()` call per (lowercased) record variable in a method,
+ * in source order (ascending by `(line, column)`).
+ *
+ * Shared by detectMissingSetLoadFields and detectIncompleteSetLoadFields,
+ * which ask two DIFFERENT questions about the same calls and must not
+ * silently drift back apart on the temp-record guard or the bare-reset rule
+ * -- that drift is exactly how this file shipped a live critical false
+ * positive once already (see git history on this function):
+ *
+ * - detectMissingSetLoadFields asks "was there ANY restriction before this
+ *   find?" -- the mere EXISTENCE of a preceding restrictive call answers
+ *   that; which one, or how many, doesn't matter.
+ * - detectIncompleteSetLoadFields asks "what fields does this variable have
+ *   loaded AT THE MOMENT of this specific access?" -- that is answered by
+ *   the LAST call before the access, never the earliest. A later, narrower
+ *   (or wider, or bare-reset) SetLoadFields call REPLACES the field set from
+ *   an earlier one; it does not union with it. Anchoring this detector on
+ *   the earliest call (the previous shape of this function) evaluated an
+ *   access against a call that was no longer in effect by the time that
+ *   access ran -- e.g. `SetLoadFields(A); Find; Read(A); SetLoadFields(B);
+ *   Find; Read(B)` -- both reads genuinely covered -- was flagged as
+ *   "missing B" because it compared B against SetLoadFields(A)'s field set.
+ *   That is a critical-severity false positive on correct code.
+ *
+ * Two things never anchor coverage for either detector:
+ * - Temporary records: SetLoadFields is a no-op on a temp record (no SQL
+ *   load happens), so neither detector has anything to say about them. Ops
+ *   on a temp variable are excluded from the map entirely.
+ * - A bare `SetLoadFields()` call with zero field arguments never counts as
+ *   a *restriction* -- per Microsoft's docs it resets to loading ALL fields.
+ *   It IS still tracked here (`isBareReset: true`, empty `fields`) because
+ *   detectIncompleteSetLoadFields needs it: a bare reset satisfies every
+ *   field access that comes after it, even though by itself it restricts
+ *   nothing (so detectMissingSetLoadFields must not treat it as coverage).
+ */
+function setLoadFieldsOpsByVar(
 	allOps: RecordOpInfo[],
 	variables: VariableInfo[],
-): Map<string, { line: number; column: number; fields: Set<string> }> {
-	const result = new Map<
-		string,
-		{ line: number; column: number; fields: Set<string> }
-	>();
+): Map<string, SetLoadFieldsOp[]> {
+	const result = new Map<string, SetLoadFieldsOp[]>();
 
 	for (const op of allOps) {
 		if (op.type !== "SetLoadFields" || !op.recordVariable) continue;
 		if (isTemporaryOp(op, variables)) continue; // no SQL load on a temp record
-		if (op.allFieldArguments && op.allFieldArguments.length === 0) continue; // bare reset, not a restriction
 
-		const key = op.recordVariable.toLowerCase();
-		const prev = result.get(key);
-		if (prev !== undefined && !isPositionBefore(op, prev)) continue; // keep the earliest
-
+		const isBareReset =
+			op.allFieldArguments !== undefined && op.allFieldArguments.length === 0;
 		const fields = new Set<string>();
 		if (op.allFieldArguments) {
 			for (const f of op.allFieldArguments) fields.add(f.toLowerCase());
 		} else if (op.fieldArgument) {
 			fields.add(op.fieldArgument.toLowerCase());
 		}
-		result.set(key, { line: op.line, column: op.column, fields });
+
+		const key = op.recordVariable.toLowerCase();
+		const entry: SetLoadFieldsOp = {
+			line: op.line,
+			column: op.column,
+			fields,
+			isBareReset,
+		};
+		const list = result.get(key);
+		if (list) list.push(entry);
+		else result.set(key, [entry]);
 	}
 
+	for (const list of result.values()) {
+		list.sort((a, b) => {
+			if (isPositionBefore(a, b)) return -1;
+			if (isPositionBefore(b, a)) return 1;
+			return 0;
+		});
+	}
+
+	return result;
+}
+
+/**
+ * The last `SetLoadFields()` call that ran strictly before `position` --
+ * i.e. what that record variable's field coverage actually looked like at
+ * that point in the method. `undefined` when no call precedes `position`
+ * yet. `ops` must already be ascending by position (see
+ * `setLoadFieldsOpsByVar`).
+ */
+function lastSetLoadFieldsOpBefore(
+	ops: SetLoadFieldsOp[],
+	position: { line: number; column: number },
+): SetLoadFieldsOp | undefined {
+	let result: SetLoadFieldsOp | undefined;
+	for (const op of ops) {
+		if (!isPositionBefore(op, position)) break; // ascending order -- nothing later can qualify either
+		result = op;
+	}
 	return result;
 }
 
@@ -500,16 +555,19 @@ export function detectMissingSetLoadFields(
 
 		const allOps = match.features.recordOps;
 		const findOps = allOps.filter((op) => FIND_OPS.has(op.type));
-		const coverageByVar = earliestSetLoadFieldsByVar(
-			allOps,
-			match.features.variables,
-		);
+		const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
 
 		for (const op of findOps) {
 			if (isTemporaryOp(op, match.features.variables)) continue; // no SQL load on a temp record
 			const recVarLower = op.recordVariable?.toLowerCase() ?? "";
-			const coverage = coverageByVar.get(recVarLower);
-			if (coverage === undefined || !isPositionBefore(coverage, op)) {
+			const ops = opsByVar.get(recVarLower) ?? [];
+			// Covered if ANY restrictive (non-bare-reset) call precedes this find --
+			// a bare reset still loads every field, so it must not suppress this
+			// warning (see setLoadFieldsOpsByVar).
+			const isCovered = ops.some(
+				(o) => !o.isBareReset && isPositionBefore(o, op),
+			);
+			if (!isCovered) {
 				const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
 				patterns.push({
 					id: "missing-setloadfields",
@@ -550,38 +608,46 @@ export function detectIncompleteSetLoadFields(
 
 		const allOps = match.features.recordOps;
 		const fieldAccesses = match.features.fieldAccesses;
-		const coverageByVar = earliestSetLoadFieldsByVar(
-			allOps,
-			match.features.variables,
-		);
+		const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
 
-		// For each variable that has a restrictive SetLoadFields, check whether
-		// every field accessed AFTER that call is covered by it. An access
-		// before the call ran wasn't affected by it -- whatever loaded that
-		// field, it wasn't this SetLoadFields -- so it must not be blamed on it.
-		for (const [varLower, coverage] of coverageByVar) {
-			const accessesAfterCoverage = fieldAccesses.filter(
-				(a) =>
-					a.recordVariable.toLowerCase() === varLower &&
-					isPositionBefore(coverage, a),
+		for (const [varLower, ops] of opsByVar) {
+			const accessesForVar = fieldAccesses.filter(
+				(a) => a.recordVariable.toLowerCase() === varLower,
 			);
-			const uniqueAccessed = [
-				...new Set(accessesAfterCoverage.map((a) => a.fieldName.toLowerCase())),
-			];
-			const missingFields = uniqueAccessed.filter(
-				(f) => !coverage.fields.has(f),
-			);
+			if (accessesForVar.length === 0) continue;
 
-			if (missingFields.length > 0) {
-				const recVar = accessesAfterCoverage[0]?.recordVariable ?? varLower;
+			// Resolve coverage PER ACCESS: what did this variable's field set
+			// actually look like at the moment THIS access ran? That is the LAST
+			// SetLoadFields call before the access, not the earliest -- a later
+			// call replaces the field set from an earlier one, it does not union
+			// with it. Group any misses by the call that governed them, since two
+			// accesses in the same method can be governed by two different calls.
+			const missingByOp = new Map<SetLoadFieldsOp, Set<string>>();
+
+			for (const access of accessesForVar) {
+				const governingOp = lastSetLoadFieldsOpBefore(ops, access);
+				if (governingOp === undefined) continue; // no coverage yet here -- missing-setloadfields' job, not this one's; reporting it here too would double-report the same bug
+				if (governingOp.isBareReset) continue; // bare reset loads every field -- covered
+
+				const fieldLower = access.fieldName.toLowerCase();
+				if (governingOp.fields.has(fieldLower)) continue;
+
+				const missing = missingByOp.get(governingOp) ?? new Set<string>();
+				missing.add(fieldLower);
+				missingByOp.set(governingOp, missing);
+			}
+
+			for (const [op, missingFieldsSet] of missingByOp) {
+				const missingFields = [...missingFieldsSet];
+				const recVar = accessesForVar[0]?.recordVariable ?? varLower;
 				patterns.push({
 					id: "incomplete-setloadfields",
 					severity: "critical",
 					title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
-					description: `SetLoadFields() on ${recVar} loads [${[...coverage.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`,
+					description: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`,
 					impact: method.selfTime,
 					involvedMethods: [methodLabel(method)],
-					evidence: `SetLoadFields loads ${coverage.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
+					evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
 					suggestion: `Add the missing fields to SetLoadFields: ${missingFields.map((f) => `"${f}"`).join(", ")}`,
 				});
 			}

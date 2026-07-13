@@ -75,6 +75,15 @@ codeunit 50700 "Field Access Test"
         // BOTH finds, so neither should be flagged. Anchoring on the LATEST
         // call instead would evaluate the first find against a SetLoadFields
         // that has not even run yet at that point -- a false positive.
+        //
+        // This procedure ALSO pins incomplete-setloadfields, which must
+        // resolve coverage PER ACCESS (the call in effect at that point),
+        // not by anchoring on the EARLIEST call for the whole method: "Document
+        // No." is genuinely covered by SetLoadFields(A) before the first read,
+        // and Amount is genuinely covered by SetLoadFields(B) before the
+        // second read. Anchoring on SetLoadFields(A) alone would flag Amount
+        // as missing even though SetLoadFields(B) already covered it by the
+        // time that read ran -- a critical false positive on correct code.
         SalesLine.SetLoadFields("Document No.");
         SalesLine.SetRange("Document No.", 'TEST');
         if SalesLine.FindSet() then
@@ -115,6 +124,31 @@ codeunit 50700 "Field Access Test"
         if SalesLine.FindSet() then
             repeat
                 Message('%1', SalesLine."Document No.");
+            until SalesLine.Next() = 0;
+    end;
+
+    procedure BareResetReplacesEarlierSetLoadFields()
+    var
+        SalesLine: Record "Sales Line";
+    begin
+        // SetLoadFields("Document No.") narrows to one field; a LATER bare
+        // SetLoadFields() resets to loading ALL fields before Amount is
+        // accessed. The bare reset -- not the earlier, no-longer-in-effect
+        // narrower call -- governs that access, so Amount is genuinely
+        // covered. Anchoring on the earliest call for the whole method
+        // (rather than resolving coverage per access) would still blame
+        // Amount on SetLoadFields("Document No.") and flag it as missing.
+        SalesLine.SetLoadFields("Document No.");
+        SalesLine.SetRange("Document No.", 'TEST');
+        if SalesLine.FindSet() then
+            repeat
+                Message('%1', SalesLine."Document No.");
+            until SalesLine.Next() = 0;
+        SalesLine.SetLoadFields();
+        SalesLine.SetRange("Document No.", 'TEST2');
+        if SalesLine.FindSet() then
+            repeat
+                Message('%1', SalesLine.Amount);
             until SalesLine.Next() = 0;
     end;
 }

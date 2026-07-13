@@ -630,6 +630,53 @@ describe("incomplete-setloadfields — ordering", () => {
 	});
 });
 
+describe("incomplete-setloadfields — per-access resolution (regression guard)", () => {
+	it("does not flag either access when a later SetLoadFields narrows to different fields before each one", () => {
+		// RepeatedSetLoadFieldsBetweenFinds (CodeUnit50700): SetLoadFields(A =
+		// "Document No."); FindSet; read A; SetLoadFields(B = Amount); FindSet;
+		// read B. Both reads are genuinely covered by the call in effect AT THE
+		// TIME each one ran.
+		//
+		// THE REGRESSION this pins: a prior fix shared this detector's coverage
+		// logic with missing-setloadfields by anchoring BOTH detectors on the
+		// EARLIEST restrictive SetLoadFields call per variable. That is correct
+		// for missing-setloadfields (existence of any preceding call is enough)
+		// but wrong here -- it evaluated the SECOND read (Amount) against the
+		// FIRST call's field set ("Document No." only) and reported Amount as
+		// "missing", a critical-severity false positive on 100% correct AL. The
+		// fix resolves coverage PER ACCESS (the LAST call before that specific
+		// access), not by anchoring the whole method on the earliest call.
+		const method = makeMethod({
+			functionName: "RepeatedSetLoadFieldsBetweenFinds",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		expect(detectIncompleteSetLoadFields([method], sourceIndex)).toHaveLength(
+			0,
+		);
+	});
+
+	it("does not blame an access on an earlier call once a later bare reset re-loads everything", () => {
+		// BareResetReplacesEarlierSetLoadFields (CodeUnit50700): SetLoadFields
+		// ("Document No.") narrows, then a LATER bare SetLoadFields() resets to
+		// loading ALL fields before Amount is read. The bare reset governs that
+		// access -- it must not be evaluated against the earlier, no-longer-in-
+		// effect narrower call. This is a pre-existing false positive (present
+		// even before the earliest-vs-latest regression) that per-access
+		// resolution closes as a side effect: a bare reset re-loads every field,
+		// but anchoring on an earlier call for the whole method would still
+		// blame this access on that earlier, narrower field set.
+		const method = makeMethod({
+			functionName: "BareResetReplacesEarlierSetLoadFields",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		expect(detectIncompleteSetLoadFields([method], sourceIndex)).toHaveLength(
+			0,
+		);
+	});
+});
+
 describe("runSourceDetectors", () => {
 	it("should run all source detectors and return sorted results", () => {
 		const methods = [
