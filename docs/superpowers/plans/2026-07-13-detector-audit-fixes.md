@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix five verified defects in al-perf's detectors, one of which actively misleads users, and one of which means a documented capability does not exist.
+**Goal:** Fix nine verified defects in al-perf's detectors. One actively misleads users. One means a documented capability does not exist. One means an entire class of BC code — report and page row triggers — is never analyzed at all.
 
-**Architecture:** Five independent fixes across three detector files plus two sort sites. No schema changes, no fingerprint-algorithm change (verified — see Global Constraints).
+**Architecture:** Nine fixes across four files. No schema changes, no fingerprint-algorithm change (verified — see Global Constraints).
 
 **Tech Stack:** Bun, TypeScript, `bun:test`, Biome.
 
-**Source:** `private/research/VERIFIED-FINDINGS.md`. Every defect below was reported by GPT-5.5 (which read the real code and fetched Microsoft docs) and then **verified by me against the source**. Two were independently confirmed by a second model.
+**Source:** `private/research/VERIFIED-FINDINGS.md`. Every defect below was reported by an out-of-family model reading the real code — GPT-5.5 (Tasks 1–5), Fable 5 (Tasks 6, 7, 8), Gemini 3.1 Pro (Task 9) — and then **verified by me against the source before being written down here**. Task 2 was found independently by two models.
+
+**Priority.** The plan is not in importance order; it is in "was found first" order. If you only get through some of it, do **Task 7 first** — it is the largest hole in the tool. Rough ranking: 7 > 6 > 1 > 2 > 8 > 3 > 5 > 9 > 4.
 
 ## Global Constraints
 
@@ -33,8 +35,18 @@
 | 3 | `src/source/source-patterns.ts` (`missing-setloadfields` ordering), tests |
 | 4 | `src/core/patterns.ts:449`, `src/core/analyzer.ts:230` (the two sort sites), tests |
 | 5 | `src/core/patterns.ts` (the four key-construction sites), tests |
+| 6 | `src/core/patterns.ts` (`detectSingleMethodDominance`, `detectEventSubscriberHotspot`), tests |
+| 7 | `src/source/indexer.ts` (per-row triggers as implicit loop context), `CLAUDE.md`, tests + a **report** fixture |
+| 8 | `src/source/indexer.ts` (`collectRecordOps` bare-identifier calls), tests |
+| 9 | `src/source/indexer.ts` (`DANGEROUS_CALLS` set), `src/source/source-only-patterns.ts` (suggestion), `CLAUDE.md`, tests |
 
-Tasks 1–5 are largely independent. Tasks 1, 2, and 3 all touch `source-patterns.ts`, so run them sequentially, not in parallel worktrees. Tasks 4 and 5 both touch `core/patterns.ts` — same rule.
+**Serialize by file — these are NOT all parallelizable.**
+
+- `source-patterns.ts`: Tasks 1, 2, 3 — run sequentially.
+- `core/patterns.ts`: Tasks 4, 5, 6 — run sequentially.
+- `source/indexer.ts`: Tasks 7, 8, 9 — run sequentially.
+
+The three *groups* are disjoint and may run in parallel worktrees. Task 2 also touches `core/patterns.ts` (to register two detectors) — that is a one-line addition to a list, so land Task 2 before starting the `core/patterns.ts` group, or expect a trivial conflict there.
 
 ---
 
@@ -609,19 +621,505 @@ EOF
 
 ---
 
+### Task 6: `single-method-dominance` cannot see a method split across call sites
+
+**Files:**
+- Modify: `src/core/patterns.ts` — `detectSingleMethodDominance` (`:18-41`) and `detectEventSubscriberHotspot`
+- Test: `test/core/patterns.test.ts`
+
+**Background.** The flagship detector, in full:
+
+```typescript
+for (const node of profile.allNodes) {
+    if (isIdleNode(node)) continue;
+    if (node.selfTimePercent > 50) {
+```
+
+It thresholds **per node**, not per method. A profile node is one *call site* — the same method called from three places is three nodes. So a method burning 90% of total self-time across three call sites at 30% each is **never flagged**, and the tool reports no dominant method while one method is eating the entire profile.
+
+Method-level aggregation already exists and is already correct: `aggregateByMethod` in `src/core/aggregator.ts:54`, keyed `` `${functionName}_${objectType}_${objectId}` `` (`:63`). The detector simply does not use it. `src/core/analyzer.ts:209` already calls it for the breakdown table — so the analysis surface and the detector disagree about what a "method" is.
+
+`detectEventSubscriberHotspot` has the identical shape (sums `selfTimePercent` over prefix-matched *nodes*) and gets the same fix.
+
+**Regression risk is low, and provably one-directional.** An aggregate's self-time is the sum of its nodes' self-times, so `aggregate% >= any single node%`. Every method that trips the threshold today still trips it after aggregation. The change can only *add* findings, never remove one. Any existing test that breaks was asserting the blindness.
+
+- [ ] **Step 1: Write the failing test**
+
+```typescript
+describe("single-method-dominance — aggregation", () => {
+	it("flags a method that dominates via several call sites, not one", () => {
+		// 3 call sites x 30% self-time = 90% of the profile in one method.
+		// Per-node thresholding sees three 30% nodes and reports nothing.
+		const profile = makeProfileWith([
+			{ objectType: "Codeunit", objectId: 50000, functionName: "Post", selfTimePercent: 30 },
+			{ objectType: "Codeunit", objectId: 50000, functionName: "Post", selfTimePercent: 30 },
+			{ objectType: "Codeunit", objectId: 50000, functionName: "Post", selfTimePercent: 30 },
+		]);
+
+		const patterns = detectSingleMethodDominance(profile);
+
+		expect(patterns.find((p) => p.id === "single-method-dominance")).toBeDefined();
+	});
+
+	it("does not flag three DIFFERENT methods at 30% each", () => {
+		// The guard against over-correcting: aggregation must key on the method,
+		// not collapse everything.
+		const profile = makeProfileWith([
+			{ objectType: "Codeunit", objectId: 50000, functionName: "A", selfTimePercent: 30 },
+			{ objectType: "Codeunit", objectId: 50000, functionName: "B", selfTimePercent: 30 },
+			{ objectType: "Codeunit", objectId: 50000, functionName: "C", selfTimePercent: 30 },
+		]);
+		expect(detectSingleMethodDominance(profile)).toHaveLength(0);
+	});
+});
+```
+
+Use the profile helper `test/core/patterns.test.ts` already has. If it cannot build multiple nodes for one method, extend it — do not switch to a real fixture file.
+
+- [ ] **Step 2: Run, confirm the first test fails**
+
+Run: `AI_DISABLED=1 bun test test/core/patterns.test.ts -t "aggregation"`
+Expected: FAIL — three 30% nodes, nothing reported.
+
+- [ ] **Step 3: Rewrite the detector against `aggregateByMethod`**
+
+Import `aggregateByMethod` from `./aggregator.js` and threshold on the aggregate. The pattern's `impact` becomes the aggregate `selfTime`, and `involvedMethods` the single aggregated method.
+
+Watch two things:
+- `formatMethodRef` takes a `ProcessedNode`. `MethodBreakdown` is a different shape (`functionName`, `objectType`, `objectId`). Add a small formatter for it rather than casting.
+- `DetectedPattern` may carry a source location taken from the node. An aggregated method has *several* locations. Pick the highest-self-time node as the representative and say so in the evidence string — do not silently drop the others.
+
+The `evidence` string must state the aggregation, e.g.
+`selfTimePercent = 90.0% aggregated across 3 call sites (threshold: 50%)`.
+A user who greps the profile for a single 90% frame and cannot find one must not conclude the tool is lying.
+
+- [ ] **Step 4: Same fix for `detectEventSubscriberHotspot`**
+
+It sums `selfTimePercent` across prefix-matched nodes. Aggregate first, then threshold.
+
+**Do NOT fix the name-prefix subscriber matching in this task** (`OnBefore|OnAfter|HandleOn`) — a subscriber named `MySubscriber` is invisible and a method coincidentally named `OnAfterFoo` false-positives. That is real, it is unverified, and it is listed in "Not in this plan".
+
+- [ ] **Step 5: Run the FULL suite, typecheck, lint, commit**
+
+```bash
+AI_DISABLED=1 bun test
+bunx tsc --noEmit
+bunx biome check --write src/core/patterns.ts test/core/patterns.test.ts
+git add src/core/patterns.ts test/core/patterns.test.ts
+git commit -m "$(cat <<'EOF'
+fix(patterns): single-method-dominance could not see a split-call-site method
+
+It thresholded per profile NODE, not per method. A node is one call site, so a
+method burning 90% of total self-time across three call sites at 30% each was
+never flagged — and the tool cheerfully reported no dominant method while one
+method ate the entire profile.
+
+Method aggregation already existed and was already correct (aggregateByMethod,
+keyed functionName_objectType_objectId) and analyzer.ts already used it for the
+breakdown table. Only the detector disagreed about what a method is.
+
+Same fix applied to event-subscriber-hotspot, which had the identical shape.
+
+Can only add findings, never remove one: an aggregate's self-time is the sum of
+its nodes', so anything that tripped the threshold before still does.
+
+Found by an external-model audit (Fable 5) reading the source.
+
+Claude-Session: https://claude.ai/code/session_016iRfkowCE7Zb2FcN52rnPp
+EOF
+)"
+```
+
+---
+
+### Task 7: Report and page row triggers are not loops, so nothing in them is ever analyzed
+
+**Files:**
+- Modify: `src/source/indexer.ts` — `LOOP_NODE_TYPES` (`:86-91`) is *not* the place to fix this; the fix goes in `walkForMembers` (`:886-901`) and `extractFeatures`
+- Modify: `CLAUDE.md` (the source-correlated detector description)
+- Test: `test/source/*` + a **new report fixture** in `test/fixtures/source/`
+
+**Interfaces:**
+- `extractFeatures(codeBlock)` gains an object-context parameter. Tasks 8 and 9 both depend on this, so **Task 7 must land before them.**
+
+**Background — this is the biggest hole in the tool.**
+
+Loop containment comes from `LOOP_NODE_TYPES` (`src/source/indexer.ts:86-91`), which is exactly:
+
+```typescript
+const LOOP_NODE_TYPES = new Set([
+	"repeat_statement",
+	"for_statement",
+	"foreach_statement",
+	"while_statement",
+]);
+```
+
+Four syntactic loop constructs. Nothing else.
+
+But in a BC **report**, `OnAfterGetRecord` *is* the loop — the platform calls it once per row of the dataitem. Same for an **XMLport**. Same for a **page**, which calls it per row rendered. There is no `repeat` in the source, so `features.recordOpsInLoops` is empty, so `calcfields-in-loop`, `modify-in-loop`, `record-op-in-loop`, `missing-setloadfields` and the two new detectors from Task 2 **all see nothing**.
+
+A `CalcFields` in a report's `OnAfterGetRecord` — one SQL aggregation per row, over a million-row ledger — is the single most common expensive thing in real BC code, and al-perf is structurally incapable of reporting it. No test caught this because **no fixture in the repo is a report**.
+
+The data is already there: `src/source/indexer.ts:886-901` indexes `trigger_declaration` nodes with full `features` (`extractFeatures`, `extractVariables`), exactly like procedures. Triggers are parsed. They are simply never treated as loop bodies.
+
+- [ ] **Step 1: Build the fixture first — it is the point of this task**
+
+Create `test/fixtures/source/SlowReport.al`: a report with a dataitem over a ledger table whose `OnAfterGetRecord` does a `CalcFields` and a `Get` on another record. No `repeat`. No `for`. Nothing syntactically a loop.
+
+This fixture is the deliverable as much as the code is. Its absence is why this bug survived.
+
+- [ ] **Step 2: Write the failing test**
+
+```typescript
+describe("per-row triggers are loop bodies", () => {
+	it("flags CalcFields in a report OnAfterGetRecord", () => {
+		// OnAfterGetRecord runs once per dataitem row — it IS the loop. There is no
+		// `repeat` in the source, which is exactly why this was invisible.
+		const patterns = runSourceDetectors("test/fixtures/source/SlowReport.al");
+		expect(patterns.find((p) => p.id === "calcfields-in-loop")).toBeDefined();
+	});
+
+	it("does not treat OnPreDataItem as a loop body — it runs once", () => {
+		// The guard against over-firing. Not every trigger is per-row.
+		const patterns = runSourceDetectors("test/fixtures/source/ReportPreDataItem.al");
+		expect(patterns.find((p) => p.id === "calcfields-in-loop")).toBeUndefined();
+	});
+});
+```
+
+- [ ] **Step 3: Run, confirm it fails**
+
+Run: `AI_DISABLED=1 bun test -t "per-row triggers"`
+Expected: FAIL — nothing is detected, because nothing is in a loop.
+
+- [ ] **Step 4: Implement — promote per-row trigger bodies to implicit loop bodies**
+
+`extractFeatures(codeBlock)` cannot see the object type or trigger name, so thread that context in. Add to `src/source/indexer.ts`:
+
+```typescript
+/**
+ * Triggers the BC platform calls ONCE PER ROW. Their whole body is a loop body,
+ * even though nothing in the AL source is syntactically a loop.
+ *
+ * This is the most common place a real BC performance bug lives — a CalcFields in
+ * a report's OnAfterGetRecord is one SQL aggregation per row of the dataitem — and
+ * before this, none of the source-correlated detectors could see any of it.
+ *
+ * OnPreDataItem / OnPostDataItem run once and are deliberately NOT here.
+ */
+const PER_ROW_TRIGGERS: Record<string, Set<string>> = {
+	Report: new Set(["onaftergetrecord"]),
+	XmlPort: new Set(["onaftergetrecord"]),
+	Page: new Set(["onaftergetrecord"]),
+};
+
+function isPerRowTrigger(objectType: string, triggerName: string): boolean {
+	return PER_ROW_TRIGGERS[objectType]?.has(triggerName.toLowerCase()) ?? false;
+}
+```
+
+Then in `walkForMembers` (`:886`), after `extractFeatures` for a `trigger_declaration`, if `isPerRowTrigger(objectType, name)`, promote every op in `features.recordOps` into `features.recordOpsInLoops`.
+
+**Read `RecordOpInfo` before you do this.** If entries in `recordOpsInLoops` carry a reference to the enclosing `LoopInfo`, you must synthesize one representing the trigger (its type, its line range) rather than leaving the field undefined and hoping nothing dereferences it. Check `src/source/source-patterns.ts` for what the detectors actually read off those ops.
+
+**Confirm the object type string.** `OBJECT_TYPE_MAP` at `src/source/indexer.ts:~70-84` decides what `objectType` actually is (`"XmlPort"` vs `"Xmlport"` etc.). Match it exactly — a silent key miss here makes the whole task a no-op that still passes typecheck.
+
+- [ ] **Step 5: Make the finding explain itself**
+
+The detectors will now report "inside a loop" pointing at a line in a trigger with no visible loop. A user will read that as a bug in al-perf.
+
+Every pattern raised from an implicit loop must say so in its `evidence`, e.g.
+`Report.OnAfterGetRecord runs once per dataitem row — this call executes once per row.`
+
+If the shared message construction cannot express that, add a flag to the op (`implicitLoop: "Report.OnAfterGetRecord"`) and branch in the message. **Do not ship this without it.** A correct finding a user dismisses as a tool bug is worth nothing.
+
+- [ ] **Step 6: Page — decide consciously**
+
+`Page.OnAfterGetRecord` is bounded by rows rendered (tens), not table rows (millions). It is still the classic slow-list-page bug and it is still worth flagging, but it is not the same order of cost as a report.
+
+If severity is derived per-pattern, drop a page-sourced implicit-loop finding one level (critical → warning). If that is not expressible without restructuring, ship Page at full severity and note it in the commit — over-reporting a real slow-list-page is acceptable; missing reports is not.
+
+**Table triggers (`OnValidate`, `OnInsert`, `OnModify`) are deliberately excluded.** They are per-*operation*, not per-row — they are only a loop when the caller loops, which is the cross-procedure problem in "Not in this plan". Flagging every `CalcFields` in an `OnValidate` would be noise.
+
+- [ ] **Step 7: Update the docs**
+
+`CLAUDE.md` describes the source-correlated detectors as working on loops. State that per-row triggers (`Report`/`XmlPort`/`Page` `OnAfterGetRecord`) count as loop bodies.
+
+- [ ] **Step 8: Run the FULL suite, typecheck, lint, commit**
+
+```bash
+AI_DISABLED=1 bun test
+bunx tsc --noEmit
+bunx biome check --write src/source/indexer.ts
+git add src/source/indexer.ts CLAUDE.md test/fixtures/source/ test/source/
+git commit -m "$(cat <<'EOF'
+feat(source): treat per-row triggers as loop bodies
+
+Loop containment came from LOOP_NODE_TYPES — repeat/for/foreach/while. Four
+syntactic constructs, nothing else.
+
+But in a BC report, OnAfterGetRecord IS the loop: the platform calls it once per
+dataitem row. There is no `repeat` in the source, so recordOpsInLoops was empty,
+so calcfields-in-loop, modify-in-loop, record-op-in-loop and missing-setloadfields
+all saw nothing. A CalcFields in a report's OnAfterGetRecord — one SQL aggregation
+per row of a million-row ledger — is the most common expensive thing in real BC
+code, and al-perf was structurally incapable of reporting it.
+
+Triggers were already fully indexed with features; they were simply never treated
+as loop bodies. Report/XmlPort/Page OnAfterGetRecord now are. OnPreDataItem and
+OnPostDataItem run once and are not. Table triggers are per-operation, not per-row,
+and are excluded.
+
+Findings raised from an implicit loop say so in their evidence, because a user
+reading "inside a loop" against a trigger with no visible loop would rightly call
+that a tool bug.
+
+No test caught this because no fixture in the repo was a report. There is one now.
+
+Found by an external-model audit (Fable 5) reading the source.
+
+Claude-Session: https://claude.ai/code/session_016iRfkowCE7Zb2FcN52rnPp
+EOF
+)"
+```
+
+---
+
+### Task 8: Record calls on the implicit `Rec` are silently dropped
+
+**Depends on Task 7** (the object-context parameter on `extractFeatures`).
+
+**Files:**
+- Modify: `src/source/indexer.ts` — `collectRecordOps` (`:372-380`)
+- Test: `test/source/*` + fixtures
+
+**Background.** `collectRecordOps`:
+
+```typescript
+if (n.type === "call_expression") {
+    const funcNode = n.childForFieldName("function") ?? n.namedChildren[0];
+    if (funcNode) {
+        if (funcNode.type === "member_expression") {
+```
+
+Only `member_expression` calls — `SomeRec.FindSet()`. In table, page, report and XMLport code, the implicit `Rec` is idiomatic and pervasive: plain `FindSet();`, `Modify();`, `CalcFields(Amount);`. Those parse as a `call_expression` with a **plain identifier** function node, and are **never collected**. Not by any detector, at any severity.
+
+This is an inconsistency, not a considered choice: `collectDangerousCalls` (`:424-433`) takes `funcNode.text` with **no type check at all**, so bare `Commit;` is collected fine. The two collectors in the same file disagree about what a call looks like.
+
+Combined with Task 7 this is what makes report analysis actually work — a report's `OnAfterGetRecord` is *full* of bare `Rec` calls.
+
+- [ ] **Step 1: Write the failing test**
+
+```typescript
+describe("implicit Rec", () => {
+	it("collects a bare CalcFields() in table code", () => {
+		// `CalcFields(Amount);` with no receiver — the implicit Rec. Idiomatic in
+		// table/page/report code and previously invisible to every detector.
+		const feats = indexFixture("test/fixtures/source/ImplicitRec.al");
+		expect(feats.recordOps.some((op) => op.type === "CalcFields")).toBe(true);
+	});
+
+	it("does not collect a bare call in a codeunit, which has no implicit Rec", () => {
+		// A codeunit's `Get(...)` is a local procedure, not a record op.
+		const feats = indexFixture("test/fixtures/source/CodeunitLocalGet.al");
+		expect(feats.recordOps).toHaveLength(0);
+	});
+});
+```
+
+- [ ] **Step 2: Run, confirm it fails**
+
+- [ ] **Step 3: Implement, narrowly**
+
+Add an `else` branch for a plain-identifier function node, gated on **both**:
+
+1. the object having an implicit `Rec` — `Table`, `Page`, `Report`, `XmlPort`, `RequestPage`. A codeunit has no `Rec`, so a bare `Get(...)` there is a local procedure call, not a record op. This is why Task 7's object-context parameter is a prerequisite.
+2. the name being in `RECORD_OPS`.
+
+Set `recordVariable` to `"Rec"` so downstream variable resolution, `isTemporaryOp`, and table lookup all have something to work with.
+
+**Accept and document the residual false positive:** a local procedure in a *table* named `Get` or `Count` will now be read as a record op. That is rare, and it is a far smaller error than dropping every implicit-`Rec` call in every table, page and report. Put that reasoning in a code comment, not just the commit.
+
+- [ ] **Step 4: Run the FULL suite — this WILL surface new findings**
+
+```bash
+AI_DISABLED=1 bun test
+```
+
+Existing fixtures with implicit-`Rec` code will start producing findings they never produced. Read each new one before touching a test. A new finding here is very likely a real bug that was invisible.
+
+- [ ] **Step 5: Typecheck, lint, commit**
+
+```bash
+bunx tsc --noEmit
+bunx biome check --write src/source/indexer.ts
+git add src/source/indexer.ts test/
+git commit -m "$(cat <<'EOF'
+fix(source): collect record calls on the implicit Rec
+
+collectRecordOps only matched member_expression calls — SomeRec.FindSet(). In
+table, page, report and XMLport code the implicit Rec is idiomatic: plain
+FindSet();, Modify();, CalcFields(Amount);. Those are call_expressions with a
+plain identifier and were never collected — not by any detector, at any severity.
+
+An inconsistency, not a choice: collectDangerousCalls in the same file reads
+funcNode.text with no type check, so bare Commit; was collected fine. The two
+collectors disagreed about what a call looks like.
+
+Gated on objects that actually HAVE an implicit Rec (Table/Page/Report/XmlPort/
+RequestPage) — a bare Get(...) in a codeunit is a local procedure, not a record op.
+
+Residual false positive accepted and commented: a local procedure in a table named
+Get or Count now reads as a record op. Rare, and far smaller than dropping every
+implicit-Rec call in every table, page and report.
+
+Found by an external-model audit (Fable 5) reading the source.
+
+Claude-Session: https://claude.ai/code/session_016iRfkowCE7Zb2FcN52rnPp
+EOF
+)"
+```
+
+---
+
+### Task 9: `dangerous-call-in-loop` does not know what a dangerous call is
+
+**Depends on Task 8** (bare-identifier calls, for `Sleep`).
+
+**Files:**
+- Modify: `src/source/indexer.ts:405-411` (`DANGEROUS_CALLS`), `src/source/source-only-patterns.ts:179-182`
+- Modify: `CLAUDE.md` (detector count and description)
+- Test: `test/source/source-only-patterns.test.ts` + fixtures
+
+**Background.** The whole set, `src/source/indexer.ts:405`:
+
+```typescript
+const DANGEROUS_CALLS = new Set(["commit", "error", "testfield"]);
+```
+
+An `HttpClient.Send()` inside a loop — **one network round-trip per iteration**, the most expensive thing an AL developer can accidentally write — is not dangerous. `Sleep()` in a loop is not dangerous. A detector named `dangerous-call-in-loop` that misses a per-row HTTP call is misnamed.
+
+**A new detector, not a widened set.** `Commit`/`Error`/`TestField` in a loop are *transactional* problems (a `Commit` in a loop breaks the write transaction into N). An HTTP call in a loop is a *latency* problem, with a completely different fix — batch the request, or hoist it. Same reasoning as Task 2: different fix, different pattern id.
+
+New pattern id: **`external-call-in-loop`**.
+
+- [ ] **Step 1: Check what variable type information exists**
+
+`HttpClient.Send()` is a `member_expression` on a variable declared `HttpClient`. To recognize it you need the variable's declared type. `extractVariables` (`:477`) already resolves `isRecord` / `tableName` / temporary, so *some* type is parsed.
+
+**If `VariableInfo` does not retain the declared type name for non-record variables, extend it.** That is the real work of this task; the detector itself is trivial. If the extension turns out to be large, STOP and report — `Sleep` alone (a bare identifier, no type resolution needed) is still worth shipping, and the HTTP half becomes its own task.
+
+- [ ] **Step 2: Write the failing test**
+
+```typescript
+describe("external-call-in-loop", () => {
+	it("flags HttpClient.Send() inside a loop", () => {
+		// One network round-trip per iteration.
+		const patterns = runSourceDetectors("test/fixtures/source/HttpInLoop.al");
+		const f = patterns.find((p) => p.id === "external-call-in-loop");
+		expect(f).toBeDefined();
+		expect(f?.severity).toBe("critical");
+		expect(f?.suggestion).toMatch(/batch|outside the loop|single request/i);
+	});
+
+	it("does not flag an HttpClient.Send() outside a loop", () => {
+		expect(
+			runSourceDetectors("test/fixtures/source/HttpNoLoop.al")
+				.find((p) => p.id === "external-call-in-loop"),
+		).toBeUndefined();
+	});
+
+	it("leaves dangerous-call-in-loop reporting only Commit/Error/TestField", () => {
+		// Transactional problems, different fix, separate id. Not merged.
+		const patterns = runSourceDetectors("test/fixtures/source/HttpInLoop.al");
+		expect(patterns.find((p) => p.id === "dangerous-call-in-loop")).toBeUndefined();
+	});
+});
+```
+
+- [ ] **Step 3: Implement**
+
+Collect external calls: `HttpClient.{Send,Get,Post,Put,Patch,Delete}` (by declared variable type, not by method name alone — `Get` and `Delete` collide with record ops), plus bare `Sleep(...)`.
+
+Severity `critical`. Suggestion: hoist the call out of the loop, or batch the payload into a single request — N iterations means N round-trips, and network latency dominates everything else in the profile.
+
+**`Codeunit.Run` in a loop is NOT in scope.** It is a transaction-boundary problem and needs its own thinking. Note it as a follow-up.
+
+- [ ] **Step 4: Update the docs**
+
+`CLAUDE.md`: the count moves again (20 after Task 2 → 21), and `external-call-in-loop` joins the source-only list. Grep for every stated count: `grep -rn "detectors" CLAUDE.md README.md docs/`.
+
+- [ ] **Step 5: Run, typecheck, lint, commit**
+
+```bash
+AI_DISABLED=1 bun test
+bunx tsc --noEmit
+bunx biome check --write src/source/indexer.ts src/source/source-only-patterns.ts
+git add src/source/indexer.ts src/source/source-only-patterns.ts CLAUDE.md test/
+git commit -m "$(cat <<'EOF'
+feat(patterns): detect external calls in a loop
+
+The entire dangerous-call set was:
+
+    const DANGEROUS_CALLS = new Set(["commit", "error", "testfield"]);
+
+So an HttpClient.Send() inside a loop — one network round-trip per iteration, the
+most expensive thing an AL developer can accidentally write — was not dangerous.
+A detector named dangerous-call-in-loop that misses a per-row HTTP call is
+misnamed.
+
+New pattern id rather than a widened set, because the fixes differ: Commit in a
+loop is a TRANSACTIONAL problem (one write transaction becomes N); an HTTP call in
+a loop is a LATENCY problem, fixed by batching or hoisting. One suggestion cannot
+serve both.
+
+Codeunit.Run in a loop is a transaction-boundary problem and is deliberately left
+for its own task.
+
+Found by an external-model audit (Gemini 3.1 Pro) reading the source.
+
+Claude-Session: https://claude.ai/code/session_016iRfkowCE7Zb2FcN52rnPp
+EOF
+)"
+```
+
+---
+
 ## Not in this plan
 
-**The unverified candidates.** `private/research/VERIFIED-FINDINGS.md` lists five more suspected defects that I have **not** checked against the source (the `unfiltered-findset` ordering bug, the `unindexed-filter` composite-key false positive, the `incomplete-setloadfields` factually-wrong message, and the name-prefix event-subscriber detection). Verify each before acting — the model that reported them was right five times out of five, but that is not a licence to skip checking.
+**Cross-procedure loop propagation — the biggest thing left.** Loop containment is computed *within one procedure's code_block*. A `repeat` that calls `ProcessLine(SalesLine)`, where `ProcessLine` does the `Get`/`Modify`/`CalcFields`, detects **nothing**: the op is not lexically inside the loop, and the callee contains no loop. Real N+1 code is almost always factored through a helper. Fixing it needs call-graph propagation ("this procedure is reachable from a loop, so lift its record ops"), which is an architectural change, not a rule. Task 7 fixes the *implicit*-loop half of this problem; this is the other half, and it is bigger. It deserves its own spec.
 
-**The SQL evidence layer.** The strategic finding — that BC profiles now carry the SQL statements themselves, and RT0005 telemetry carries `sqlStatement` + `executionTime` + `alStackTrace`, and we throw all of it away — is a separate project. It needs its own brainstorm and spec. It is almost certainly worth more than all five fixes above combined, because it would make five *existing* detectors stop guessing.
+**Unverified candidates.** Reported by a model, **not yet checked against the source** — verify each before acting on it:
+- `unfiltered-findset`: order is ignored, so `SetRange(...); Reset(); FindSet();` counts as filtered.
+- `SetLoadFields()` with **zero args** resets to loading all fields, but still registers the variable as covered.
+- `extractVariables` reads only a procedure's own `var_section`, so object-level globals are never resolved — temp checks and table lookups silently fail for them.
+- `unindexed-filter` only checks a key's **leading** field, and skips tables not in the index — meaning **every filter on a standard BC table is unchecked**.
+- Event-subscriber identification is a regex over the preceding 5 lines plus `OnBefore|OnAfter|HandleOn` name-prefix matching. A subscriber named `MySubscriber` is invisible; a method coincidentally named `OnAfterFoo` false-positives. (Task 6 deliberately does not touch this.)
+- `RecordRef`/`FieldRef` code bypasses record-op detection entirely.
+- No detector uses `Count` even though it is collected: `Count > 0` should be `IsEmpty`.
+- `Validate` in a loop (fires table triggers and table relations per row) and `SetAutoCalcFields` (a stealth CalcFields-per-`Next`) are not in `RECORD_OPS` at all.
+- No SIFT awareness: keys are parsed but `SumIndexFields` is not extracted, so a `CalcSums` with no covering SIFT key cannot be flagged.
+
+**Deliberately NOT a defect:** `detectHighHitCount` skips root-level nodes (`src/core/patterns.ts:68` guards on `node.parent`). That was reported as a bug. It is not — the heuristic is a *ratio* to the parent's hit count, and a node with no parent has no ratio. Leave it.
+
+**The SQL evidence layer.** The strategic finding — that BC profiles now carry the SQL statements themselves, and RT0005 telemetry carries `sqlStatement` + `executionTime` + `alStackTrace`, and we throw all of it away — is a separate project. It needs its own brainstorm and spec. It is almost certainly worth more than every fix above combined, because it would make the *existing* detectors stop guessing.
 
 ## Self-Review
 
-**Spec coverage.** All five verified defects have a task: wrong advice → 1; undetected Insert/Delete → 2; ordering suppression → 3; dead prioritization → 4; identity collision → 5.
+**Spec coverage.** All nine verified defects have a task: wrong advice → 1; undetected Insert/Delete → 2; ordering suppression → 3; dead prioritization → 4; identity collision → 5; per-node dominance thresholding → 6; per-row triggers not loops → 7; implicit `Rec` dropped → 8; dangerous-call set missing HTTP → 9.
 
-**Type consistency.** `sortPatterns(patterns: DetectedPattern[]): DetectedPattern[]` is declared in Task 4 and used at both call sites there. `methodKey(node: ProfileNode): string` is declared in Task 5 and used at all four sites there. `isTemporaryOp` is an existing helper reused in Tasks 2 and 3 — verify its real signature before calling it.
+**Provenance.** Tasks 1–5 from GPT-5.5, 6–8 from Fable 5, 9 from Gemini 3.1 Pro — three model families, all reading the same source. Task 2 was found independently by two of them. Every claim in this plan was re-verified against the code before being written down; claims that did not survive that check are in "Not in this plan" as unverified, or called out above as not-a-defect.
+
+**Task ordering is load-bearing.** 7 → 8 → 9 is a hard chain: Task 7 introduces the object-context parameter on `extractFeatures`, Task 8 needs it to know whether an object has an implicit `Rec`, Task 9 needs Task 8 for bare `Sleep`. Do not reorder them.
+
+**Type consistency.** `sortPatterns(patterns: DetectedPattern[]): DetectedPattern[]` is declared in Task 4 and used at both call sites there. `methodKey(node: ProfileNode): string` is declared in Task 5 and used at all four sites there. `isPerRowTrigger(objectType, triggerName)` is declared in Task 7 and used in Tasks 7 and 8. `isTemporaryOp` is an existing helper reused in Tasks 2 and 3 — verify its real signature before calling it.
 
 **Known soft spots**, each carrying an explicit instruction to verify rather than trust:
 - Task 1 Step 4: whether the `RecordOp` carries the field names passed to `CalcFields`. If not, that sub-fix becomes its own task and the suggestion fix still stands alone.
 - Task 3 Step 3: whether `SetLoadFields` ops carry their argument list (for the bare-reset case). If not, leave it — a wrong suppression rule is worse than a missing one.
 - Task 5 Step 4: existing tests may have been asserting the merged behavior. Read before changing.
+- Task 6 Step 3: `DetectedPattern` may carry a node-derived source location that an aggregated method does not have. Pick a representative node; do not fabricate.
+- Task 7 Step 4: `RecordOpInfo` may reference an enclosing `LoopInfo`. If it does, synthesize one for the trigger — do not leave it undefined.
+- Task 7 Step 4: the exact `objectType` strings come from `OBJECT_TYPE_MAP`. A key miss makes the task a silent no-op that still typechecks.
+- Task 9 Step 1: whether `VariableInfo` retains declared types for non-record variables. If not, that extension is the real work — and if it is large, ship `Sleep` alone and split out the HTTP half.
