@@ -207,6 +207,16 @@ export interface RecordOpInfo {
 	fieldArgument?: string;
 	/** All field arguments for SetLoadFields calls */
 	allFieldArguments?: string[];
+	/**
+	 * Set when `insideLoop` is true because this op sits in a per-row trigger
+	 * (Report/XmlPort/Page `OnAfterGetRecord`) rather than a syntactic loop —
+	 * there is no `repeat`/`for`/`foreach`/`while` in the source at all, the
+	 * platform itself calls the trigger once per row. Format:
+	 * `"<ObjectType>.<TriggerName>"`, e.g. `"Report.OnAfterGetRecord"`.
+	 * Detectors must surface this in their evidence/description: a finding
+	 * that says "inside a loop" with no visible loop reads as a tool bug.
+	 */
+	implicitLoop?: string;
 }
 
 export interface LineRange {

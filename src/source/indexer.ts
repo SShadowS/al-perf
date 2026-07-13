@@ -542,9 +542,52 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 }
 
 /**
+ * Triggers the BC platform calls ONCE PER ROW. Their whole body is a loop body,
+ * even though nothing in the AL source is syntactically a loop.
+ *
+ * This is the most common place a real BC performance bug lives — a CalcFields in
+ * a report's OnAfterGetRecord is one SQL aggregation per row of the dataitem — and
+ * before this, none of the source-correlated detectors could see any of it.
+ *
+ * OnPreDataItem / OnPostDataItem run once and are deliberately NOT here. Table
+ * triggers (OnValidate/OnInsert/OnModify) are deliberately NOT here either —
+ * they are per-*operation*, not per-row; they are only a loop when the caller
+ * loops, which needs cross-procedure call-graph propagation, not this.
+ *
+ * Keys are `objectType` strings exactly as produced by `OBJECT_TYPE_MAP` —
+ * note `"XMLport"`, not `"XmlPort"` or `"Xmlport"`.
+ */
+const PER_ROW_TRIGGERS: Record<string, Set<string>> = {
+	Report: new Set(["onaftergetrecord"]),
+	XMLport: new Set(["onaftergetrecord"]),
+	Page: new Set(["onaftergetrecord"]),
+};
+
+function isPerRowTrigger(objectType: string, triggerName: string): boolean {
+	return PER_ROW_TRIGGERS[objectType]?.has(triggerName.toLowerCase()) ?? false;
+}
+
+/**
+ * Context an object member (procedure or trigger) is declared in. Threaded
+ * into `extractFeatures` so it can reason about things the code_block alone
+ * can't tell it — e.g. whether this member is a per-row trigger. Deliberately
+ * carries the object type (not just a boolean) so later features can key off
+ * it too (e.g. whether the object has an implicit `Rec`).
+ */
+interface ObjectContext {
+	/** Matches `OBJECT_TYPE_MAP`'s values exactly, e.g. "Report", "XMLport". */
+	objectType: string;
+	/** The trigger name, e.g. "OnAfterGetRecord". Undefined for procedures. */
+	triggerName?: string;
+}
+
+/**
  * Extract structural features (loops, record ops, nesting) from a code_block node.
  */
-function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
+function extractFeatures(
+	codeBlock: SyntaxNode | null,
+	context?: ObjectContext,
+): ProcedureFeatures {
 	if (!codeBlock) {
 		return {
 			loops: [],
@@ -584,6 +627,25 @@ function extractFeatures(codeBlock: SyntaxNode | null): ProcedureFeatures {
 		recordOps.push(opInfo);
 		if (insideLoop) {
 			recordOpsInLoops.push(opInfo);
+		}
+	}
+
+	// Per-row triggers (Report/XMLport/Page OnAfterGetRecord): the platform
+	// calls this trigger once per row, so its whole body is a loop body even
+	// though nothing here is syntactically a loop. Promote every op that
+	// isn't already inside a real loop, and tag it so findings can explain
+	// themselves — "inside a loop" with no visible loop reads as a tool bug.
+	if (
+		context?.triggerName &&
+		isPerRowTrigger(context.objectType, context.triggerName)
+	) {
+		const implicitLoop = `${context.objectType}.${context.triggerName}`;
+		for (const opInfo of recordOps) {
+			if (!opInfo.insideLoop) {
+				opInfo.insideLoop = true;
+				opInfo.implicitLoop = implicitLoop;
+				recordOpsInLoops.push(opInfo);
+			}
 		}
 	}
 
@@ -866,7 +928,7 @@ export async function indexALFile(
 			if (child.type === "procedure") {
 				const name = extractProcedureName(child);
 				const codeBlock = findCodeBlock(child);
-				const features = extractFeatures(codeBlock);
+				const features = extractFeatures(codeBlock, { objectType });
 				features.variables = extractVariables(child);
 
 				procedures.push({
@@ -886,7 +948,10 @@ export async function indexALFile(
 			} else if (child.type === "trigger_declaration") {
 				const name = extractTriggerName(child);
 				const codeBlock = findCodeBlock(child);
-				const features = extractFeatures(codeBlock);
+				const features = extractFeatures(codeBlock, {
+					objectType,
+					triggerName: name,
+				});
 				features.variables = extractVariables(child);
 
 				triggers.push({

@@ -26,6 +26,47 @@ function methodLabel(m: MethodBreakdown): string {
 	return `${m.functionName} (${m.objectType} ${m.objectId})`;
 }
 
+/**
+ * Describe where a record op runs, for use inside a finding's `description`.
+ *
+ * An op promoted from a per-row trigger (Task 7 — Report/XMLport/Page
+ * `OnAfterGetRecord`) has no `repeat`/`for`/`foreach`/`while` anywhere in the
+ * source. A finding that just says "inside a loop" in that case reads as a
+ * tool bug, so implicit-loop findings say explicitly what actually runs it
+ * once per row instead.
+ */
+function loopLocationPhrase(
+	op: RecordOpInfo,
+	line: number,
+	file: string,
+): string {
+	return op.implicitLoop
+		? `executes once per row at line ${line} in ${file} — ${op.implicitLoop} is called once per row by the platform, even though there is no repeat/for/foreach/while anywhere in the source`
+		: `is called inside a loop at line ${line} in ${file}`;
+}
+
+/** Evidence-string counterpart of `loopLocationPhrase`. */
+function loopEvidencePhrase(op: RecordOpInfo): string {
+	return op.implicitLoop
+		? `${op.implicitLoop} runs once per row — this call executes once per row (implicit loop; no syntactic loop in the source)`
+		: "inside loop";
+}
+
+/**
+ * A Page's `OnAfterGetRecord` is bounded by rows rendered (tens), not table
+ * rows (millions) like a Report or XMLport dataitem. Same bug shape, an order
+ * of magnitude less costly — still worth flagging, but one severity level
+ * below the report/XMLport case.
+ */
+function downgradePageImplicitLoop(
+	severity: "critical" | "warning",
+	op: RecordOpInfo,
+): "critical" | "warning" {
+	return severity === "critical" && op.implicitLoop?.startsWith("Page.")
+		? "warning"
+		: severity;
+}
+
 /** Aggregation CalcFormula types that cause full table scans */
 const AGGREGATION_CALC_TYPES = new Set<TableFieldInfo["calcFormulaType"]>([
 	"Sum",
@@ -95,20 +136,19 @@ export function detectCalcFieldsInLoop(
 		);
 
 		for (const op of opsInLoop) {
-			const severity = calcFieldSeverity(
-				op.recordVariable,
-				match.features.variables,
-				index,
+			const severity = downgradePageImplicitLoop(
+				calcFieldSeverity(op.recordVariable, match.features.variables, index),
+				op,
 			);
 			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
 			patterns.push({
 				id: "calcfields-in-loop",
 				severity,
 				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} is called inside a loop at line ${op.line} in ${match.file}. Each iteration triggers a separate SQL query, causing N+1 query performance issues.`,
+				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query, causing N+1 query performance issues.`,
 				impact: method.selfTime,
 				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
+				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 				suggestion:
 					severity === "critical"
 						? "Move CalcFields() before the loop, or use SetLoadFields() to pre-load only the fields you need. This table has aggregation FlowFields (Sum/Count) which are especially expensive."
@@ -146,15 +186,16 @@ export function detectModifyInLoop(
 		);
 
 		for (const op of opsInLoop) {
+			const severity = downgradePageImplicitLoop("critical", op);
 			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
 			patterns.push({
 				id: "modify-in-loop",
-				severity: "critical",
+				severity,
 				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} is called inside a loop at line ${op.line} in ${match.file}. Each iteration issues a separate SQL UPDATE, which can be very slow for large datasets.`,
+				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL UPDATE, which can be very slow for large datasets.`,
 				impact: method.selfTime,
 				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
+				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 				suggestion:
 					"Collect changes and apply them after the loop, or use ModifyAll() if applicable.",
 			});
@@ -196,15 +237,16 @@ export function detectRecordOpInLoop(
 		);
 
 		for (const op of opsInLoop) {
+			const severity = downgradePageImplicitLoop("critical", op);
 			const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
 			patterns.push({
 				id: "record-op-in-loop",
-				severity: "critical",
+				severity,
 				title: `${op.type} inside loop in ${method.functionName}`,
-				description: `${op.type}()${recVar} is called inside a loop at line ${op.line} in ${match.file}. Each iteration triggers a separate SQL query.`,
+				description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query.`,
 				impact: method.selfTime,
 				involvedMethods: [methodLabel(method)],
-				evidence: `${op.type}() at line ${op.line}, column ${op.column} inside loop`,
+				evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 				suggestion:
 					"Restructure to reduce database calls inside the loop. Consider loading data before the loop with a single query.",
 			});

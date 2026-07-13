@@ -103,6 +103,7 @@ type PatternDetector = (profile: ProcessedProfile, sourceIndex?: SourceIndex) =>
 Three categories (18 detectors):
 - **Profile-only** (7): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, recursive-call, event-chain
 - **Source-correlated** (5): calcfields-in-loop (with CalcFormula severity graduation), modify-in-loop, record-op-in-loop, missing-setloadfields, incomplete-setloadfields
+  - "Loop" here includes **implicit** loops, not just `repeat`/`for`/`foreach`/`while`: a `Report`/`XMLport`/`Page` `OnAfterGetRecord` trigger runs once per row by platform contract, even with no syntactic loop in the source. `PER_ROW_TRIGGERS` in `src/source/indexer.ts` promotes these trigger bodies to loop bodies (`OnPreDataItem`/`OnPostDataItem` and table triggers like `OnValidate`/`OnInsert`/`OnModify` are excluded — they run once, or once per operation, not once per row). Findings raised from an implicit loop say so explicitly in their evidence/description (`RecordOpInfo.implicitLoop`), and a Page-sourced implicit-loop finding is one severity level below the same finding on a Report/XMLport.
 - **Source-only** (6): nested-loops, unfiltered-findset, event-subscriber-with-loop-ops, event-subscriber-with-loops, dangerous-call-in-loop, unindexed-filter
 
 ### ir-json Ingestion

@@ -235,3 +235,78 @@ describe("runSourceDetectors", () => {
 		}
 	});
 });
+
+describe("per-row triggers are loop bodies", () => {
+	it("flags CalcFields in a report OnAfterGetRecord", () => {
+		// OnAfterGetRecord runs once per dataitem row — it IS the loop. There is no
+		// `repeat` in the source, which is exactly why this was invisible.
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Report",
+			objectId: 50800,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		const found = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(found).toBeDefined();
+		expect(found!.severity).toBe("critical");
+		// Step 5: a finding raised from an implicit loop must explain itself —
+		// otherwise "inside a loop" against a trigger with no visible loop
+		// reads as a tool bug, not a real finding.
+		expect(found!.evidence).toContain("Report.OnAfterGetRecord");
+		expect(found!.evidence).toContain("runs once per row");
+		expect(found!.description).toContain("Report.OnAfterGetRecord");
+	});
+
+	it("does not treat OnPreDataItem as a loop body — it runs once", () => {
+		// The guard against over-firing. Not every trigger is per-row.
+		const method = makeMethod({
+			functionName: "OnPreDataItem",
+			objectType: "Report",
+			objectId: 50801,
+		});
+		const patterns = runSourceDetectors([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "calcfields-in-loop")).toBeUndefined();
+	});
+
+	it("flags CalcFields in an XMLport OnAfterGetRecord (locks in the OBJECT_TYPE_MAP casing)", () => {
+		// OBJECT_TYPE_MAP maps xmlport_declaration to "XMLport" (not "XmlPort"
+		// or "Xmlport"). A casing mismatch in PER_ROW_TRIGGERS's keys would
+		// silently no-op this whole object type while still type-checking.
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "XMLport",
+			objectId: 50802,
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		expect(patterns.length).toBeGreaterThan(0);
+		expect(patterns[0].evidence).toContain("XMLport.OnAfterGetRecord");
+	});
+
+	it("flags Modify in a Page OnAfterGetRecord at reduced (warning) severity", () => {
+		// A page renders tens of rows, not a report's millions — same bug
+		// shape, dropped one severity level (critical -> warning).
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Page",
+			objectId: 50803,
+		});
+		const patterns = detectModifyInLoop([method], sourceIndex);
+		expect(patterns.length).toBeGreaterThan(0);
+		expect(patterns[0].severity).toBe("warning");
+		expect(patterns[0].evidence).toContain("Page.OnAfterGetRecord");
+	});
+
+	it("does not promote table triggers (OnModify) to implicit loops", () => {
+		// Table triggers are per-OPERATION, not per-row — they're only a loop
+		// when the caller loops (cross-procedure propagation, out of scope
+		// here). Flagging every CalcFields/Get/Modify in OnValidate/OnInsert/
+		// OnModify would be noise.
+		const method = makeMethod({
+			functionName: "OnModify",
+			objectType: "Table",
+			objectId: 50100,
+		});
+		const patterns = detectRecordOpInLoop([method], sourceIndex);
+		expect(patterns.find((p) => p.id === "record-op-in-loop")).toBeUndefined();
+	});
+});
