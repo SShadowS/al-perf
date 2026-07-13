@@ -490,6 +490,37 @@ describe("method identity", () => {
 		expect(patterns).toHaveLength(1);
 		expect(patterns[0].id).toBe("recursive-call");
 	});
+
+	test("does not merge a codeunit and a table subscriber that share an object id (event-subscriber-hotspot)", () => {
+		// Codeunit 50000 "OnAfterPost" and Table 50000 "OnAfterPost", each at 6%
+		// self-time = 12% combined, above the 10% threshold. If the key omitted
+		// objectType these would collapse into a single involvedMethods entry
+		// (12% attributed to one method) instead of two distinct subscribers —
+		// silently dropping the table subscriber from the finding while still
+		// summing its self-time into the total.
+		const profile = makeProfileWith([
+			{
+				objectType: "Codeunit",
+				objectId: 50000,
+				functionName: "OnAfterPost",
+				selfTimePercent: 6,
+			},
+			{
+				objectType: "Table",
+				objectId: 50000,
+				functionName: "OnAfterPost",
+				selfTimePercent: 6,
+			},
+		]);
+
+		const patterns = detectEventSubscriberHotspot(profile);
+
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].involvedMethods).toEqual([
+			"OnAfterPost (Codeunit 50000)",
+			"OnAfterPost (Table 50000)",
+		]);
+	});
 });
 
 describe("detectEventChains", () => {
