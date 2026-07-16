@@ -6,6 +6,7 @@ import {
 	compareProfiles,
 } from "../../src/core/analyzer.js";
 import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
+import type { ProfileMetadata } from "../../src/types/batch.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -418,5 +419,124 @@ describe("SQL evidence enrichment (v1)", () => {
 			true,
 		);
 		expect(result.sqlActivity).toBeUndefined();
+	});
+});
+
+describe("SQL evidence enrichment (v1) — synthetic fixture (always runs)", () => {
+	// Committed (NOT gitignored), hand-crafted sampling profile that
+	// deterministically produces sqlEvidence through the REAL analyzeProfile
+	// path on every clean checkout / CI run — unlike the describe block above,
+	// which is gated on the gitignored real-capture fixture and never runs
+	// there. See test/fixtures/sql-evidence-synthetic.alcpuprofile: a
+	// PostBatch (CodeUnit 80) routine with 50 identical SELECT children
+	// (fires repeated-siblings, object-method attribution), one UPDATE with
+	// an invalid applicationDefinition nested under a builtin wrapper node
+	// (ancestor-fallback attribution), and one SQL node with no AL ancestor
+	// at all (UNATTRIBUTED_KEY bucket).
+	const SYNTHETIC = "test/fixtures/sql-evidence-synthetic.alcpuprofile";
+
+	test("sampling profile with SQL gets evidence on at least one finding", async () => {
+		const result = await analyzeProfile(SYNTHETIC);
+		const withEvidence = result.patterns.filter((p) => p.sqlEvidence);
+		expect(withEvidence.length).toBeGreaterThan(0);
+		for (const p of withEvidence) {
+			expect(p.sqlEvidence!.provenance).toBe("sampled-estimate");
+			expect(p.sqlRank).toBe(p.sqlEvidence!.totalSampledCostUs);
+			expect(p.sqlEvidence!.statements.length).toBeLessThanOrEqual(5);
+		}
+		// Deterministic anchor: repeated-siblings fires on the 50 identical
+		// SELECT children under PostBatch (CodeUnit 80), and its evidence union
+		// picks up BOTH the SELECT group (50 hits, object-method) and the
+		// ancestor-fallback UPDATE under the builtin wrapper (1 hit) — 51 total
+		// sampled hits, 51000us total sampled cost, mixed attribution.
+		const repeated = result.patterns.find((p) => p.id === "repeated-siblings");
+		expect(repeated).toBeDefined();
+		expect(repeated!.sqlEvidence!.totalSampledCostUs).toBe(51000);
+		expect(repeated!.sqlEvidence!.totalSampledHitCount).toBe(51);
+		expect(repeated!.sqlEvidence!.attribution).toBe("mixed");
+	});
+
+	test("identity pin: fingerprints identical with evidence stripped and re-minted", async () => {
+		const result = await analyzeProfile(SYNTHETIC);
+		const stripped = structuredClone(result.patterns);
+		for (const p of stripped) {
+			delete (p as Record<string, unknown>).sqlEvidence;
+			delete (p as Record<string, unknown>).sqlRank;
+			delete (p as Record<string, unknown>).fingerprint;
+		}
+		// Mirror analyzeProfile's own call site (core/analyzer.ts): fingerprintPatterns
+		// takes the non-idle MethodBreakdown[] directly, not a label map — the label
+		// map is built INSIDE fingerprintPatterns (buildMethodLabelMap in wire.ts).
+		const { fingerprintPatterns } = await import("../../src/lifecycle/wire.js");
+		const { aggregateByMethod } = await import("../../src/core/aggregator.js");
+		const { parseProfile } = await import("../../src/core/parser.js");
+		const { processProfile } = await import("../../src/core/processor.js");
+		const methods = aggregateByMethod(
+			processProfile(await parseProfile(SYNTHETIC)),
+		);
+		const nonIdleMethods = methods.filter(
+			(m) => !(m.functionName === "IdleTime" && m.objectId === 0),
+		);
+		fingerprintPatterns(stripped, nonIdleMethods);
+		expect(stripped.map((p) => p.fingerprint)).toEqual(
+			result.patterns.map((p) => p.fingerprint),
+		);
+	});
+
+	test("mutation guard: enrichment leaves impact and every non-evidence field untouched", async () => {
+		const { parseProfile } = await import("../../src/core/parser.js");
+		const { processProfile } = await import("../../src/core/processor.js");
+		const { runDetectors } = await import("../../src/core/patterns.js");
+		const { buildSqlByRoutine, attachSqlEvidence } = await import(
+			"../../src/semantic/sql-evidence.js"
+		);
+		const processed = processProfile(await parseProfile(SYNTHETIC));
+		const patterns = runDetectors(processed);
+		const before = structuredClone(patterns);
+
+		const sqlByRoutine = buildSqlByRoutine(processed);
+		attachSqlEvidence(patterns, sqlByRoutine);
+		// Sanity: enrichment must actually attach something on this fixture,
+		// else stripping sqlEvidence/sqlRank below compares two untouched
+		// clones and pins nothing.
+		expect(patterns.some((p) => p.sqlEvidence)).toBe(true);
+
+		for (const p of patterns) {
+			delete (p as Record<string, unknown>).sqlEvidence;
+			delete (p as Record<string, unknown>).sqlRank;
+		}
+		expect(patterns).toEqual(before);
+	});
+
+	test("metadata option attaches sqlActivity; absent without it", async () => {
+		const metadata: ProfileMetadata = {
+			activityId: "11111111-1111-1111-1111-111111111111",
+			activityType: "Background",
+			activityDescription: "Synthetic sanity-check activity",
+			startTime: "2026-01-01T00:00:00.000Z",
+			activityDuration: 200,
+			alExecutionDuration: 120,
+			sqlCallDuration: 50,
+			sqlCallCount: 51,
+			httpCallDuration: 0,
+			httpCallCount: 0,
+			userName: "TESTUSER",
+			clientSessionId: 1,
+		};
+		const withMeta = await analyzeProfile(SYNTHETIC, { metadata });
+		expect(withMeta.sqlActivity).toBeDefined();
+		expect(withMeta.sqlActivity!.measuredSqlCount).toBe(51);
+		expect(withMeta.sqlActivity!.measuredSqlDurationMs).toBe(50);
+		// Activity-level total sums EVERY routine bucket including
+		// UNATTRIBUTED_KEY (50000 SELECT + 1000 UPDATE + 1000 unattributed
+		// SELECT) — unlike a single finding's sqlEvidence, which only unions
+		// the routines named in that finding's involvedMethods.
+		expect(withMeta.sqlActivity!.sampledAttributedCostUs).toBe(52000);
+		expect(withMeta.sqlActivity!.activityDurationMs).toBe(200);
+		expect(withMeta.sqlActivity!.alExecutionDurationMs).toBe(120);
+		expect("unaccountedMs" in withMeta.sqlActivity!).toBe(false);
+
+		const without = await analyzeProfile(SYNTHETIC);
+		expect(without.sqlActivity).toBeUndefined();
 	});
 });

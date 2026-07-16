@@ -102,6 +102,22 @@ describe("CLI E2E", () => {
 			},
 		);
 
+		// Un-gated: the committed synthetic fixture (test/fixtures/sql-evidence-synthetic.alcpuprofile)
+		// carries real sqlEvidence/sqlRank through the actual analyze pipeline, so
+		// this pins --sort sql end-to-end on every clean checkout / CI run —
+		// unlike the gitignored-fixture test above, which never runs there.
+		test("--sort sql orders findings by sqlRank descending on the synthetic fixture", async () => {
+			const result =
+				await $`bun run ${CLI} analyze ${FIXTURES}/sql-evidence-synthetic.alcpuprofile -f json --sort sql`.text();
+			const parsed = JSON.parse(result);
+			const ranks = parsed.patterns.map(
+				(p: { sqlRank?: number }) => p.sqlRank ?? -1,
+			);
+			const sorted = [...ranks].sort((a, b) => b - a);
+			expect(ranks).toEqual(sorted);
+			expect(ranks.some((r: number) => r > -1)).toBe(true);
+		});
+
 		// Un-gated: exercises commander's own choices() validation, which needs
 		// no SQL-bearing fixture at all — any profile file will do.
 		test("--sort bogus is rejected by commander with the allowed choices listed", async () => {

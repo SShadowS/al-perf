@@ -104,6 +104,32 @@ describe("MCP Tool: analyze_profile", () => {
 		},
 		120000,
 	);
+
+	// Un-gated: the committed synthetic fixture carries real sqlEvidence/sqlRank
+	// through the actual analyze pipeline, so this pins sort:"sql" end-to-end on
+	// every clean checkout / CI run — unlike the gitignored-fixture test above.
+	test("sort: 'sql' orders patterns by sqlRank descending on the synthetic fixture", async () => {
+		const { client } = await createTestClient();
+		const result = await client.callTool(
+			{
+				name: "analyze_profile",
+				arguments: {
+					profilePath: "test/fixtures/sql-evidence-synthetic.alcpuprofile",
+					sort: "sql",
+				},
+			},
+			undefined,
+			{ timeout: 120000 },
+		);
+		const text = (result.content as TextContent)[0].text;
+		const parsed = JSON.parse(text);
+		const ranks = parsed.patterns.map(
+			(p: { sqlRank?: number }) => p.sqlRank ?? -1,
+		);
+		const sorted = [...ranks].sort((a, b) => b - a);
+		expect(ranks).toEqual(sorted);
+		expect(ranks.some((r: number) => r > -1)).toBe(true);
+	}, 120000);
 });
 
 describe("MCP Tool: get_hotspots", () => {
