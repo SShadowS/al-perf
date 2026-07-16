@@ -162,9 +162,50 @@ You CAN see what's in the gated tables (two routes), so the "request public acce
 **Precedent that the ask is reasonable:** `Table Information` (page 8700 over virtual table `"Table Information"`) is the SAME class of virtual table but is **already publicly readable** — `Permissions = tabledata "Table Information" = r` (`No. of Records`, `Record Size`, `Size/Data/Index (KB)`, `Compression`). A virtual DB-metrics table CAN be public-read; Wait Statistics simply hasn't been granted it.
 
 **Why-public justification per source (for the MS request):**
-- **BCPT Log Entry / Line** — the ONLY in-app measured SQL-count + duration per operation, with built-in version-over-version deltas. Locked behind `Access = Internal`, so a perf tool must scrape `AL0000DGF` telemetry to get data BC already stores in a clean table. Grant read → tools consume BCPT results directly (regression gating, CI). Schema is already public (MIT repo); only the runtime permission is withheld.
-- **Database Wait Statistics table** — answers "is slow SQL actually blocked SQL?", the single biggest false-positive risk when attributing profile cost. Page is public but direct AL table read is ungranted; grant read (as Table Information already is) → a tool can pull wait categories inline with findings instead of asking the user to eyeball a page.
+- **BCPT Log Entry / Line** — the ONLY in-app measured SQL-count + duration per operation, with built-in version-over-version deltas. Table is `Access = Internal`. **UPDATE (sweep): no MS ask needed** — retrievable today via the official BCPT REST API (pages 149006/7/8, permission set 149000 Public/Assignable grants `BCPT Log Entry = RIMD`); install the Performance Toolkit app + assign the set. Telemetry scraping (`AL0000DGF`) is the fallback. Only the `- Base` regression-delta FlowFields still require in-app access.
+- **Database Wait Statistics table** — answers "is slow SQL actually blocked SQL?", the single biggest false-positive risk when attributing profile cost. **UPDATE (sweep): the ask is even smaller than thought** — sibling virtual tables `Database Locks` (via `LOGIN`) and `Database Index` (via the Table Information page grant) are confirmed *public-readable*; Wait Statistics is the same family and almost certainly grantable the same way. And `Database Locks` is the stronger source: it gives per-lock AL-object attribution the DB-wide Wait Statistics aggregate can't.
 - **General principle** — Internal ≠ unusable. Every gated source here has a fully-known field set (open-source def or page-surfaced). Catalogue now, request `Access = Public` read-only per table with the field list + use case attached.
+
+## Enrichment opportunity map (2026-07-16 three-investigator sweep)
+
+Reinvestigation of "what could improve al-perf," grouped by access. Sources are net-new or upgraded vs the catalogue above. All findings cite the discovering source; verify file:line before building.
+
+### Bucket 1 — already ingested by al-perf, currently discarded (zero new capture)
+
+| # | Datum (file) | Used today | What it unlocks | Effort |
+|---|---|---|---|---|
+| **1** | **Batch manifest measured SQL/HTTP** — `sqlCallCount`, `sqlCallDuration`, `httpCallCount/Duration`, `alExecutionDuration`, `activityDuration` (`src/types/batch.ts`; real: `manifest.json` `sqlCallCount:1381, sqlCallDuration:382`) | display-only (`batch-html.ts:125`); no detector, not in terminal/markdown | **MEASURED per-activity SQL count+duration already in-tool** — cross-check the profile's sampled estimate; SQL-bound vs AL-bound flag; `activityDuration − alExec − sql − http` = unaccounted client/render time | **trivial** |
+| 2 | RT0005 not fully extracted (`src/lifecycle/appinsights.ts:33,188`) — pulled by default but KQL never adds `customDimensions.sqlStatement`; full `alStackTrace` fetched, only first line kept | partial | actual slow-SQL text + full AL stack from a query al-perf already runs | moderate |
+| 3 | Sampling per-node `lineNumber` (verified 270/283 nodes; `processor.ts:111` drops it) | no (only instrumentation `positionTicks`) | line-level hotspots on the ONLY format that carries SQL | moderate |
+| 4 | `irCapture.exceptionCount`/`invocationCount` (`analyzer.ts:373` copies only `incompleteCount`) | no | error-storm confidence/anomaly factor | trivial |
+| 5 | ir-json `exception`/`lines`(hit counts)/`callerLine` (`irjson-parser.ts:45` drops) | no | which invocation threw + where; loop-iteration counts; precise call-site | moderate |
+| 6 | `instanceStats` p95/p99/stdDev + `callAmplification` (`aggregator.ts:196`) | no (in raw json only) | tail-latency / lock-contention signature detector | moderate |
+| 7 | SQL-node `applicationDefinition`/`declaringApplication` unused even in `--deep` (`sql-patterns.ts:62`) | no | which AL object/app issued each SQL pattern | moderate |
+| 8 | `TableKeyInfo.clustered` parsed (`indexer.ts:1155`), read nowhere | no | sargability: is `SetCurrentKey` hitting clustered key? | small |
+
+### Bucket 2 — OnPrem direct SQL (document; request SaaS equivalent later)
+
+**Build Query Store first.** Threshold-free (every statement, not just >750/1000ms), survives plan-cache eviction + BC restarts, low permission ask (`VIEW DATABASE STATE` on one DB), MS-recommended for BC. Views: `sys.query_store_query`/`_query_text`/`_plan`/`_runtime_stats`/`_runtime_stats_interval`/`_wait_stats` → text + `count_executions` + duration/CPU (µs) + logical/physical reads (pages) + rowcount + wait category, per query/plan/interval. All plain T-SQL — reachable from Bun via `mssql`/`tedious`, no .NET.
+
+Follow-ons: **Extended Events** (`sqlserver.rpc_completed` + `sql_batch_completed`; read `.xel` server-side via `sys.fn_xe_file_target_read_file` — no .NET; MI target is blob not disk) for targeted per-execution deep captures. **DMVs**: `dm_exec_query_stats` + `CROSS APPLY dm_exec_sql_text`/`dm_exec_query_plan`; index usage/operational/missing triad; in-flight `dm_exec_requests`/`dm_os_waiting_tasks`/`dm_tran_locks`. **BC Server perf counters** (perfmon/WMI, not SQL perms) — incl. **CalcFields cache hit-rate** (corroborates `calcfields-in-loop`), command/result-set cache, query-repositioning rate, connection counts, heartbeat ms.
+
+Gotchas: `logical_reads`=8KB pages not rows; `rows`=returned not examined; DMV plan-cache stats vanish on eviction (Query Store doesn't).
+
+**Correlation (no shared id exists):** time-window overlap + database match + `query_hash`/normalized-text. RT0005's `sqlServerSessionId` is the closest cross-system key (join to `dm_exec_sessions`/`dm_tran_locks`). **Physical→logical mapping:** split on EVERY `$` (`parts[1]`=table, `parts[2]`=extension GUID); no SQL-side object-metadata table in BC28 (retired at BC16) → resolve against al-perf's tree-sitter `SourceIndex`; 128-char identifier overflow is unparseable-fallback.
+
+### Bucket 3 — "if Microsoft approves" (mostly already open)
+
+**Already public — NO approval needed (permission chain traced in BC source):**
+- **Database Locks** (page 9511 / virtual table `"Database Locks"`) — live lock snapshot **with AL object type/id/name + method scope + extension name** per lock. Granted via `Session-Read` (permset 95) → `System Tables-Basic` (66) → `System Application-Basic` (69) → **`LOGIN` (161, Public/Assignable)** — every signed-in user. Answers "slow SQL vs *blocked* SQL, by which extension" — Wait Statistics (DB-wide aggregate) can't. **Best new source.** Wait-stats telemetry fires once/day → read the table directly for fresh data.
+- **Database Index** (table, backs page 8700) — per-index fragmentation % + seek/scan/lookup/update counts + last-use timestamps + size. Public: Table Information page grants `tabledata "Database Index" = r` (`TableInformation.Page.al:30-32` — a grant this doc previously missed). Pairs with `Index Management` NST codeunit (toggle indexes).
+- **BCPT via REST** — official OData v1.0 API pages 149006/149007/**149008** (`BCPTLogEntryAPI.Page.al`, `target: Cloud`); permission set **149000 "BC Perf. Toolkit" (Public, Assignable)** grants `tabledata "BCPT Log Entry" = RIMD`. Install the (MIT, first-party) Performance Toolkit app + assign the set → measured duration + `numberOfSQLStmts` over REST **today**. Upgrades the "Internal, scrape `AL0000DGF`" framing. Caveat: the `- Base` version-delta FlowFields are NOT in the API layout.
+
+**Still gated / needs the request-public treatment:**
+- **Database Missing Indexes** (page 9521 / `sys.dm_db_missing_index_details`) — `Index Equality/Inequality/Include Columns`, seeks/scans, `Average Impact`, **`Estimated Benefit`** (default-sorted desc). No permission set grants it anywhere — request public read.
+- **Table Information Cache** (table 8700, `Access = Internal`, `DataPerCompany=false`) — `Growth %` (30-day), `Last Period Data Size/Records`. Table-growth trend.
+- **Performance Profile Scheduler** (page 1932 / virtual table, permsets 1922/1923 Internal) — `Activity Duration Threshold (ms)` (default 500) + `Frequency` (Sampling Interval 50/100/150ms, default 100) + `Activity` filter (Web Client/Background/Web API). Controls how aggressively the platform auto-captures the sampling profiles al-perf consumes.
+
+**Dead ends from source (need the NST assembly, not AL):** `NavSqlConnectionTelemetry` has one AL call site (`SendWaitStatisticsSnapshotToTelemetry`); .NET internals invisible without `Microsoft.Dynamics.Nav.Ncl.dll`. ~170 `Microsoft.Dynamics.Nav.*` types swept → **no sibling instrumentation/SQL-profiler .NET type exists** (declaration-side confirmation of sampling-only). Two distinct dev-time VS Code flags found: `enableSqlInformationDebugger` AND `enableLongRunningSqlStatements`. No AL-settable `SqlLongRunningThreshold` (server config only, `Set-NAVServerConfiguration`, default 1000ms; platform telemetry default 750ms).
 
 ## Pending doc research (mostly answered by panel-2; remaining)
 
