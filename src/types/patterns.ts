@@ -1,5 +1,33 @@
 export type PatternSeverity = "critical" | "warning" | "info";
 
+/**
+ * One normalized SQL query shape correlated to a routine, with SAMPLED
+ * aggregate counters. `hitCount` on a sampling profile is a sample count,
+ * never an executed-N-times measurement — see `sampledHitCount`/`sampledCostUs`.
+ */
+export interface SqlStatementEvidence {
+	text: string; // first-seen normalized shape, truncated to 200 chars
+	operation: "SELECT" | "COUNT" | "INSERT" | "UPDATE" | "DELETE" | "OTHER";
+	table: string | null;
+	extensionAppId: string | null;
+	readUncommitted: boolean;
+	sampledHitCount: number; // Σ hitCount — SAMPLED, not executions
+	sampledCostUs: number; // Σ node.selfTime — SAMPLED estimate
+	attribution: "object-method" | "ancestor-fallback";
+}
+
+/**
+ * SQL evidence attached to a `DetectedPattern`: descriptive metadata only,
+ * derived from SAMPLED profile counters — never identity, never impact.
+ */
+export interface SqlEvidence {
+	statements: SqlStatementEvidence[]; // top-5 by sampledCostUs (display only)
+	totalSampledCostUs: number; // full-set total
+	totalSampledHitCount: number; // full-set total
+	provenance: "sampled-estimate";
+	attribution: "object-method" | "ancestor-fallback" | "mixed";
+}
+
 export interface DetectedPattern {
 	id: string;
 	severity: PatternSeverity;
@@ -22,6 +50,15 @@ export interface DetectedPattern {
 	 * (e.g. detector unit tests).
 	 */
 	fingerprint?: string;
+	/**
+	 * SQL statements correlated to this finding's routines (SAMPLED estimates —
+	 * a sampling profile's hitCount is a sample count, not an invocation count).
+	 * Descriptive metadata only: never identity, never impact. Absent when the
+	 * profile carries no SQL (ir-json, instrumentation) or nothing matched.
+	 */
+	sqlEvidence?: SqlEvidence;
+	/** = sqlEvidence.totalSampledCostUs. Separate rank signal; impact is untouched. */
+	sqlRank?: number;
 }
 
 export type PatternDetector = (

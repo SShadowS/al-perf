@@ -305,6 +305,23 @@ const SQL_PREFIXES: string[] = [
 ];
 
 /**
+ * Shape-independent core of isAlRoutineFrame: works for MethodBreakdown
+ * (m.functionName/m.isBuiltin) AND ProcessedNode
+ * ({ functionName: node.callFrame.functionName, isBuiltin: node.isBuiltinCodeUnitCall === true }).
+ */
+export function isAlRoutineFrameParts(frame: {
+	functionName: string;
+	isBuiltin: boolean;
+}): boolean {
+	if (frame.isBuiltin) return false;
+	const lower = frame.functionName.toLowerCase().trimStart();
+	for (const prefix of SQL_PREFIXES) {
+		if (lower.startsWith(prefix)) return false;
+	}
+	return true;
+}
+
+/**
  * Return `true` when this `MethodBreakdown` represents an AL routine that
  * al-sem could plausibly have analysed — i.e. it should enter the correlation
  * universe and, if absent, count as a blind-spot.
@@ -320,12 +337,8 @@ const SQL_PREFIXES: string[] = [
  * isAlRoutineFrame({ functionName: "SELECT TOP 1 …", isBuiltin: false, … }) // false
  */
 export function isAlRoutineFrame(m: MethodBreakdown): boolean {
-	if (m.isBuiltin === true) return false;
-
-	const lower = m.functionName.toLowerCase().trimStart();
-	for (const prefix of SQL_PREFIXES) {
-		if (lower.startsWith(prefix)) return false;
-	}
-
-	return true;
+	return isAlRoutineFrameParts({
+		functionName: m.functionName,
+		isBuiltin: m.isBuiltin === true,
+	});
 }
