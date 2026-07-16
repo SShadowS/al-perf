@@ -3,8 +3,109 @@ import { resolve } from "path";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
 import { buildTableBreakdown } from "../../src/core/table-view.js";
+import type {
+	ProcessedNode,
+	ProcessedProfile,
+} from "../../src/types/processed.js";
 
 const FIXTURES = resolve(import.meta.dir, "../fixtures");
+
+interface ParentSpec {
+	functionName: string;
+	objectType: string;
+	objectId: number;
+}
+
+interface ChildSpec {
+	functionName: string;
+	objectType: string;
+	objectId: number;
+	objectName: string;
+}
+
+/**
+ * Build a minimal synthetic ProcessedProfile from a list of (parent, child)
+ * pairs — one root parent node plus one table-operation child beneath it per
+ * pair. Children sharing the same objectName aggregate into one
+ * TableBreakdown entry; entry.callSites (table-view.ts) tracks how many
+ * distinct parent frames feed it. Mirrors the synthetic-profile pattern in
+ * test/core/patterns.test.ts (makeIdentityNode / makeSiblingProfile).
+ */
+function makeProfileWithParents(
+	pairs: { parent: ParentSpec; child: ChildSpec }[],
+): ProcessedProfile {
+	let nextId = 1;
+	const allNodes: ProcessedNode[] = [];
+	const roots: ProcessedNode[] = [];
+
+	for (const { parent: parentSpec, child: childSpec } of pairs) {
+		const parent: ProcessedNode = {
+			id: nextId++,
+			callFrame: {
+				functionName: parentSpec.functionName,
+				scriptId: `${parentSpec.objectType}_${parentSpec.objectId}`,
+				url: "",
+				lineNumber: 1,
+				columnNumber: 0,
+			},
+			applicationDefinition: {
+				objectType: parentSpec.objectType,
+				objectName: `Test${parentSpec.objectType}`,
+				objectId: parentSpec.objectId,
+			},
+			hitCount: 1,
+			children: [],
+			depth: 0,
+			selfTime: 0,
+			totalTime: 1,
+			selfTimePercent: 0,
+			totalTimePercent: 1,
+		};
+
+		const child: ProcessedNode = {
+			id: nextId++,
+			callFrame: {
+				functionName: childSpec.functionName,
+				scriptId: `${childSpec.objectType}_${childSpec.objectId}`,
+				url: "",
+				lineNumber: 1,
+				columnNumber: 0,
+			},
+			applicationDefinition: {
+				objectType: childSpec.objectType,
+				objectName: childSpec.objectName,
+				objectId: childSpec.objectId,
+			},
+			hitCount: 1,
+			children: [],
+			parent,
+			depth: 1,
+			selfTime: 1,
+			totalTime: 1,
+			selfTimePercent: 1,
+			totalTimePercent: 1,
+		};
+
+		parent.children.push(child);
+		roots.push(parent);
+		allNodes.push(parent, child);
+	}
+
+	return {
+		type: "sampling",
+		roots,
+		allNodes,
+		nodeMap: new Map(allNodes.map((n) => [n.id, n])),
+		totalDuration: allNodes.length,
+		totalSelfTime: allNodes.reduce((sum, n) => sum + n.selfTime, 0),
+		activeSelfTime: allNodes.reduce((sum, n) => sum + n.selfTime, 0),
+		idleSelfTime: 0,
+		maxDepth: 1,
+		nodeCount: allNodes.length,
+		startTime: 0,
+		endTime: allNodes.length,
+	};
+}
 
 describe("buildTableBreakdown", () => {
 	test("returns empty array for profiles with no table operations", async () => {
@@ -135,5 +236,67 @@ describe("buildTableBreakdown", () => {
 			expect(entry.hasSetLoadFields).toBe(false);
 			expect(entry.hasFilters).toBe(false);
 		}
+	});
+});
+
+describe("callSiteCount — parents sharing an object id", () => {
+	const CHILD: ChildSpec = {
+		functionName: "FindSet",
+		objectType: "TableData",
+		objectId: 27,
+		objectName: "Customer",
+	};
+
+	test("counts a Codeunit 50000 parent and a Table 50000 parent as two call sites", () => {
+		// Same function name, same objectId, different objectType — legal in AL.
+		// The old key `${functionName}:${objectId}` merged them into one site.
+		const profile = makeProfileWithParents([
+			{
+				parent: {
+					functionName: "Run",
+					objectType: "Codeunit",
+					objectId: 50000,
+				},
+				child: CHILD,
+			},
+			{
+				parent: { functionName: "Run", objectType: "Table", objectId: 50000 },
+				child: CHILD,
+			},
+		]);
+
+		const breakdown = buildTableBreakdown(profile);
+		const customer = breakdown.find((t) => t.tableName === "Customer");
+
+		expect(customer?.callSiteCount).toBe(2);
+	});
+
+	test("two parents with identical function, type, and id still count as one call site", () => {
+		// Same function name, same objectType, same objectId across two distinct
+		// node instances — this is a genuine merge case and must stay at 1 so the
+		// fix isn't just "make every parent distinct".
+		const profile = makeProfileWithParents([
+			{
+				parent: {
+					functionName: "Run",
+					objectType: "Codeunit",
+					objectId: 50000,
+				},
+				child: CHILD,
+			},
+			{
+				parent: {
+					functionName: "Run",
+					objectType: "Codeunit",
+					objectId: 50000,
+				},
+				child: CHILD,
+			},
+		]);
+
+		const breakdown = buildTableBreakdown(profile);
+		const customer = breakdown.find((t) => t.tableName === "Customer");
+
+		expect(customer?.callSiteCount).toBe(1);
 	});
 });

@@ -54,7 +54,7 @@ export function buildTableBreakdown(
 
 		// Track which parent methods call into this table
 		if (node.parent) {
-			const parentRef = `${node.parent.callFrame.functionName}:${node.parent.applicationDefinition.objectId}`;
+			const parentRef = `${node.parent.callFrame.functionName}_${node.parent.applicationDefinition.objectType}_${node.parent.applicationDefinition.objectId}`;
 			entry.callSites.add(parentRef);
 		}
 	}
