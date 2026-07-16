@@ -19,8 +19,8 @@ export type SourceMatch = ProcedureInfo | TriggerInfo;
  *    overloads should inspect `candidates.length > 1`.
  *
  * Matching strategy (applied in order, stopping at the first set that is non-empty):
- * 1. Type+id match: candidates with `canonicalObjectType(objectType) === canonicalObjectType(objectType)
- *    && objectId === objectId` (all of them). Object ids are unique only PER TYPE in AL, so this must
+ * 1. Type+id match: candidates with `canonicalObjectType(c.objectType) === canonicalObjectType(objectType)
+ *    && c.objectId === objectId` (all of them). Object ids are unique only PER TYPE in AL, so this must
  *    come first — an id-only match would return a routine from the wrong object whenever two types
  *    share an id and a member name.
  * 2. Id-only:       candidates with `objectId === objectId` (all of them), regardless of type. Reached
