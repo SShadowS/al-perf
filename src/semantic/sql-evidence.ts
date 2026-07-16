@@ -7,6 +7,8 @@ import {
 	normalizeSqlShape,
 	parseSqlTable,
 } from "../core/sql-node.js";
+import type { SqlActivityCorroboration } from "../output/types.js";
+import type { ProfileMetadata } from "../types/batch.js";
 import type {
 	DetectedPattern,
 	SqlStatementEvidence,
@@ -213,4 +215,26 @@ export function attachSqlEvidence(
 		};
 		pattern.sqlRank = totalCost;
 	}
+}
+
+/**
+ * Activity-level corroboration: the manifest's MEASURED SQL count/duration
+ * beside the profile's SAMPLED SQL total. No subtraction across manifest
+ * duration fields — they overlap (alExecutionDuration includes HTTP wait).
+ */
+export function buildSqlActivityCorroboration(
+	sqlByRoutine: Map<string, SqlStatementEvidence[]>,
+	metadata: ProfileMetadata,
+): SqlActivityCorroboration {
+	let sampled = 0;
+	for (const items of sqlByRoutine.values()) {
+		for (const item of items) sampled += item.sampledCostUs;
+	}
+	return {
+		measuredSqlCount: metadata.sqlCallCount,
+		measuredSqlDurationMs: metadata.sqlCallDuration,
+		sampledAttributedCostUs: sampled,
+		activityDurationMs: metadata.activityDuration,
+		alExecutionDurationMs: metadata.alExecutionDuration,
+	};
 }

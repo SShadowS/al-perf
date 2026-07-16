@@ -20,6 +20,7 @@ import { matchAllHotspots } from "../source/locator.js";
 import { extractSnippet } from "../source/snippets.js";
 import { runSourceDetectors } from "../source/source-patterns.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
+import type { ProfileMetadata } from "../types/batch.js";
 import type { DetectedPattern } from "../types/patterns.js";
 import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import type { ParsedProfile } from "../types/profile.js";
@@ -53,6 +54,12 @@ export interface AnalyzeOptions {
 	onSourceIndex?: (index: SourceIndex) => void;
 	/** Callback to access the full non-idle method list (untruncated) for fusion (R2-7). */
 	onAllMethods?: (methods: MethodBreakdown[]) => void;
+	/**
+	 * This profile's batch-manifest entry (BC Performance Profiles sidecar).
+	 * Enables the activity-level SQL corroboration section. Batch-analyzer
+	 * associates it by ORIGINAL profile index before concurrency starts.
+	 */
+	metadata?: ProfileMetadata;
 }
 
 export interface CompareOptions {

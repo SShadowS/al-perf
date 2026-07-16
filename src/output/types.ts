@@ -8,6 +8,22 @@ import type {
 import type { AIFinding } from "../types/ai-findings.js";
 import type { DetectedPattern } from "../types/patterns.js";
 
+/**
+ * Activity-level SQL corroboration (batch path only). measuredSqlCount /
+ * measuredSqlDurationMs come from BC's own Performance Profiles manifest and
+ * are MEASURED; sampledAttributedCostUs is the profile's sampled SQL total.
+ * Shown side-by-side, NEVER subtracted: the manifest's duration fields
+ * overlap (alExecutionDuration includes HTTP wait — proven on real data),
+ * so no unaccounted-time arithmetic exists here by design.
+ */
+export interface SqlActivityCorroboration {
+	measuredSqlCount: number;
+	measuredSqlDurationMs: number;
+	sampledAttributedCostUs: number;
+	activityDurationMs?: number;
+	alExecutionDurationMs?: number;
+}
+
 export interface AnalysisResult {
 	meta: {
 		profilePath: string;
@@ -64,6 +80,8 @@ export interface AnalysisResult {
 	appBreakdown: AppBreakdown[];
 	objectBreakdown: ObjectBreakdown[];
 	tableBreakdown?: TableBreakdown[];
+	/** Present ONLY when a batch manifest entry was supplied (batch path). */
+	sqlActivity?: SqlActivityCorroboration;
 	explanation?: string;
 	aiFindings?: AIFinding[];
 	aiNarrative?: string;

@@ -4,9 +4,11 @@ import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
 import {
 	attachSqlEvidence,
+	buildSqlActivityCorroboration,
 	buildSqlByRoutine,
 	UNATTRIBUTED_KEY,
 } from "../../src/semantic/sql-evidence.js";
+import type { ProfileMetadata } from "../../src/types/batch.js";
 import type {
 	DetectedPattern,
 	SqlStatementEvidence,
@@ -376,5 +378,39 @@ describe("attachSqlEvidence", () => {
 		delete (after as Record<string, unknown>).sqlEvidence;
 		delete (after as Record<string, unknown>).sqlRank;
 		expect(after).toEqual(before);
+	});
+});
+
+describe("buildSqlActivityCorroboration", () => {
+	// clientSessionId is typed `number` in src/types/batch.ts (not the string
+	// placeholder in the brief) — fixed here to match the actual type exactly.
+	const meta: ProfileMetadata = {
+		activityId: "x",
+		activityType: "WebClient",
+		activityDescription: "test",
+		startTime: "2026-03-05T13:21:41.453Z",
+		activityDuration: 11945,
+		alExecutionDuration: 7023,
+		sqlCallDuration: 382,
+		sqlCallCount: 1381,
+		httpCallDuration: 0,
+		httpCallCount: 0,
+		userName: "T",
+		clientSessionId: 42,
+		scheduleDescription: "s",
+	};
+
+	test("measured beside sampled; each SQL shape summed once; NO residual field", () => {
+		const map = new Map([
+			["A_CodeUnit_1", [{ sampledCostUs: 300 } as never]],
+			["B_CodeUnit_2", [{ sampledCostUs: 200 } as never]],
+			["", [{ sampledCostUs: 50 } as never]], // unattributed still counts in the total
+		]);
+		const c = buildSqlActivityCorroboration(map as never, meta);
+		expect(c.measuredSqlCount).toBe(1381);
+		expect(c.measuredSqlDurationMs).toBe(382);
+		expect(c.sampledAttributedCostUs).toBe(550);
+		expect(c.activityDurationMs).toBe(11945);
+		expect("unaccountedMs" in c).toBe(false); // fields overlap — no subtraction, ever
 	});
 });

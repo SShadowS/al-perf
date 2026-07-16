@@ -52,12 +52,13 @@ export async function analyzeBatch(
 	// Analyze all profiles with bounded concurrency
 	const settled = await runWithConcurrency(
 		profilePaths,
-		async (path) =>
+		async (path, i) =>
 			analyzeProfile(path, {
 				top,
 				includePatterns: true,
 				appFilter: options?.appFilter?.map((s) => s.trim()),
 				sourceIndex,
+				metadata: options?.metadata?.[i], // original-index association
 			}),
 		concurrency,
 	);
@@ -426,7 +427,7 @@ function severityRank(severity: "critical" | "warning" | "info"): number {
 
 async function runWithConcurrency<T, R>(
 	items: T[],
-	fn: (item: T) => Promise<R>,
+	fn: (item: T, index: number) => Promise<R>,
 	limit: number,
 ): Promise<PromiseSettledResult<R>[]> {
 	const results: PromiseSettledResult<R>[] = new Array(items.length);
@@ -436,7 +437,7 @@ async function runWithConcurrency<T, R>(
 		while (nextIndex < items.length) {
 			const i = nextIndex++;
 			try {
-				results[i] = { status: "fulfilled", value: await fn(items[i]) };
+				results[i] = { status: "fulfilled", value: await fn(items[i], i) };
 			} catch (reason) {
 				results[i] = { status: "rejected", reason };
 			}
