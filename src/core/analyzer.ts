@@ -8,12 +8,18 @@ import type {
 	CriticalPathStep,
 	MethodDelta,
 	PatternDelta,
+	SqlActivityCorroboration,
 } from "../output/types.js";
 import { runEngineDiff } from "../semantic/diff-runner.js";
 import { isAlWorkspaceDir } from "../semantic/engine-runner.js";
 import { fuseProfile } from "../semantic/fuse.js";
 import { normalizeAppGuid } from "../semantic/identity.js";
 import { correlateRegressions } from "../semantic/regression-correlate.js";
+import {
+	attachSqlEvidence,
+	buildSqlActivityCorroboration,
+	buildSqlByRoutine,
+} from "../semantic/sql-evidence.js";
 import { annotateHotspots, prioritizeFindings } from "../semantic/views.js";
 import { buildSourceIndex } from "../source/indexer.js";
 import { matchAllHotspots } from "../source/locator.js";
@@ -248,6 +254,24 @@ export async function analyzeProfile(
 		patterns = sortPatterns([...patterns, ...sourcePatterns]);
 	}
 
+	// SQL evidence enrichment (v1): sampling profiles only — ir-json and
+	// instrumentation captures carry no SQL nodes. Sets ONLY sqlEvidence and
+	// sqlRank on findings (never impact/identity), plus the activity-level
+	// corroboration when a batch-manifest entry was threaded in.
+	let sqlActivity: SqlActivityCorroboration | undefined;
+	if (processed.type === "sampling" && processed.sourceFormat !== "ir-json") {
+		const sqlByRoutine = buildSqlByRoutine(processed);
+		if (sqlByRoutine.size > 0) {
+			attachSqlEvidence(patterns, sqlByRoutine);
+			if (options?.metadata) {
+				sqlActivity = buildSqlActivityCorroboration(
+					sqlByRoutine,
+					options.metadata,
+				);
+			}
+		}
+	}
+
 	// Annotate patterns with estimated savings
 	annotateEstimatedSavings(patterns);
 
@@ -398,6 +422,7 @@ export async function analyzeProfile(
 		appBreakdown: apps,
 		objectBreakdown: objects,
 		tableBreakdown: tableBreakdown.length > 0 ? tableBreakdown : undefined,
+		sqlActivity,
 	};
 }
 

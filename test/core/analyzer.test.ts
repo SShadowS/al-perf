@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import {
 	analyzeProfile,
 	comparabilityWarning,
@@ -307,5 +308,83 @@ describe("compareProfiles comparability guard", () => {
 				{ captureKind: "sampling", sourceFormat: "alcpuprofile" },
 			),
 		).toBeUndefined();
+	});
+});
+
+describe("SQL evidence enrichment (v1)", () => {
+	// Fixture is gitignored (real capture data); tests below are local-only by design.
+	const PROFILE = "test/fixtures/batch-recorded/profile-1.alcpuprofile";
+	const MANIFEST = "test/fixtures/batch-recorded/manifest.json";
+
+	test.skipIf(!existsSync(PROFILE))(
+		"sampling profile with SQL gets evidence on at least one finding",
+		async () => {
+			const result = await analyzeProfile(PROFILE);
+			const withEvidence = result.patterns.filter((p) => p.sqlEvidence);
+			for (const p of withEvidence) {
+				expect(p.sqlEvidence!.provenance).toBe("sampled-estimate");
+				expect(p.sqlRank).toBe(p.sqlEvidence!.totalSampledCostUs);
+				expect(p.sqlEvidence!.statements.length).toBeLessThanOrEqual(5);
+			}
+			// profile-1 has 181 SQL nodes and known high-hit-count/repeated-siblings findings:
+			expect(withEvidence.length).toBeGreaterThan(0);
+		},
+	);
+
+	test.skipIf(!existsSync(PROFILE))(
+		"identity pin: fingerprints identical with evidence stripped and re-minted",
+		async () => {
+			const result = await analyzeProfile(PROFILE);
+			const stripped = structuredClone(result.patterns);
+			for (const p of stripped) {
+				delete (p as Record<string, unknown>).sqlEvidence;
+				delete (p as Record<string, unknown>).sqlRank;
+				delete (p as Record<string, unknown>).fingerprint;
+			}
+			// Mirror analyzeProfile's own call site (core/analyzer.ts): fingerprintPatterns
+			// takes the non-idle MethodBreakdown[] directly, not a label map — the label
+			// map is built INSIDE fingerprintPatterns (buildMethodLabelMap in wire.ts).
+			const { fingerprintPatterns } = await import(
+				"../../src/lifecycle/wire.js"
+			);
+			const { aggregateByMethod } = await import(
+				"../../src/core/aggregator.js"
+			);
+			const { parseProfile } = await import("../../src/core/parser.js");
+			const { processProfile } = await import("../../src/core/processor.js");
+			const methods = aggregateByMethod(
+				processProfile(await parseProfile(PROFILE)),
+			);
+			const nonIdleMethods = methods.filter(
+				(m) => !(m.functionName === "IdleTime" && m.objectId === 0),
+			);
+			fingerprintPatterns(stripped, nonIdleMethods);
+			expect(stripped.map((p) => p.fingerprint)).toEqual(
+				result.patterns.map((p) => p.fingerprint),
+			);
+		},
+	);
+
+	test.skipIf(!existsSync(PROFILE) || !existsSync(MANIFEST))(
+		"metadata option attaches sqlActivity; absent without it",
+		async () => {
+			const manifest = JSON.parse(readFileSync(MANIFEST, "utf-8"));
+			const withMeta = await analyzeProfile(PROFILE, { metadata: manifest[0] });
+			expect(withMeta.sqlActivity).toBeDefined();
+			expect(withMeta.sqlActivity!.measuredSqlCount).toBe(1381);
+			expect(withMeta.sqlActivity!.sampledAttributedCostUs).toBeGreaterThan(0);
+			expect("unaccountedMs" in withMeta.sqlActivity!).toBe(false);
+
+			const without = await analyzeProfile(PROFILE);
+			expect(without.sqlActivity).toBeUndefined();
+		},
+	);
+
+	test("ir-json profile: no SQL evidence anywhere (negative)", async () => {
+		const result = await analyzeProfile("test/fixtures/irjson-minimal.ir.json");
+		expect(result.patterns.every((p) => p.sqlEvidence === undefined)).toBe(
+			true,
+		);
+		expect(result.sqlActivity).toBeUndefined();
 	});
 });
