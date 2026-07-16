@@ -343,6 +343,7 @@ function renderSqlActivity(result: AnalysisResult): string {
 function renderSqlEvidenceMd(evidence: SqlEvidence): string {
 	const lines: string[] = [
 		`**SQL (sampled estimate):** total ${formatTime(evidence.totalSampledCostUs)} across ${evidence.totalSampledHitCount} sampled hits`,
+		"",
 	];
 	for (const s of evidence.statements.slice(0, 5)) {
 		const table = s.table ?? "(unparsed)";

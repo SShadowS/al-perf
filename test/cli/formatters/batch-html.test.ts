@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { resolve } from "path";
 import { formatBatchHtml } from "../../../src/cli/formatters/batch-html.js";
-import { analyzeBatch } from "../../../src/core/batch-analyzer.js";
+import { analyzeProfile } from "../../../src/core/analyzer.js";
+import {
+	aggregateResults,
+	analyzeBatch,
+} from "../../../src/core/batch-analyzer.js";
+import type { ProfileMetadata } from "../../../src/types/batch.js";
 
 const BATCH_DIR = resolve(import.meta.dir, "../../fixtures/batch");
 
@@ -199,5 +204,76 @@ describe("formatBatchHtml — sqlActivity section (Task 7)", () => {
 		const html = formatBatchHtml(result);
 
 		expect(html).not.toContain("SQL Activity");
+	});
+
+	it("pairs sqlActivity by profilePath, not array index, when the duration sort inverts order", async () => {
+		const resultA = await analyzeProfile(
+			resolve(BATCH_DIR, "profile-1.alcpuprofile"),
+		);
+		const resultB = await analyzeProfile(
+			resolve(BATCH_DIR, "profile-2.alcpuprofile"),
+		);
+		resultA.meta.totalSelfTime = 1000;
+		resultB.meta.totalSelfTime = 999999;
+
+		resultA.sqlActivity = {
+			measuredSqlCount: 1381,
+			measuredSqlDurationMs: 382,
+			sampledAttributedCostUs: 15000,
+		};
+		resultB.sqlActivity = undefined;
+
+		const metadata: ProfileMetadata[] = [
+			{
+				activityId: "a",
+				activityType: "WebClient",
+				activityDescription: "Activity-A-Short",
+				startTime: "2026-03-01T08:00:00Z",
+				activityDuration: 1000,
+				alExecutionDuration: 500,
+				sqlCallDuration: 382,
+				sqlCallCount: 1381,
+				httpCallDuration: 0,
+				httpCallCount: 0,
+				userName: "admin",
+				clientSessionId: 1,
+			},
+			{
+				activityId: "b",
+				activityType: "WebClient",
+				activityDescription: "Activity-B-Long",
+				startTime: "2026-03-01T09:00:00Z",
+				activityDuration: 999999,
+				alExecutionDuration: 500000,
+				sqlCallDuration: 0,
+				sqlCallCount: 0,
+				httpCallDuration: 0,
+				httpCallCount: 0,
+				userName: "admin",
+				clientSessionId: 2,
+			},
+		];
+
+		const result = aggregateResults([resultA, resultB], [], metadata);
+		expect(result.activityBreakdown[0].metadata?.activityDescription).toBe(
+			"Activity-B-Long",
+		);
+		expect(result.activityBreakdown[1].metadata?.activityDescription).toBe(
+			"Activity-A-Short",
+		);
+
+		const html = formatBatchHtml(result);
+		const sqlSectionStart = html.indexOf("SQL Activity (measured vs sampled)");
+		expect(sqlSectionStart).toBeGreaterThan(-1);
+		const sqlSection = html.slice(sqlSectionStart);
+		const rowA = sqlSection
+			.split("<tr>")
+			.find((r) => r.includes("Activity-A-Short"));
+		const rowB = sqlSection
+			.split("<tr>")
+			.find((r) => r.includes("Activity-B-Long"));
+		expect(rowA).toBeDefined();
+		expect(rowA).toContain("1381");
+		expect(rowB).toBeUndefined();
 	});
 });

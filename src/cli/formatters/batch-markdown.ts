@@ -85,14 +85,23 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
 }
 
 function renderSqlActivity(result: BatchAnalysisResult): string {
+	// Identity lookup by profilePath — NOT by index. buildActivityBreakdown
+	// (src/core/batch-analyzer.ts) sorts activityBreakdown by duration
+	// descending while BatchAnalysisResult.profiles stays in original
+	// (unsorted) order, so index-pairing the two arrays silently glues SQL
+	// evidence to the wrong activity row whenever input profiles aren't
+	// already duration-sorted.
+	const profileByPath = new Map(
+		result.profiles.map((p) => [p.meta.profilePath, p]),
+	);
 	const rows: {
 		activity: ActivitySummary;
 		sqlActivity: SqlActivityCorroboration;
 	}[] = [];
-	result.activityBreakdown.forEach((activity, i) => {
-		const sqlActivity = result.profiles[i]?.sqlActivity;
+	for (const activity of result.activityBreakdown) {
+		const sqlActivity = profileByPath.get(activity.profilePath)?.sqlActivity;
 		if (sqlActivity) rows.push({ activity, sqlActivity });
-	});
+	}
 	if (rows.length === 0) return "";
 
 	const lines: string[] = [];

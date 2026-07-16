@@ -1102,9 +1102,20 @@ describe("formatAnalysisTerminal — sqlActivity section (Task 7)", () => {
 		expect(out).toContain("SQL (sampled estimate)");
 		expect(out).toContain("SELECT Customer");
 		expect(out).toContain("×42 sampled");
-		expect(out).not.toContain("measured");
-		expect(out).not.toContain("exact");
-		expect(out).not.toContain("ran 42 times");
+		// Scope the honesty guard to the Detected Patterns section specifically
+		// (the sqlActivity section legitimately says "Measured SQL" — that's
+		// the BC activity manifest's own measured counters, a different thing
+		// from the per-finding SAMPLED evidence this test targets).
+		const patternsStart = out.indexOf("Detected Patterns");
+		expect(patternsStart).toBeGreaterThan(-1);
+		const patternsEnd = out.indexOf("Object Breakdown");
+		const patternsSection = out.slice(
+			patternsStart,
+			patternsEnd > -1 ? patternsEnd : undefined,
+		);
+		expect(patternsSection).not.toContain("measured");
+		expect(patternsSection).not.toContain("exact");
+		expect(patternsSection).not.toContain("ran 42 times");
 	});
 
 	test("renders (unparsed) when statement has no table", async () => {
