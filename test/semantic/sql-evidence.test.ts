@@ -3,9 +3,14 @@ import { existsSync } from "node:fs";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
 import {
+	attachSqlEvidence,
 	buildSqlByRoutine,
 	UNATTRIBUTED_KEY,
 } from "../../src/semantic/sql-evidence.js";
+import type {
+	DetectedPattern,
+	SqlStatementEvidence,
+} from "../../src/types/patterns.js";
 import type {
 	ProcessedNode,
 	ProcessedProfile,
@@ -189,4 +194,167 @@ describe("buildSqlByRoutine", () => {
 			expect(total).toBeGreaterThan(0);
 		},
 	);
+});
+
+function makePattern(id: string, involvedMethods: string[]): DetectedPattern {
+	return {
+		id,
+		severity: "warning",
+		title: id,
+		description: "",
+		impact: 12345,
+		involvedMethods,
+		evidence: "",
+	};
+}
+
+describe("attachSqlEvidence", () => {
+	function mapWith(
+		key: string,
+		items: Partial<SqlStatementEvidence>[],
+	): Map<string, SqlStatementEvidence[]> {
+		const full = items.map(
+			(p, i): SqlStatementEvidence => ({
+				text: p.text ?? `SELECT ?${i}`,
+				operation: p.operation ?? "SELECT",
+				table: p.table ?? "Sales Header",
+				extensionAppId: null,
+				readUncommitted: false,
+				sampledHitCount: p.sampledHitCount ?? 1,
+				sampledCostUs: p.sampledCostUs ?? 10,
+				attribution: p.attribution ?? "object-method",
+			}),
+		);
+		return new Map([[key, full]]);
+	}
+
+	test("attaches matching op-type SQL; impact untouched; sqlRank set", () => {
+		const p = makePattern("missing-setloadfields", [
+			"PostDocument (CodeUnit 80)",
+		]);
+		attachSqlEvidence(
+			[p],
+			mapWith("PostDocument_CodeUnit_80", [
+				{ operation: "SELECT", sampledCostUs: 400, sampledHitCount: 4 },
+				{ operation: "UPDATE", sampledCostUs: 999 }, // filtered out for this pattern id
+			]),
+		);
+		expect(p.sqlEvidence).toBeDefined();
+		expect(p.sqlEvidence!.statements.length).toBe(1);
+		expect(p.sqlEvidence!.totalSampledCostUs).toBe(400);
+		expect(p.sqlEvidence!.totalSampledHitCount).toBe(4);
+		expect(p.sqlEvidence!.provenance).toBe("sampled-estimate");
+		expect(p.sqlRank).toBe(400);
+		expect(p.impact).toBe(12345); // NEVER mutated
+	});
+
+	test("unions across ALL involvedMethods entries and skips SQL-frame labels", () => {
+		const p = makePattern("repeated-siblings", [
+			"Caller (CodeUnit 1)",
+			'SELECT TOP (?) "No_" FROM x (TableData 36)', // SQL frame label -> skipped
+		]);
+		const map = mapWith("Caller_CodeUnit_1", [
+			{ operation: "SELECT", sampledCostUs: 70 },
+		]);
+		attachSqlEvidence([p], map);
+		expect(p.sqlEvidence!.totalSampledCostUs).toBe(70);
+	});
+
+	test("union across parent AND child routine entries", () => {
+		const p = makePattern("repeated-siblings", [
+			"Caller (CodeUnit 1)",
+			"Callee (CodeUnit 2)",
+		]);
+		const map = new Map([
+			...mapWith("Caller_CodeUnit_1", [{ sampledCostUs: 30 }]),
+			...mapWith("Callee_CodeUnit_2", [{ sampledCostUs: 50 }]),
+		]);
+		attachSqlEvidence([p], map);
+		expect(p.sqlEvidence!.totalSampledCostUs).toBe(80);
+	});
+
+	test("op-type filters: modify-in-loop takes UPDATE only; calcfields needs aggregate", () => {
+		const upd = makePattern("modify-in-loop", ["M (CodeUnit 9)"]);
+		attachSqlEvidence(
+			[upd],
+			mapWith("M_CodeUnit_9", [
+				{ operation: "UPDATE", sampledCostUs: 5 },
+				{ operation: "SELECT", sampledCostUs: 500 },
+			]),
+		);
+		expect(upd.sqlEvidence!.statements[0].operation).toBe("UPDATE");
+		expect(upd.sqlEvidence!.totalSampledCostUs).toBe(5);
+
+		const calc = makePattern("calcfields-in-loop", ["M (CodeUnit 9)"]);
+		attachSqlEvidence(
+			[calc],
+			mapWith("M_CodeUnit_9", [
+				{ operation: "SELECT", text: "SELECT SUM(?) FROM t", sampledCostUs: 8 },
+				{ operation: "SELECT", text: "SELECT a FROM t", sampledCostUs: 9 },
+				{
+					operation: "COUNT",
+					text: "SELECT COUNT(*) FROM t",
+					sampledCostUs: 3,
+				},
+			]),
+		);
+		expect(calc.sqlEvidence!.totalSampledCostUs).toBe(11); // SUM + COUNT rows only
+	});
+
+	test("unknown pattern id -> no evidence (not in the map = no signal)", () => {
+		const p = makePattern("deep-call-stack", ["M (CodeUnit 9)"]);
+		attachSqlEvidence([p], mapWith("M_CodeUnit_9", [{ sampledCostUs: 100 }]));
+		expect(p.sqlEvidence).toBeUndefined();
+		expect(p.sqlRank).toBeUndefined();
+	});
+
+	test("no matching SQL -> silent (fields absent)", () => {
+		const p = makePattern("missing-setloadfields", ["Other (CodeUnit 7)"]);
+		attachSqlEvidence([p], mapWith("M_CodeUnit_9", [{ sampledCostUs: 100 }]));
+		expect(p.sqlEvidence).toBeUndefined();
+	});
+
+	test("rank-inversion pin: totals from FULL set, statements truncated to top-5", () => {
+		const p = makePattern("missing-setloadfields", ["M (CodeUnit 9)"]);
+		const six = Array.from({ length: 6 }, (_, i) => ({
+			operation: "SELECT" as const,
+			text: `SELECT col${i} FROM t${i}`,
+			sampledCostUs: 10,
+			sampledHitCount: 1,
+		}));
+		attachSqlEvidence([p], mapWith("M_CodeUnit_9", six));
+		expect(p.sqlEvidence!.statements.length).toBe(5); // display truncation
+		expect(p.sqlEvidence!.totalSampledCostUs).toBe(60); // FULL set — 6x10, not 5x10
+		expect(p.sqlRank).toBe(60);
+	});
+
+	test("attribution derives: all object-method -> object-method; mixed -> mixed", () => {
+		const p = makePattern("missing-setloadfields", ["M (CodeUnit 9)"]);
+		attachSqlEvidence(
+			[p],
+			mapWith("M_CodeUnit_9", [
+				{
+					attribution: "object-method",
+					sampledCostUs: 10,
+					text: "SELECT a FROM t",
+				},
+				{
+					attribution: "ancestor-fallback",
+					sampledCostUs: 5,
+					text: "SELECT b FROM u",
+				},
+			]),
+		);
+		expect(p.sqlEvidence!.attribution).toBe("mixed");
+	});
+
+	test("mutation guard: only sqlEvidence/sqlRank change", () => {
+		const p = makePattern("missing-setloadfields", ["M (CodeUnit 9)"]);
+		const before = structuredClone(p);
+		attachSqlEvidence([p], mapWith("M_CodeUnit_9", [{ sampledCostUs: 10 }]));
+		const after = structuredClone(p);
+		delete (after as Record<string, unknown>).sqlEvidence;
+		delete (after as Record<string, unknown>).sqlRank;
+		expect(after).toEqual(before);
+	});
 });
