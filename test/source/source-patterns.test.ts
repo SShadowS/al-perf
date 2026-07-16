@@ -1069,3 +1069,23 @@ describe("multi-member matching — final whole-branch-review blocker", () => {
 		expect(modify[0]?.severity).toBe("critical");
 	});
 });
+
+describe("source-match collision — codeunit and table sharing id 50999", () => {
+	it("attributes calcfields-in-loop to the Codeunit, not the Table", () => {
+		// Both objects declare Refresh() and share id 50999; only the codeunit's
+		// Refresh has the loop. Before the locator fix, the Table's Refresh was a
+		// phantom anchor for this finding.
+		const patterns = runSourceDetectors(
+			syntheticMethodsFromIndex(sourceIndex),
+			sourceIndex,
+		);
+		const calc = patterns.filter(
+			(p) =>
+				p.id === "calcfields-in-loop" &&
+				p.involvedMethods[0].startsWith("Refresh ("),
+		);
+		expect(calc).toHaveLength(1);
+		expect(calc[0].involvedMethods[0]).toContain("Codeunit");
+		expect(calc[0].involvedMethods[0]).not.toContain("Table");
+	});
+});

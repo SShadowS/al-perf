@@ -181,3 +181,92 @@ describe("matchAllToSource — overload detection", () => {
 		expect(result[0].name).toBe("DoWork");
 	});
 });
+
+describe("matchAllToSource — object-type collision (id is unique only per type)", () => {
+	it("returns only the candidate whose object type matches", () => {
+		const cuRefresh = makeProcedure({
+			name: "Refresh",
+			objectType: "Codeunit",
+			objectId: 50999,
+			objectName: "Collision Handler",
+		});
+		const tblRefresh = makeProcedure({
+			name: "Refresh",
+			objectType: "Table",
+			objectId: 50999,
+			objectName: "Collision Buffer",
+		});
+		const index = makeIndex([cuRefresh, tblRefresh]);
+
+		const matches = matchAllToSource("Refresh", "Codeunit", 50999, index);
+
+		expect(matches).toHaveLength(1);
+		expect(matches[0].objectType).toBe("Codeunit");
+	});
+
+	it("is case-insensitive on the object type (CodeUnit vs Codeunit)", () => {
+		const cuRefresh = makeProcedure({
+			name: "Refresh",
+			objectType: "Codeunit",
+			objectId: 50999,
+		});
+		const tblRefresh = makeProcedure({
+			name: "Refresh",
+			objectType: "Table",
+			objectId: 50999,
+		});
+		const index = makeIndex([cuRefresh, tblRefresh]);
+
+		// Profiles sometimes carry "CodeUnit"; the index carries "Codeunit".
+		expect(matchAllToSource("Refresh", "CodeUnit", 50999, index)).toHaveLength(
+			1,
+		);
+	});
+
+	it("falls back to the id-only set when NO candidate type matches", () => {
+		// Preserves today's recall: an unrecognized/absent caller type must not
+		// silently drop a real match. A SECOND same-named candidate at a
+		// different objectId is deliberate: with only one total candidate, step
+		// 3's "single candidate regardless of objectId" rule would mask the
+		// id-only fallback (step 2) being removed entirely. With two total
+		// candidates, only the id-only fallback can narrow correctly to the one
+		// whose objectId actually matches.
+		const cuRefresh = makeProcedure({
+			name: "Refresh",
+			objectType: "Codeunit",
+			objectId: 50999,
+		});
+		const otherRefresh = makeProcedure({
+			name: "Refresh",
+			objectType: "Codeunit",
+			objectId: 60000,
+		});
+		const index = makeIndex([cuRefresh, otherRefresh]);
+
+		const matches = matchAllToSource("Refresh", "Query", 50999, index);
+		expect(matches).toHaveLength(1);
+		expect(matches[0].objectType).toBe("Codeunit");
+		expect(matches[0].objectId).toBe(50999);
+	});
+
+	it("still returns genuine same-type overloads (two Codeunit 50999 Refresh)", () => {
+		// The overload case step 1 was designed for must survive the fix.
+		const a = makeProcedure({
+			name: "Refresh",
+			objectType: "Codeunit",
+			objectId: 50999,
+			lineStart: 10,
+		});
+		const b = makeProcedure({
+			name: "Refresh",
+			objectType: "Codeunit",
+			objectId: 50999,
+			lineStart: 40,
+		});
+		const index = makeIndex([a, b]);
+
+		expect(matchAllToSource("Refresh", "Codeunit", 50999, index)).toHaveLength(
+			2,
+		);
+	});
+});

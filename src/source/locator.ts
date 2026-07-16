@@ -1,3 +1,4 @@
+import { canonicalObjectType } from "../semantic/identity.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type {
 	ProcedureInfo,
@@ -18,11 +19,15 @@ export type SourceMatch = ProcedureInfo | TriggerInfo;
  *    overloads should inspect `candidates.length > 1`.
  *
  * Matching strategy (applied in order, stopping at the first set that is non-empty):
- * 1. Exact match:   candidates with `objectId === objectId` (all of them).
- * 2. Name-only:     if there is exactly one candidate total, return it.
- * 3. Type+id match: candidates with `objectType === objectType && objectId === objectId`.
+ * 1. Type+id match: candidates with `canonicalObjectType(objectType) === canonicalObjectType(objectType)
+ *    && objectId === objectId` (all of them). Object ids are unique only PER TYPE in AL, so this must
+ *    come first — an id-only match would return a routine from the wrong object whenever two types
+ *    share an id and a member name.
+ * 2. Id-only:       candidates with `objectId === objectId` (all of them), regardless of type. Reached
+ *    only when no candidate's type matched — preserves recall for an absent/unrecognized caller type.
+ * 3. Name-only:     if there is exactly one candidate total, return it.
  *
- * The function name lookup is case-insensitive.
+ * The function name lookup is case-insensitive; so is the object-type comparison (via `canonicalObjectType`).
  */
 export function matchAllToSource(
 	functionName: string,
@@ -38,18 +43,26 @@ export function matchAllToSource(
 
 	if (allCandidates.length === 0) return [];
 
-	// 1. All candidates matching objectId (may be multiple overloads).
-	const exactMatches = allCandidates.filter((c) => c.objectId === objectId);
-	if (exactMatches.length > 0) return exactMatches;
-
-	// 2. Single candidate regardless of objectId — return it.
-	if (allCandidates.length === 1) return allCandidates;
-
-	// 3. Narrow by objectType + objectId.
-	const typeMatches = allCandidates.filter(
-		(c) => c.objectType === objectType && c.objectId === objectId,
+	// 1. Canonical (objectType, objectId) match — the precise answer. objectIds
+	//    are unique only PER TYPE in AL (Table 50999 and Codeunit 50999 coexist),
+	//    so an id-only match returns a routine from the wrong object whenever two
+	//    types share an id and a member name. canonicalObjectType absorbs the
+	//    profile-says-"CodeUnit" / index-says-"Codeunit" casing split.
+	const wantType = canonicalObjectType(objectType);
+	const typeAndId = allCandidates.filter(
+		(c) =>
+			c.objectId === objectId && canonicalObjectType(c.objectType) === wantType,
 	);
-	if (typeMatches.length > 0) return typeMatches;
+	if (typeAndId.length > 0) return typeAndId;
+
+	// 2. Fallback: id-only. Reached only when NO candidate's type matched — an
+	//    absent or unrecognized caller type must not silently drop a real match.
+	//    Preserves the recall of the previous id-only step 1.
+	const idOnly = allCandidates.filter((c) => c.objectId === objectId);
+	if (idOnly.length > 0) return idOnly;
+
+	// 3. Single candidate regardless of objectId — return it.
+	if (allCandidates.length === 1) return allCandidates;
 
 	return [];
 }
@@ -57,11 +70,8 @@ export function matchAllToSource(
 /**
  * Match a profile method to its source location in the index.
  *
- * Matching strategy:
- * 1. Exact match: name (case-insensitive) + objectId
- * 2. Name-only match: if there's exactly one candidate
- * 3. Disambiguate by objectType + objectId
- * 4. Fall back to triggers
+ * See `matchAllToSource` for the matching strategy (type+id, then id-only
+ * fallback, then name-only). Procedures and triggers are both searched.
  *
  * Returns the first result from `matchAllToSource`, or `null` when there is no
  * match. Existing callers are byte-unchanged.
