@@ -6,6 +6,8 @@
 
 OnPrem-only sources count. Document them; we can ask Microsoft to bring them to SaaS scope later.
 
+**`Access = Internal` / permission-gated sources ALSO count.** Internal access is not disqualifying — catalogue what exists, then request Microsoft make it public (same play as OnPrem→SaaS). A table being Internal today just marks it as "request public access," not "unusable."
+
 ---
 
 ## ▶ RESUME HERE (next session — after bc-dev-mcp + bc-mcp are connected)
@@ -31,10 +33,15 @@ Then fold results into the matrix below and either revise the spec (annotate-onl
 | **Sampling profile** (`.alcpuprofile`, `kind:1`) | **YES — rich** | per-statement SQL nodes, `hitCount` only (no duration) | SaaS + OnPrem | **PROVEN on real BC28 capture** |
 | **Instrumentation** (`.mdc` flatbuffer zip → bc-mdc-converter) | **NO** | exact per-call AL execution (methods, variables, values, timing) — but NO SQL | SaaS + OnPrem | **DISPROVEN on real BC28 capture** (see below) |
 | **Snapshot debug** (`.mdc` recording) | **NO** | same `.mdc` recording format as instrumentation | SaaS + OnPrem | same as instrumentation — no SQL |
-| **RT0005 long-running SQL telemetry** | YES — `sqlStatement` + `executionTime` + `alStackTrace` | per slow statement | SaaS + OnPrem (App Insights) | doc-confirmed; al-perf drops it today (separate project 2) |
-| **RT0018 / report / deadlock telemetry** | partial (`sqlExecutes`, `sqlRowsRead`, victim SQL) | per event | SaaS + OnPrem | doc research pending |
-| **OnPrem SQL Server DMVs / Query Store** | YES — plans, rows, waits | per query/plan | **OnPrem only** | doc research pending |
-| **OnPrem BC system tables** (`$ndo$…`, session/telemetry) | partial | varies | **OnPrem only** | doc research pending |
+| **`SessionInformation` AL counters** | count only — `SqlStatementsExecuted()` + `SqlRowsRead()` | session-cumulative; operation-level by before/after delta | SaaS + OnPrem, **in-AL** | **verified in BC source** (BCPT computes its count from this — `BCPTLine.Codeunit.al:134,153`) |
+| **RT0005 long-running SQL telemetry** | `sqlStatement` + `executionTime` + `alStackTrace` — **no rows-read** | per slow statement, **threshold-gated (>~1000ms)** | SaaS + OnPrem (App Insights) | doc-confirmed; NOT the only statement+duration source (see panel-2) |
+| **RT0009 SQL query trace** | YES — **all** `sqlStatement` (≤8192 ch) + `executionTime` | per statement incl. fast ones, while verbose logging on | SaaS + OnPrem (App Insights) | doc-cited (GPT); more complete than RT0005 |
+| **RT0006 report / RT0008 web-service / RT0018 AL-method telemetry** | `sqlExecutes` + `sqlRowsRead` (NO statement text) | per object execution | SaaS + OnPrem | doc-cited |
+| **RT0012/RT0013/RT0027 lock + RT0028 deadlock telemetry** | victim/lock SQL, table, mode, AL stack | per lock-timeout / deadlock event | SaaS + OnPrem | doc-cited; RT0012 `sqlStatement` field unverified |
+| **Database Wait Statistics** (table + page; RT0025/RT0026) | NO SQL — wait category, wait/signal/max time, task count | aggregate per DB/category since restart | SaaS + OnPrem, in-app | **table verified** (`DatabaseWaitStatistics.page.al:14` `SourceTable`); external-ext read permission unverified |
+| **AL debugger DB statistics** (`enableSQLInformationDebugger`) | YES — statement text + measured duration + approx rows + locks | per recent statement (default 10) + session totals | dev-time (SaaS sandbox / OnPrem) | doc-cited (GPT); not production |
+| **OnPrem SQL Server: Extended Events / Query Store** | YES — exact text + reads + µs duration + plan | **per execution, 100%, threshold-free** | **OnPrem only** | doc-cited; strongest OnPrem source |
+| **OnPrem SQL Server: DMVs** (`sys.dm_exec_query_stats` + `_sql_text`, index/wait DMVs) | YES — text, exec count, reads, elapsed/worker, rows returned | aggregate per cached plan / index | **OnPrem only** | doc-cited; `logical_reads`=pages, `total_rows`=rows *returned* ≠ BC `sqlRowsRead` |
 
 ---
 
@@ -90,11 +97,11 @@ Verified against the decompiled BC28 AL source, not docs.
 - `ScheduledPerfProfiler*` stores these `.alcpuprofile`s on a schedule — the source of the batch-recorded fixtures.
 
 **BCPT / Performance Toolkit — a MEASURED, complementary SQL source.**
-- `BCPTLogEntry.Table.al`: per named operation, field 12 **"No. of SQL Statements"** (Integer) + field 9 "Duration (ms)" (SIFT-indexed), plus Operation, Session No., Status, Error Call Stack. This is a **measured** per-operation SQL-statement COUNT + real duration — SaaS + OnPrem, in-app. NOT the SQL text, NOT rows-read. Complements the sampling profile (which has the SQL text but only estimated cost): profile = SQL *text* (estimated), BCPT = SQL *count* + *measured* duration. Requires running a benchmark suite, not an ad-hoc profile.
+- `BCPTLogEntry.Table.al`: per named operation, field 12 **"No. of SQL Statements"** (Integer) + field 9 "Duration (ms)" (SIFT-indexed), plus Operation, Session No., Status, Error Call Stack. Measured per-operation SQL-statement COUNT + duration — SaaS + OnPrem, in-app. NOT the SQL text, NOT rows-read. **"Duration (ms)" is the operation's ELAPSED time (AL + SQL + BCPT overhead), not accumulated DB duration and not per-statement** (both panelists flagged this — don't call it "SQL duration"). The count is literally a `SessionInformation.SqlStatementsExecuted` delta (`BCPTLine.Codeunit.al:134,153`). Complements the sampling profile: profile = SQL *text* (estimated), BCPT = SQL *count* + *measured operation* duration. Requires running a benchmark suite. Table 149002 is **`Access = Internal`** (`BCPTLogEntry.Table.al:15`) — external extensions cannot read it directly TODAY, so either use its `AL0000DGF` App Insights telemetry, or **request Microsoft make the table public** (it exists and holds the data; Internal is a permission flag, not a technical wall).
 
-**Table Information (System App)** — per-table row counts / size (DB stats), AL-accessible.
+**Table Information (System App)** — per-table row counts / size. Database **state**, not database **operation** (belongs in a capacity category, not the metric matrix). AL-accessible.
 
-**NOT AL-accessible** — per-statement SQL text WITH rows-read / execution time. AL never exposes it; only the profiler's `Method Name` SQL (estimated cost) and BCPT's count. Rows-read + statement + duration together exist only in platform **RT0005 telemetry** (App Insights) → that is project 2 (telemetry-side), unchanged.
+**AL-accessible SQL counters (corrects the earlier "NOT AL-accessible" claim).** `SessionInformation.SqlStatementsExecuted()` and `SessionInformation.SqlRowsRead()` ARE callable from AL and return session-cumulative counters; a before/after delta yields **operation-level SQL statement count + rows-read**, with no BCPT and no telemetry. Verified in BC source (BCPT itself uses it). What remains genuinely NOT AL-accessible is the *full per-statement tuple as one record* — statement text + its duration + its rows-read together. That still lives only in platform telemetry (RT0009 for text+duration; RT0006/RT0008/RT0018 for object-level rows-read) or, dev-time, the AL debugger's SQL statistics.
 
 **Net for the spec:** the source confirms the profile-side SQL layer must ingest **sampling `.alcpuprofile`** (SQL in `Method Name`, cost a sampled estimate), and identifies **BCPT** as an optional measured corroboration source (SQL count + real duration per operation). Nothing here changes the annotate-only-v1 direction; it grounds it.
 
@@ -109,11 +116,61 @@ Remaining, lower-priority (SQL is settled as sampling-only):
 
 ---
 
-## Pending doc research (no live env needed)
+## Panel-2: DB-operation metric sources (two-model review, 2026-07-16)
 
-- **RT0005 / RT0018 / report / deadlock telemetry** — exact `customDimensions` fields per signal (`sqlStatement`, `executionTime`, `alStackTrace`, `sqlExecutes`, `sqlRowsRead`, `numberOfRows`, `readUncommitted`, …), granularity, and SaaS-vs-OnPrem availability. (Feeds project-2 telemetry-SQL spec.)
-- **OnPrem SQL Server** — DMVs (`sys.dm_exec_query_stats`, `sys.dm_exec_sql_text`, query plans), Query Store, and Extended Events for BC — what plans/rows/waits are obtainable that SaaS cannot give.
-- **OnPrem BC system tables** — `$ndo$dbproperty`, session/telemetry tables, and any SQL-stat tables the service tier writes on-prem.
+Second two-model panel (Gemini 3.1 Pro + GPT-5.6-sol), identical prompt, isolated — reviewed the 6 claims above and hunted for missed sources. `.panel/google-dbmetrics.md`, `.panel/openai-dbmetrics.md`, prompt `.panel/prompt-dbmetrics.txt`. Gemini: 4 files, 0 searches. GPT: 6 files, ~22 doc fetches (SerpAPI down; learn.microsoft.com/api + direct doc URLs succeeded). Corrections below are verified against BC source where a ✅ is shown.
+
+**Claim corrections (consensus unless noted):**
+- **Claim 5 was wrong.** RT0005 is NOT the only statement+rows+duration source, and does not even carry rows-read. Exact statement + reads + µs duration exist OnPrem in **Extended Events / Query Store** (100% capture, threshold-free — RT0005 fires only >~1000ms), and **RT0009** carries all statement text + duration incl. SaaS during verbose logging.
+- **Claim 6 was too broad.** ✅ `SessionInformation.SqlStatementsExecuted()/SqlRowsRead()` are AL-native. Only the full per-statement *tuple* (text+duration+rows as one record) is not AL-accessible.
+- **Claim 3 relabel.** BCPT "Duration (ms)" = operation elapsed, not SQL duration.
+- **Claim 1 nuance** (GPT). System App does not compute Self Time as `hitCount × interval`; it is `Round(TimeDelta / 1000, 1)` from `CpuProfile.Samples` + `TimeDeltas` (`SamplingPerfProfilerImpl.Codeunit.al:161-168`). Still a sampled attribution, not a measured SQL duration — the estimate framing holds, the arithmetic does not.
+- Claims 1 (core), 2, 4 confirmed by both.
+
+**Source catalogue, tiered by access** (adopt GPT's doc-grounded RT taxonomy; drop Gemini's unsourced RT0016; all RT IDs are doc-derived, not capture-verified):
+
+- **AL-native (in-app, no telemetry):**
+  - ✅ `SessionInformation` counters — SQL statement count + rows-read, session-cumulative / operation-delta. No text, no per-table attribution. **Cheapest new evidence lane for a companion extension.**
+  - ✅ Database Wait Statistics table (`SourceTable` proven; RT0025/RT0026 telemetry) — wait categories/times; disambiguates "slow SQL" from "blocked SQL." External-ext read permission unverified.
+  - BCPT (measured count + operation duration; table Internal — use telemetry `AL0000DGF` today, or request table go public).
+- **SaaS + OnPrem telemetry (App Insights):**
+  - RT0009 — all SQL text + duration (verbose logging).
+  - RT0005 — slow-statement text + duration + AL stack (>~1000ms; no rows-read).
+  - RT0006 (report), RT0008 (web-service), RT0018 (long-running AL method) — `sqlExecutes` + `sqlRowsRead` at object granularity, no text.
+  - RT0012/RT0013/RT0027 (lock timeout/snapshot), RT0028 (deadlock victim) — victim/lock SQL + AL stack.
+- **Dev-time:** AL debugger DB statistics (`enableSQLInformationDebugger`) — statement text + measured duration + approx rows + locks; SaaS sandbox / OnPrem only.
+- **OnPrem SQL Server (ask MS for SaaS later):** Extended Events (`sqlserver.sql_statement_completed`) + Query Store (survives plan-cache eviction) = the ground truth; DMVs (`sys.dm_exec_query_stats` + `_sql_text`, index-usage/operational/physical DMVs, in-flight `sys.dm_exec_requests`/`_os_waiting_tasks`/`_tran_locks`); Windows perf counters (service-instance SQL connection/cache aggregates); event-log long-running SQL (predecessor to RT0005, `SqlLongRunningThreshold`). Caveat: SQL Server `logical_reads`=pages, `total_rows`=rows *returned* — do not map directly to BC `sqlRowsRead`.
+- **Correctly excluded** (both/GPT): Session Event table (no SQL metrics); `$ndo$…`/`NavApp$…`/`BC$…` physical tables (data/metadata, not metric stores — useful only to map physical names to BC objects).
+
+**Both panelists' top-3 additions converged:** (1) OnPrem Extended Events + Query Store, (2) Database Wait Statistics, (3) all-SQL trace (GPT: RT0009) / lock telemetry (Gemini: RT0008/RT0012).
+
+## Gated/virtual metric tables — field inventory + why-public case
+
+You CAN see what's in the gated tables (two routes), so the "request public access" ask can be specific and evidenced, not blind.
+
+**Route 1 — gated table with open-source definition (read the `.Table.al` directly).**
+
+`BCPT Log Entry` (149002, `Access = Internal`, `BCPTLogEntry.Table.al`) — per operation:
+`Duration (ms)` (Integer, SIFT), `No. of SQL Statements` (Integer), `Start Time`/`End Time`, `Operation`, `Codeunit ID`/`Name`, `Status`, `Error Call Stack` (2048), `Version`, `RunID` (Guid), `Session No.`, `Tag`.
+`BCPT Line` (`BCPTLine.Table.al`) adds version-compare aggregate FlowFields: `No. of Iterations`, `Total Duration (ms)`, `No. of SQL Statements` — each with a `- Base` twin (`:143-239`) computing **SQL-count + duration deltas between two code versions**. A ready-made regression dataset.
+
+**Route 2 — platform virtual table (no def in repo): the page over it enumerates fields + tooltips + names the backing DMV.**
+
+`Database Wait Statistics` (page 9520 over virtual table `"Database Wait Statistics"`, `DatabaseWaitStatistics.page.al`):
+`Wait Category`, `Waiting Tasks Count`, `Wait Time in ms` (incl. signal), `Max Wait Time in ms`, `Signal Wait Time in ms`, `Database start time` — aggregate since DB start. Page instructional text names the backing DMVs: `sys.query_store_wait_stats` / `sys.dm_db_wait_stats` (Azure SQL) / `sys.dm_os_wait_stats`. Emit codeunit 9521 (Internal) → `NavSqlConnectionTelemetry.SendWaitStatisticsSnapshotToTelemetry()` (RT0025/RT0026).
+
+**Precedent that the ask is reasonable:** `Table Information` (page 8700 over virtual table `"Table Information"`) is the SAME class of virtual table but is **already publicly readable** — `Permissions = tabledata "Table Information" = r` (`No. of Records`, `Record Size`, `Size/Data/Index (KB)`, `Compression`). A virtual DB-metrics table CAN be public-read; Wait Statistics simply hasn't been granted it.
+
+**Why-public justification per source (for the MS request):**
+- **BCPT Log Entry / Line** — the ONLY in-app measured SQL-count + duration per operation, with built-in version-over-version deltas. Locked behind `Access = Internal`, so a perf tool must scrape `AL0000DGF` telemetry to get data BC already stores in a clean table. Grant read → tools consume BCPT results directly (regression gating, CI). Schema is already public (MIT repo); only the runtime permission is withheld.
+- **Database Wait Statistics table** — answers "is slow SQL actually blocked SQL?", the single biggest false-positive risk when attributing profile cost. Page is public but direct AL table read is ungranted; grant read (as Table Information already is) → a tool can pull wait categories inline with findings instead of asking the user to eyeball a page.
+- **General principle** — Internal ≠ unusable. Every gated source here has a fully-known field set (open-source def or page-surfaced). Catalogue now, request `Access = Public` read-only per table with the field list + use case attached.
+
+## Pending doc research (mostly answered by panel-2; remaining)
+
+- Exact `customDimensions` field lists per RT signal (names + types) for the project-2 telemetry-SQL spec — panel gave the taxonomy; still want a field-level table per event ID before building.
+- Whether an external extension actually gets **read permission** on the `Database Wait Statistics` virtual table (page proves the type exists; permission scope unconfirmed).
+- `$ndo$dbproperty` and any service-tier SQL-stat tables written on-prem — low priority (metrics come from DMVs/Query Store/XE, not these).
 
 ---
 
@@ -125,3 +182,5 @@ Remaining, lower-priority (SQL is settled as sampling-only):
 - Do **not** overwrite `impact` (selfTime excludes children; SQL is a child) → separate rank signal.
 - Rewrite table-name parsing for `Company$Table$guid` + `[System Table]` before reuse.
 - Use SQL-node `scriptId`/`applicationDefinition` self-identification as the primary correlation key; nearest-AL-ancestor as fallback.
+- Rows-read is NOT profiler-side. If v1 wants a rows-read signal, the AL-native path is a companion extension reading `SessionInformation.SqlRowsRead()` deltas (operation-level, not per-statement) — separate from the profile ingest. Full per-statement text+rows+duration is telemetry/OnPrem-only.
+- Telemetry-side (project 2) target set is broader than RT0005: RT0009 (all SQL text+duration), RT0006/RT0008/RT0018 (object-level rows-read), RT0012/13/27/28 (locks/deadlock). RT0005 alone is threshold-gated and rows-read-less.
