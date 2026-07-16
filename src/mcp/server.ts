@@ -40,6 +40,7 @@ import {
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { ProfileMetadata } from "../types/batch.js";
 import type { CorrelationSummary } from "../types/fused.js";
+import type { PatternId } from "../types/patterns.js";
 import type { ProcessedProfile } from "../types/processed.js";
 import type { RecordOpInfo, SourceIndex } from "../types/source-index.js";
 
@@ -1236,7 +1237,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 	return server;
 }
 
-const PATTERN_DOCS = `# AL Profile Pattern Reference
+export const PATTERN_DOCS = `# AL Profile Pattern Reference
 
 ## Profile-Only Patterns (no source needed)
 
@@ -1264,6 +1265,24 @@ repeatedly at the same call site — a candidate for batching or caching.
 **Severity:** warning
 An event subscriber consuming significant self time. Event subscribers are implicit
 call points that are easy to overlook during performance tuning.
+
+### Recursive Call
+**Severity:** warning
+A method that appears as its own ancestor in the call tree — direct or indirect
+recursion. Common causes in AL are unintentional trigger chains (e.g. a table's
+OnModify re-triggering the same validation) or BOM/where-used explosion patterns
+that recurse over a hierarchy.
+**Fix:** Consider an iterative approach, or cache/memoize already-visited nodes
+to bound recursion depth.
+
+### Event Chain
+**Severity:** warning
+An event subscriber (OnBefore*/OnAfter*/HandleOn*) whose execution triggers
+another nested event subscriber, forming a chain of two or more. Each link in
+the chain compounds the execution cost of the one before it, and the chain is
+invisible from the call site that raised the original event.
+**Fix:** Review whether every subscriber in the chain is necessary. Consider
+consolidating event handlers or reducing how deep the chain is allowed to nest.
 
 ## Source-Correlated Patterns (require AL source)
 
@@ -1317,13 +1336,6 @@ not covered by SetLoadFields returns the field's default value, which is a silen
 **Fix:** Add all accessed fields to the SetLoadFields call, or remove SetLoadFields if the
 field list is difficult to maintain statically.
 
-### Unindexed Filter
-**Severity:** warning
-SetRange/SetFilter is called on a field that is not the leading field of any key on the
-target table. This forces SQL Server to perform a table scan instead of an index seek.
-**Fix:** Add a key starting with the filtered field, or restructure the query to filter
-on an existing key's leading field.
-
 ## Source-Only Patterns (no profile needed)
 
 ### Nested Loops
@@ -1338,11 +1350,31 @@ A FindSet/FindFirst/FindLast call without any preceding SetRange() or SetFilter(
 on the same record variable. This queries all records in the table.
 **Fix:** Add SetRange() or SetFilter() before record retrieval to limit the result set.
 
+### Event Subscriber with Loop Operations
+**Severity:** warning
+An event subscriber procedure that contains a record operation (FindSet, Modify,
+Insert, etc.) inside one of its loops. Mutually exclusive with the plain "Event
+Subscriber with Loops" pattern below: this one fires when the loop body actually
+touches records, which is the more expensive case. Event subscribers are implicit
+call points that are easy to overlook during tuning.
+**Fix:** Review the subscriber for performance impact and consider batching the
+record operations or reducing work done inside the loop.
+
 ### Event Subscriber with Loops
-**Severity:** info/warning
-An event subscriber procedure that contains loops or record operations inside loops.
-Event subscribers are implicit call points that are easy to overlook during tuning.
-**Fix:** Review the subscriber for performance impact and consider batching operations.
+**Severity:** info
+An event subscriber procedure that contains a loop, but no record operation inside
+it (otherwise "Event Subscriber with Loop Operations" above fires instead). Event
+subscribers are called implicitly for every event invocation, so an unbounded loop
+here runs far more often than its source location suggests.
+**Fix:** Ensure loop iterations are bounded and consider whether this subscriber
+needs to run for every event invocation.
+
+### Unindexed Filter
+**Severity:** warning
+SetRange/SetFilter is called on a field that is not the leading field of any key on the
+target table. This forces SQL Server to perform a table scan instead of an index seek.
+**Fix:** Add a key starting with the filtered field, or restructure the query to filter
+on an existing key's leading field.
 
 ### Dangerous Call in Loop
 **Severity:** critical (warning for a Page's implicit per-row loop)
@@ -1366,3 +1398,43 @@ is different.
 **Fix:** Hoist the call outside the loop, or batch the payload into a single
 request.
 `;
+
+/**
+ * Maps each pattern id (from the canonical `PATTERN_IDS` registry) to the
+ * exact `###` heading it has in `PATTERN_DOCS`. Kept next to `PATTERN_DOCS`
+ * rather than re-keying the whole markdown resource, so the prose stays a
+ * single readable document while still being provably complete: the `Record`
+ * type below requires every `PatternId` to have an entry (TypeScript flags a
+ * missing or stray key at compile time), and `patternDocHas` confirms the
+ * heading actually appears in the text at runtime. Covered by
+ * test/types/pattern-ids.test.ts.
+ */
+const PATTERN_DOC_HEADINGS: Record<PatternId, string> = {
+	"single-method-dominance": "Single Method Dominance",
+	"high-hit-count": "High Hit Count",
+	"deep-call-stack": "Deep Call Stack",
+	"repeated-siblings": "Repeated Siblings",
+	"event-subscriber-hotspot": "Event Subscriber Hotspot",
+	"recursive-call": "Recursive Call",
+	"event-chain": "Event Chain",
+	"calcfields-in-loop": "CalcFields in Loop",
+	"modify-in-loop": "Modify in Loop",
+	"insert-in-loop": "Insert in Loop",
+	"delete-in-loop": "Delete in Loop",
+	"record-op-in-loop": "Record Operation in Loop",
+	"missing-setloadfields": "Missing SetLoadFields",
+	"incomplete-setloadfields": "Incomplete SetLoadFields",
+	"nested-loops": "Nested Loops",
+	"unfiltered-findset": "Unfiltered FindSet",
+	"event-subscriber-with-loop-ops": "Event Subscriber with Loop Operations",
+	"event-subscriber-with-loops": "Event Subscriber with Loops",
+	"dangerous-call-in-loop": "Dangerous Call in Loop",
+	"external-call-in-loop": "External Call in Loop",
+	"unindexed-filter": "Unindexed Filter",
+};
+
+/** True if `PATTERN_DOCS` has a documented section for this pattern id. */
+export function patternDocHas(id: string): boolean {
+	const heading = PATTERN_DOC_HEADINGS[id as PatternId];
+	return heading !== undefined && PATTERN_DOCS.includes(`### ${heading}`);
+}
