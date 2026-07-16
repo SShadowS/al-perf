@@ -524,6 +524,44 @@ describe("calcfields-in-loop — suggestion must be actionable", () => {
 	});
 });
 
+describe("calcfields-in-loop — CalcSums gets actionable advice", () => {
+	it("does not tell a CalcSums to call SetAutoCalcFields (a no-op for CalcSums)", () => {
+		// SetAutoCalcFields only affects FlowFields calculated via CalcFields as
+		// each record is retrieved -- CalcSums re-sums a FlowField/SIFT field over
+		// the record's current filter and is unaffected by it. Telling the user
+		// to call it here is confident advice that does nothing, the same class
+		// of bug the CalcFields suggestion fix (above) removed, in the sibling op.
+		const method = makeMethod({
+			functionName: "ProcessWithCalcSums",
+			objectId: 50500,
+			objectName: "CalcField Loop Test",
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find(
+			(p) => p.id === "calcfields-in-loop" && p.title.includes("CalcSums"),
+		);
+		expect(finding).toBeDefined();
+		expect(finding?.suggestion).not.toContain("SetAutoCalcFields");
+		expect(finding?.suggestion).toMatch(
+			/outside the loop|filtered set|SIFT|CalcSums on the filtered/i,
+		);
+	});
+
+	it("still tells a CalcFields to call SetAutoCalcFields", () => {
+		const method = makeMethod({
+			functionName: "ProcessWithSumCalcField",
+			objectId: 50500,
+			objectName: "CalcField Loop Test",
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const finding = patterns.find(
+			(p) => p.id === "calcfields-in-loop" && p.title.includes("CalcFields"),
+		);
+		expect(finding).toBeDefined();
+		expect(finding?.suggestion).toContain("SetAutoCalcFields");
+	});
+});
+
 describe("duplicate wrong-advice sites stay fixed", () => {
 	// Task 1 fixed four shipped copies of "use SetLoadFields() to pre-load the
 	// fields you need" -- SetLoadFields does not accept FlowFields, and

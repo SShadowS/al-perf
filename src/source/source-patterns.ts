@@ -178,22 +178,37 @@ function calcFieldFactSentence(resolved: TableFieldInfo[]): string {
 }
 
 /**
- * Build the calcfields-in-loop suggestion text. The SetAutoCalcFields
- * recommendation and the "SetLoadFields does NOT help" disclaimer always
- * apply, regardless of what is known about the field. The "this table has X
- * FlowFields" fact sentence is conditional on `resolved` — omitted entirely
- * when the field didn't resolve, so the tool never asserts a FlowField type
- * it doesn't actually know (see `resolveCalcFields`).
+ * Build the calcfields-in-loop suggestion text.
+ *
+ * `CalcFields` and `CalcSums` need different advice: SetAutoCalcFields only
+ * affects FlowFields calculated via CalcFields as each record is retrieved —
+ * it has no effect whatsoever on CalcSums, which re-sums a FlowField/SIFT
+ * field over the record's current filter on demand. Recommending
+ * SetAutoCalcFields for a CalcSums in a loop is confident advice that does
+ * nothing, the same class of bug the CalcFields branch below exists to avoid.
+ *
+ * For CalcFields, the SetAutoCalcFields recommendation and the "SetLoadFields
+ * does NOT help" disclaimer always apply, regardless of what is known about
+ * the field. The "this table has X FlowFields" fact sentence is conditional
+ * on `resolved` in both branches — omitted entirely when the field didn't
+ * resolve, so the tool never asserts a FlowField type it doesn't actually
+ * know (see `resolveCalcFields`).
  */
 function calcFieldsSuggestion(
+	opType: "CalcFields" | "CalcSums",
 	severity: "critical" | "warning",
 	resolved: TableFieldInfo[] | undefined,
 ): string {
+	const fact = resolved ? ` ${calcFieldFactSentence(resolved)}` : "";
+
+	if (opType === "CalcSums") {
+		return `Move the CalcSums() outside the loop and run it once on the filtered set, or back the sum with a SIFT (SumIndexFields) key so the total is maintained incrementally.${fact}`;
+	}
+
 	const action =
 		severity === "critical"
 			? "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved, or filter on the FlowField instead of calculating it per row."
 			: "Call SetAutoCalcFields() before the loop so the FlowField is calculated as each record is retrieved.";
-	const fact = resolved ? ` ${calcFieldFactSentence(resolved)}` : "";
 	return `${action}${fact} Note SetLoadFields() does NOT help here — it does not accept FlowFields.`;
 }
 
@@ -250,7 +265,14 @@ export function detectCalcFieldsInLoop(
 					impact: method.selfTime,
 					involvedMethods: [methodLabel(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
-					suggestion: calcFieldsSuggestion(severity, resolvedFields),
+					// The filter above (`op.type === "CalcFields" || op.type === "CalcSums"`)
+					// guarantees op.type is exactly this union here; .filter() doesn't
+					// narrow the array element type for TS, hence the cast.
+					suggestion: calcFieldsSuggestion(
+						op.type as "CalcFields" | "CalcSums",
+						severity,
+						resolvedFields,
+					),
 				});
 			}
 		}

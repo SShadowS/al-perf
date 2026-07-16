@@ -56,6 +56,21 @@ codeunit 50500 "CalcField Loop Test"
             until TestRec.Next() = 0;
     end;
 
+    // CalcSums sums a FlowField/SumIndexField over the record's current filter --
+    // unlike CalcFields, SetAutoCalcFields has no effect on it at all. The
+    // suggestion for this call must recommend hoisting the aggregate out of the
+    // loop (or backing it with a SIFT key), not SetAutoCalcFields.
+    procedure ProcessWithCalcSums()
+    var
+        TestRec: Record "CalcField Test Table";
+    begin
+        TestRec.SetRange("No.", 'TEST');
+        if TestRec.FindSet() then
+            repeat
+                TestRec.CalcSums("Total Amount");
+            until TestRec.Next() = 0;
+    end;
+
     [IntegrationEvent(false, false)]
     local procedure OnBeforeProcessCalcFields(var TestRec: Record "CalcField Test Table")
     begin
