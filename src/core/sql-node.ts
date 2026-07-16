@@ -79,7 +79,9 @@ const GUID_RE =
  * split at the FIRST `$` and returned the company name.
  *
  * Unparseable (>3 segments, non-GUID 3rd segment, 128-char truncation
- * artifacts) -> { table: null } — callers keep the raw SQL text instead.
+ * artifacts) -> { table: null } — callers decide the fallback: the SQL
+ * evidence layer keeps the raw statement text with table null; the --deep
+ * payload grouping (extractSqlPatterns) skips the node entirely.
  */
 export function parseSqlTable(sql: string): {
 	table: string | null;
