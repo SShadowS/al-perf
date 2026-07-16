@@ -365,6 +365,38 @@ describe("SQL evidence enrichment (v1)", () => {
 		},
 	);
 
+	test.skipIf(!existsSync(PROFILE))(
+		"mutation guard: enrichment leaves impact and every non-evidence field untouched",
+		async () => {
+			// Real profile, real detectors, real enrichment — not the synthetic
+			// single-pattern fixture in test/semantic/sql-evidence.test.ts's own
+			// "mutation guard" test. This pins the guarantee end-to-end against
+			// the actual patterns analyzeProfile's hook enriches.
+			const { parseProfile } = await import("../../src/core/parser.js");
+			const { processProfile } = await import("../../src/core/processor.js");
+			const { runDetectors } = await import("../../src/core/patterns.js");
+			const { buildSqlByRoutine, attachSqlEvidence } = await import(
+				"../../src/semantic/sql-evidence.js"
+			);
+			const processed = processProfile(await parseProfile(PROFILE));
+			const patterns = runDetectors(processed);
+			const before = structuredClone(patterns);
+
+			const sqlByRoutine = buildSqlByRoutine(processed);
+			attachSqlEvidence(patterns, sqlByRoutine);
+			// Sanity: enrichment must actually attach something on this fixture,
+			// else stripping sqlEvidence/sqlRank below compares two untouched
+			// clones and pins nothing.
+			expect(patterns.some((p) => p.sqlEvidence)).toBe(true);
+
+			for (const p of patterns) {
+				delete (p as Record<string, unknown>).sqlEvidence;
+				delete (p as Record<string, unknown>).sqlRank;
+			}
+			expect(patterns).toEqual(before);
+		},
+	);
+
 	test.skipIf(!existsSync(PROFILE) || !existsSync(MANIFEST))(
 		"metadata option attaches sqlActivity; absent without it",
 		async () => {
