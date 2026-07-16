@@ -144,6 +144,7 @@ export type {
 	CriticalPathStep,
 	MethodDelta,
 	PatternDelta,
+	SqlActivityCorroboration,
 	SubtreeDrillDown,
 	TableBreakdown,
 	TableOperationBreakdown,
@@ -152,6 +153,9 @@ export type {
 export type { EngineDisabled } from "./semantic/engine-runner.js";
 export type { FuseOptions, FuseResult } from "./semantic/fuse.js";
 export { formatFusionSummary, fuseProfile } from "./semantic/fuse.js";
+// SQL evidence layer (v1) — sampled-SQL-per-finding correlation, opt-in via
+// the CLI's --sort sql / MCP's sort:"sql" (never touches impact/fingerprint).
+export { bySqlRankDesc } from "./semantic/sql-evidence.js";
 export { SourceIndexCache } from "./source/cache.js";
 // Source correlation
 export { buildSourceIndex, indexALFile } from "./source/indexer.js";
@@ -196,7 +200,12 @@ export type {
 	IrJsonInvocation,
 } from "./types/irjson.js";
 export { IRJSON_SCHEMA_VERSION } from "./types/irjson.js";
-export type { DetectedPattern, PatternSeverity } from "./types/patterns.js";
+export type {
+	DetectedPattern,
+	PatternSeverity,
+	SqlEvidence,
+	SqlStatementEvidence,
+} from "./types/patterns.js";
 export type { ProcessedNode, ProcessedProfile } from "./types/processed.js";
 // Types
 export type {
