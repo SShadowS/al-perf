@@ -29,8 +29,8 @@ Then fold results into the matrix below and either revise the spec (annotate-onl
 | Source | Delivers SQL? | Granularity | Scope | Evidence status |
 |---|---|---|---|---|
 | **Sampling profile** (`.alcpuprofile`, `kind:1`) | **YES — rich** | per-statement SQL nodes, `hitCount` only (no duration) | SaaS + OnPrem | **PROVEN on real BC28 capture** |
-| **Instrumentation profile** (`.alcpuprofile`, no `kind`) | **UNKNOWN** | exact per-call timing | SaaS + OnPrem | needs real BC28 capture (MS docs imply sampling-only) |
-| **Snapshot debug** (`.snapshot`) | likely NO (state/replay, not SQL tree) | n/a | SaaS + OnPrem | needs confirmation of payload |
+| **Instrumentation** (`.mdc` flatbuffer zip → bc-mdc-converter) | **NO** | exact per-call AL execution (methods, variables, values, timing) — but NO SQL | SaaS + OnPrem | **DISPROVEN on real BC28 capture** (see below) |
+| **Snapshot debug** (`.mdc` recording) | **NO** | same `.mdc` recording format as instrumentation | SaaS + OnPrem | same as instrumentation — no SQL |
 | **RT0005 long-running SQL telemetry** | YES — `sqlStatement` + `executionTime` + `alStackTrace` | per slow statement | SaaS + OnPrem (App Insights) | doc-confirmed; al-perf drops it today (separate project 2) |
 | **RT0018 / report / deadlock telemetry** | partial (`sqlExecutes`, `sqlRowsRead`, victim SQL) | per event | SaaS + OnPrem | doc research pending |
 | **OnPrem SQL Server DMVs / Query Store** | YES — plans, rows, waits | per query/plan | **OnPrem only** | doc research pending |
@@ -68,15 +68,24 @@ These are literally the anti-pattern receipts: the 47-column `SELECT TOP(1)` is 
 
 ---
 
+## Instrumentation & Snapshot — DISPROVEN (real BC28 capture, 2026-07-16)
+
+Captured a live BC28 instrumentation profile via `bcdev_profile_start { kind: "instrumentation" }` against Cronus28 (drove a fresh WebClient session opening data pages: Customer List, Sales Orders, factboxes with FlowFields → the AL that, in sampling mode, issues SQL). Finish produced the raw flatbuffer zip `<ctx>.snapshot.zip` — **15,674 `.mdc` files** plus embedded AL source.
+
+**Result: the instrumentation payload contains NO SQL.** Grepping all 15,674 `.mdc` files for the real DB-SQL signature that IS present in sampling captures (`dbo."`, `READUNCOMMITTED`, `FROM dbo.`) → **0 hits**. A strings dump shows only AL-level execution data: method names, variable names (`['Overdue Balance']`, `['LinkedVendorNo']`), values, types, timing. Same A/B against `profile-1.alcpuprofile` (sampling) → the markers ARE present.
+
+So instrumentation records deterministic **AL execution** (every call, variables, values, exact counts) but **not the underlying SQL statements**. This is exactly why ir-json — which bc-mdc-converter derives from these `.mdc` files — has `Invocation.sql` always empty. The "snapshot" debug recording uses the same `.mdc` format and likewise carries no SQL.
+
+**Conclusion, now settled: profile SQL is SAMPLING-ONLY.** The SQL evidence layer's profile-side ingest must target sampling `.alcpuprofile` captures; instrumentation and ir-json cannot supply SQL. Confirms the GPT-5.6-sol panel finding against real data.
+
 ## What still needs a REAL capture (the gaps)
 
-The capture path exists via **bc-dev-mcp** (`bcdev_profile_start { kind: "sampling" | "instrumentation" }` → `bcdev_profile_poll` → `bcdev_profile_finish` writes the `.alcpuprofile`; runs on the snapshot-debugger port 7083) driven against the **Cronus28** env via **bc-mcp**. Both MCP servers must be connected (`/mcp`) before a live capture.
+The capture path is proven working: **bc-dev-mcp** (`bcdev_profile_start { kind }` → `bcdev_profile_poll` → `bcdev_profile_finish`, snapshot-debugger port 7083) against **Cronus28**, driven by a fresh **bc-mcp** WebClient session. Sole-user container, so the "next session for user" arm always binds our session.
 
-**Experiment to settle the open questions** — drive ONE identical scenario (e.g. release a sales document, the profile-1 scenario) and capture it three ways, then diff payloads:
+Remaining, lower-priority (SQL is settled as sampling-only):
 
-1. **Instrumentation `.alcpuprofile`** (`kind:"instrumentation"`) — does it carry SQL nodes, or is SQL sampling-only? MS docs imply sampling-only; **confirm on real BC28 data.** If instrumentation carries SQL WITH exact durations, that is strictly better than sampling for this layer.
-2. **Debug `.snapshot`** — capture one and document what it actually contains (does it expose SQL statements/timing at all, or only replayable execution state?).
-3. **The "SQL feature endpoint"** — what the BC28 SQL-in-profiles feature surfaces in VS Code beyond the raw node (does the client get rows-read / duration the wire node lacks?).
+1. **The "SQL feature endpoint"** — what the BC28 SQL-in-profiles feature surfaces in VS Code beyond the raw sampling node (does the client get rows-read / duration the wire node lacks?).
+2. **Sampling live-capture ergonomics** — a live sampling `.alcpuprofile` is only extracted when `bcdev_profile_finish` is called while the session is STILL ALIVE and after samples accumulate; finishing after the session ends yields only the raw `.mdc` recording. (Not needed for the SQL question — the batch-recorded fixtures already provide real BC28 sampling SQL.)
 
 ---
 
