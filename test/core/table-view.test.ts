@@ -299,4 +299,33 @@ describe("callSiteCount — parents sharing an object id", () => {
 
 		expect(customer?.callSiteCount).toBe(1);
 	});
+
+	test("counts two Codeunit 50000/50001 parents with the same function name as two call sites", () => {
+		// Same function name, same objectType, different objectId — legal in AL
+		// (e.g., "Run" defined on two different codeunits). Dropping objectId
+		// from the key would merge these into one call site.
+		const profile = makeProfileWithParents([
+			{
+				parent: {
+					functionName: "Run",
+					objectType: "Codeunit",
+					objectId: 50000,
+				},
+				child: CHILD,
+			},
+			{
+				parent: {
+					functionName: "Run",
+					objectType: "Codeunit",
+					objectId: 50001,
+				},
+				child: CHILD,
+			},
+		]);
+
+		const breakdown = buildTableBreakdown(profile);
+		const customer = breakdown.find((t) => t.tableName === "Customer");
+
+		expect(customer?.callSiteCount).toBe(2);
+	});
 });
