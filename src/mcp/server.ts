@@ -16,6 +16,7 @@ import { HistoryStore } from "../history/store.js";
 import type { AnalysisResult } from "../output/types.js";
 import { isAlWorkspaceDir } from "../semantic/engine-runner.js";
 import { fuseProfile } from "../semantic/fuse.js";
+import { bySqlRankDesc } from "../semantic/sql-evidence.js";
 import {
 	annotateHotspots,
 	type CausalStep,
@@ -314,9 +315,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 				// result.patterns by sqlRank (desc, undefined last) immediately
 				// before serialization.
 				if (sort === "sql") {
-					result.patterns = [...result.patterns].sort(
-						(a, b) => (b.sqlRank ?? -1) - (a.sqlRank ?? -1),
-					);
+					result.patterns = [...result.patterns].sort(bySqlRankDesc);
 				}
 
 				// Build the output JSON: merge the trimmed fusion block (if any) into

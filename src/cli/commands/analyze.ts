@@ -12,6 +12,7 @@ import type { ExplainResult } from "../../explain/explainer.js";
 import { type ExplainModel, explainAnalysis } from "../../explain/explainer.js";
 import { isAlWorkspaceDir } from "../../semantic/engine-runner.js";
 import { formatFusionSummary, fuseProfile } from "../../semantic/fuse.js";
+import { bySqlRankDesc } from "../../semantic/sql-evidence.js";
 import { annotateHotspots, prioritizeFindings } from "../../semantic/views.js";
 import { SourceIndexCache } from "../../source/cache.js";
 import {
@@ -279,9 +280,7 @@ export function registerAnalyzeCommand(program: Command) {
 			// order); --sort sql reorders result.patterns by sqlRank (desc,
 			// undefined last) immediately before formatting.
 			if (opts.sort === "sql") {
-				result.patterns = [...result.patterns].sort(
-					(a, b) => (b.sqlRank ?? -1) - (a.sqlRank ?? -1),
-				);
+				result.patterns = [...result.patterns].sort(bySqlRankDesc);
 			}
 
 			process.stdout.write(

@@ -19,6 +19,17 @@ import { isAlRoutineFrameParts } from "./identity.js";
 /** Bucket key for SQL with no resolvable owning routine. Never silently dropped. */
 export const UNATTRIBUTED_KEY = "";
 
+/**
+ * Presentation-level ordering for --sort sql (CLI) / sort:"sql" (MCP
+ * analyze_profile): sqlRank descending, undefined ranks sort last. The only
+ * comparator either surface uses — imported by both instead of each
+ * maintaining its own inline copy, so a regression here reddens a single
+ * fixture-independent unit test instead of silently drifting.
+ */
+export function bySqlRankDesc(a: DetectedPattern, b: DetectedPattern): number {
+	return (b.sqlRank ?? -1) - (a.sqlRank ?? -1);
+}
+
 const TEXT_LIMIT = 200;
 
 function isAlRoutineNode(node: ProcessedNode): boolean {

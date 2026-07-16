@@ -1,9 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { $ } from "bun";
+import { bySqlRankDesc } from "../../src/semantic/sql-evidence.js";
+import type { DetectedPattern } from "../../src/types/patterns.js";
 
 const CLI = "src/cli/index.ts";
 const FIXTURES = "test/fixtures";
+
+/** Minimal but fully-typed DetectedPattern stub — only `sqlRank` varies. */
+function makePattern(id: string, sqlRank?: number): DetectedPattern {
+	return {
+		id,
+		severity: "warning",
+		title: id,
+		description: "",
+		impact: 0,
+		involvedMethods: [],
+		evidence: "",
+		sqlRank,
+	};
+}
 
 describe("CLI E2E", () => {
 	test("analyze outputs valid JSON with --format json", async () => {
@@ -46,20 +62,23 @@ describe("CLI E2E", () => {
 	});
 
 	describe("--sort sql", () => {
-		// Unit-level: pins the comparator's semantics directly (undefined ranks
-		// last, descending by rank) without needing a real profile or subprocess.
-		// Runs everywhere, independent of the gitignored batch-recorded fixture.
-		test("comparator sorts by sqlRank descending, undefined ranks last", () => {
+		// Unit-level: exercises the REAL production comparator (imported from
+		// src/semantic/sql-evidence.ts, the same function both analyze.ts and
+		// mcp/server.ts import) directly on hand-built DetectedPattern stubs —
+		// no real profile or subprocess needed. Runs everywhere, independent of
+		// the gitignored batch-recorded fixture, and — because it calls the
+		// production function rather than re-deriving the comparator inline —
+		// a regression in bySqlRankDesc itself reddens this test even on a
+		// clean checkout with no fixtures at all.
+		test("bySqlRankDesc sorts by sqlRank descending, undefined ranks last", () => {
 			const patterns = [
-				{ id: "a", sqlRank: 100 },
-				{ id: "b", sqlRank: undefined },
-				{ id: "c", sqlRank: 500 },
-				{ id: "d", sqlRank: 0 },
-				{ id: "e" }, // no sqlRank key at all
+				makePattern("a", 100),
+				makePattern("b", undefined),
+				makePattern("c", 500),
+				makePattern("d", 0),
+				makePattern("e"), // sqlRank omitted entirely
 			];
-			const sorted = [...patterns].sort(
-				(x, y) => (y.sqlRank ?? -1) - (x.sqlRank ?? -1),
-			);
+			const sorted = [...patterns].sort(bySqlRankDesc);
 			expect(sorted.map((p) => p.id)).toEqual(["c", "a", "d", "b", "e"]);
 		});
 
