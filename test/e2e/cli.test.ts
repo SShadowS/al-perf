@@ -101,5 +101,17 @@ describe("CLI E2E", () => {
 				expect(ranks.some((r: number) => r > -1)).toBe(true);
 			},
 		);
+
+		// Un-gated: exercises commander's own choices() validation, which needs
+		// no SQL-bearing fixture at all — any profile file will do.
+		test("--sort bogus is rejected by commander with the allowed choices listed", async () => {
+			const proc =
+				await $`bun run ${CLI} analyze ${FIXTURES}/sampling-minimal.alcpuprofile -f json --sort bogus`.nothrow();
+			expect(proc.exitCode).not.toBe(0);
+			const stderr = proc.stderr.toString();
+			expect(stderr).toContain("--sort");
+			expect(stderr).toContain("impact");
+			expect(stderr).toContain("sql");
+		});
 	});
 });
