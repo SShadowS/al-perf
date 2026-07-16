@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
 import {
@@ -81,6 +82,8 @@ function makeProfile(roots: ProcessedNode[]): ProcessedProfile {
 const SQL_A = `SELECT TOP (1) "No_" FROM dbo."CRONUS$Sales Header" WITH(READUNCOMMITTED) WHERE ("No_"='C10')`;
 const SQL_A2 = `SELECT TOP (1) "No_" FROM dbo."CRONUS$Sales Header" WITH(READUNCOMMITTED) WHERE ("No_"='C20')`;
 const SQL_UPD = `UPDATE dbo."CRONUS$Sales Header" SET "Status"=@0`;
+
+const REAL_PROFILE = "test/fixtures/batch-recorded/profile-1.alcpuprofile";
 
 describe("buildSqlByRoutine", () => {
 	test("SQL under an AL routine is keyed by that routine; shapes group; sums accumulate", () => {
@@ -172,16 +175,18 @@ describe("buildSqlByRoutine", () => {
 		expect(map.get("Caller_CodeUnit_1")).toBeUndefined();
 	});
 
-	test("real BC28 capture: profile-1 yields SQL evidence for real routines", async () => {
-		const parsed = await parseProfile(
-			"test/fixtures/batch-recorded/profile-1.alcpuprofile",
-		);
-		const processed = processProfile(parsed);
-		const map = buildSqlByRoutine(processed);
-		let total = 0;
-		for (const items of map.values())
-			for (const it of items) total += it.sampledHitCount;
-		expect(map.size).toBeGreaterThan(0);
-		expect(total).toBeGreaterThan(0);
-	});
+	// Fixture is gitignored (real capture data); test is local-only by design.
+	test.skipIf(!existsSync(REAL_PROFILE))(
+		"real BC28 capture: profile-1 yields SQL evidence for real routines",
+		async () => {
+			const parsed = await parseProfile(REAL_PROFILE);
+			const processed = processProfile(parsed);
+			const map = buildSqlByRoutine(processed);
+			let total = 0;
+			for (const items of map.values())
+				for (const it of items) total += it.sampledHitCount;
+			expect(map.size).toBeGreaterThan(0);
+			expect(total).toBeGreaterThan(0);
+		},
+	);
 });
