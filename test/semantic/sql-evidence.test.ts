@@ -253,11 +253,31 @@ describe("attachSqlEvidence", () => {
 			"Caller (CodeUnit 1)",
 			'SELECT TOP (?) "No_" FROM x (TableData 36)', // SQL frame label -> skipped
 		]);
-		const map = mapWith("Caller_CodeUnit_1", [
-			{ operation: "SELECT", sampledCostUs: 70 },
+		const map = new Map([
+			...mapWith("Caller_CodeUnit_1", [
+				{ operation: "SELECT" as const, sampledCostUs: 70 },
+			]),
+			// Keyed exactly as the SQL-frame label would parse if the
+			// isSqlFunctionName guard were missing. A high cost here means a
+			// removed guard wrongly pulls this in and reddens the assertion.
+			...mapWith('SELECT TOP (?) "No_" FROM x_TableData_36', [
+				{ operation: "SELECT" as const, sampledCostUs: 999 },
+			]),
 		]);
 		attachSqlEvidence([p], map);
-		expect(p.sqlEvidence!.totalSampledCostUs).toBe(70);
+		expect(p.sqlEvidence!.totalSampledCostUs).toBe(70); // guard removed -> 1069, red
+	});
+
+	test("same routine label twice in involvedMethods is not double-counted", () => {
+		const p = makePattern("repeated-siblings", [
+			"Caller (CodeUnit 1)",
+			"Caller (CodeUnit 1)",
+		]);
+		const map = mapWith("Caller_CodeUnit_1", [
+			{ operation: "SELECT" as const, sampledCostUs: 30 },
+		]);
+		attachSqlEvidence([p], map);
+		expect(p.sqlEvidence!.totalSampledCostUs).toBe(30); // seen-Set dedupe removed -> 60, red
 	});
 
 	test("union across parent AND child routine entries", () => {
