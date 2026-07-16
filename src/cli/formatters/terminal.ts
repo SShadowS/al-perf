@@ -19,6 +19,7 @@ import {
 	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
+import type { SqlEvidence } from "../../types/patterns.js";
 
 /**
  * Build the "runtime-correlated" badge string for a list of pattern ids.
@@ -309,6 +310,9 @@ function renderPatterns(result: AnalysisResult): string {
 		if (p.suggestion) {
 			lines.push(`    ${chalk.cyan("Suggestion:")} ${p.suggestion}`);
 		}
+		if (p.sqlEvidence) {
+			lines.push(renderSqlEvidence(p.sqlEvidence));
+		}
 		lines.push("");
 	}
 
@@ -365,6 +369,49 @@ function renderTableBreakdown(result: AnalysisResult): string {
 	}
 
 	lines.push(tableBreakdownTable.toString());
+	return lines.join("\n");
+}
+
+function renderSqlActivity(result: AnalysisResult): string {
+	const a = result.sqlActivity;
+	if (!a) return "";
+	const lines: string[] = [chalk.bold("SQL Activity (measured vs sampled)")];
+	lines.push(
+		`  Measured SQL: ${a.measuredSqlCount} calls, ${a.measuredSqlDurationMs}ms (from BC activity manifest)`,
+	);
+	lines.push(
+		`  Sampled SQL cost in profile: ${formatTime(a.sampledAttributedCostUs)} (sampled estimate)`,
+	);
+	if (
+		a.activityDurationMs !== undefined &&
+		a.alExecutionDurationMs !== undefined
+	) {
+		lines.push(
+			`  Activity: ${a.activityDurationMs}ms · AL execution: ${a.alExecutionDurationMs}ms (overlapping measures — not additive)`,
+		);
+	}
+	return lines.join("\n");
+}
+
+/**
+ * Render per-finding SQL evidence (sampled estimates only — NEVER "measured"/
+ * "exact"/"ran N times" for profile SQL). Up to 5 statement lines.
+ */
+function renderSqlEvidence(evidence: SqlEvidence): string {
+	const lines: string[] = [
+		chalk.gray(
+			`    SQL (sampled estimate): total ${formatTime(evidence.totalSampledCostUs)} across ${evidence.totalSampledHitCount} sampled hits`,
+		),
+	];
+	for (const s of evidence.statements.slice(0, 5)) {
+		const table = s.table ?? "(unparsed)";
+		const text = s.text.length > 120 ? `${s.text.slice(0, 120)}…` : s.text;
+		lines.push(
+			chalk.gray(
+				`      ${s.operation} ${table} — ${formatTime(s.sampledCostUs)} · ×${s.sampledHitCount} sampled — ${text}`,
+			),
+		);
+	}
 	return lines.join("\n");
 }
 
@@ -463,6 +510,7 @@ const terminalSections: SectionRenderers<string> = {
 	patterns: renderPatterns,
 	appBreakdown: renderAppBreakdown,
 	tableBreakdown: renderTableBreakdown,
+	sqlActivity: renderSqlActivity,
 	objectBreakdown: renderObjectBreakdown,
 	explanation: renderExplanation,
 	aiNarrative: renderAiNarrative,

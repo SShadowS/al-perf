@@ -149,3 +149,37 @@ describe("formatBatch terminal", () => {
 		expect(parsed.summary).toBeDefined();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// sqlActivity batch section tests (Task 7)
+// ---------------------------------------------------------------------------
+
+describe("formatBatchTerminal — sqlActivity section (Task 7)", () => {
+	test("renders one row per profile carrying sqlActivity", async () => {
+		const result = await analyzeBatch([
+			resolve(BATCH_DIR, "profile-1.alcpuprofile"),
+			resolve(BATCH_DIR, "profile-2.alcpuprofile"),
+		]);
+		result.profiles[0].sqlActivity = {
+			measuredSqlCount: 1381,
+			measuredSqlDurationMs: 382,
+			sampledAttributedCostUs: 15000,
+		};
+
+		const output = formatBatchTerminal(result);
+
+		expect(output).toContain("SQL Activity (measured vs sampled)");
+		expect(output).toContain("1381");
+	});
+
+	test("omits sqlActivity section when no profile carries it", async () => {
+		const result = await analyzeBatch([
+			resolve(BATCH_DIR, "profile-1.alcpuprofile"),
+			resolve(BATCH_DIR, "profile-2.alcpuprofile"),
+		]);
+
+		const output = formatBatchTerminal(result);
+
+		expect(output).not.toContain("SQL Activity");
+	});
+});

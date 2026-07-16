@@ -4,7 +4,11 @@ import { formatTime } from "../../core/analyzer.js";
 import { truncateFunctionName } from "../../core/display-utils.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
-import type { BatchAnalysisResult } from "../../output/batch-types.js";
+import type {
+	ActivitySummary,
+	BatchAnalysisResult,
+} from "../../output/batch-types.js";
+import type { SqlActivityCorroboration } from "../../output/types.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
@@ -162,6 +166,44 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
   </div>`;
 }
 
+function renderSqlActivity(result: BatchAnalysisResult): string {
+	const rows: {
+		activity: ActivitySummary;
+		sqlActivity: SqlActivityCorroboration;
+	}[] = [];
+	result.activityBreakdown.forEach((activity, i) => {
+		const sqlActivity = result.profiles[i]?.sqlActivity;
+		if (sqlActivity) rows.push({ activity, sqlActivity });
+	});
+	if (rows.length === 0) return "";
+
+	const tableRows = rows
+		.map(({ activity, sqlActivity }) => {
+			const label =
+				activity.metadata?.activityDescription ??
+				basename(activity.profilePath);
+			return `<tr>
+        <td>${escapeHtml(label)}</td>
+        <td>${sqlActivity.measuredSqlCount}</td>
+        <td>${sqlActivity.measuredSqlDurationMs}ms</td>
+        <td>${formatTime(sqlActivity.sampledAttributedCostUs)}</td>
+      </tr>`;
+		})
+		.join("\n");
+
+	return `<div class="section">
+    <h2>SQL Activity (measured vs sampled)</h2>
+    <table>
+      <thead>
+        <tr><th>Activity</th><th>Measured SQL Calls</th><th>Measured ms</th><th>Sampled Cost</th></tr>
+      </thead>
+      <tbody>
+        ${tableRows}
+      </tbody>
+    </table>
+  </div>`;
+}
+
 function renderRecurringPatterns(result: BatchAnalysisResult): string {
 	if (result.recurringPatterns.length === 0) return "";
 
@@ -286,6 +328,7 @@ const batchHtmlSections: BatchSectionRenderers<string> = {
 	batchSummary: renderBatchSummary,
 	batchExplanation: renderBatchExplanation,
 	activityBreakdown: renderActivityBreakdown,
+	sqlActivity: renderSqlActivity,
 	recurringPatterns: renderRecurringPatterns,
 	cumulativeHotspots: renderCumulativeHotspots,
 	appBreakdown: renderAppBreakdown,

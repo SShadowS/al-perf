@@ -8,6 +8,7 @@ export type AnalysisSectionType =
 	| "patterns"
 	| "appBreakdown"
 	| "tableBreakdown"
+	| "sqlActivity"
 	| "objectBreakdown"
 	| "explanation"
 	| "aiNarrative"
@@ -25,6 +26,7 @@ export const SECTION_ORDER: readonly AnalysisSectionType[] = [
 	"explanation",
 	"appBreakdown",
 	"tableBreakdown",
+	"sqlActivity",
 	"hotspots",
 	"fusion",
 	"criticalPath",

@@ -11,6 +11,7 @@ import {
 	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
+import type { SqlEvidence } from "../../types/patterns.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
@@ -296,6 +297,9 @@ function renderPatterns(result: AnalysisResult): string {
 			const suggestion = p.suggestion
 				? `<p class="suggestion"><strong>Suggestion:</strong> ${escapeHtml(p.suggestion)}</p>`
 				: "";
+			const sqlEvidence = p.sqlEvidence
+				? renderSqlEvidenceHtml(p.sqlEvidence)
+				: "";
 			return `<div class="pattern">
         <div class="pattern-header">
           <span class="severity-badge" style="background:${color}">${p.severity.toUpperCase()}</span>
@@ -304,6 +308,7 @@ function renderPatterns(result: AnalysisResult): string {
         <p>${escapeHtml(p.description)}</p>
         <p class="impact"><strong>Impact:</strong> ${formatTime(p.impact)}</p>
         ${suggestion}
+        ${sqlEvidence}
       </div>`;
 		})
 		.join("\n");
@@ -374,6 +379,44 @@ function renderTableBreakdown(result: AnalysisResult): string {
       </tbody>
     </table>
   </div>`;
+}
+
+function renderSqlActivity(result: AnalysisResult): string {
+	const a = result.sqlActivity;
+	if (!a) return "";
+	const overlapRow =
+		a.activityDurationMs !== undefined && a.alExecutionDurationMs !== undefined
+			? `<tr><td>Activity</td><td>${a.activityDurationMs}ms &middot; AL execution: ${a.alExecutionDurationMs}ms (overlapping measures &mdash; not additive)</td></tr>`
+			: "";
+	return `<div class="section">
+    <h2>SQL Activity (measured vs sampled)</h2>
+    <table class="meta-table">
+      <tr><td>Measured SQL</td><td>${a.measuredSqlCount} calls, ${a.measuredSqlDurationMs}ms (from BC activity manifest)</td></tr>
+      <tr><td>Sampled SQL cost in profile</td><td>${formatTime(a.sampledAttributedCostUs)} (sampled estimate)</td></tr>
+      ${overlapRow}
+    </table>
+  </div>`;
+}
+
+/**
+ * Render per-finding SQL evidence as HTML (sampled estimates only — NEVER
+ * "measured"/"exact"/"ran N times" for profile SQL). Up to 5 statement lines.
+ */
+function renderSqlEvidenceHtml(evidence: SqlEvidence): string {
+	const statementRows = evidence.statements
+		.slice(0, 5)
+		.map((s) => {
+			const table = escapeHtml(s.table ?? "(unparsed)");
+			const text = escapeHtml(
+				s.text.length > 120 ? `${s.text.slice(0, 120)}…` : s.text,
+			);
+			return `<div class="sql-statement">${escapeHtml(s.operation)} ${table} &mdash; ${formatTime(s.sampledCostUs)} &middot; &times;${s.sampledHitCount} sampled &mdash; ${text}</div>`;
+		})
+		.join("\n");
+	return `<div class="sql-evidence">
+        <p class="impact">SQL (sampled estimate): total ${formatTime(evidence.totalSampledCostUs)} across ${evidence.totalSampledHitCount} sampled hits</p>
+        ${statementRows}
+      </div>`;
 }
 
 function renderObjectBreakdown(result: AnalysisResult): string {
@@ -476,6 +519,7 @@ const htmlSections: SectionRenderers<string> = {
 	patterns: renderPatterns,
 	appBreakdown: renderAppBreakdown,
 	tableBreakdown: renderTableBreakdown,
+	sqlActivity: renderSqlActivity,
 	objectBreakdown: renderObjectBreakdown,
 	explanation: renderExplanation,
 	aiNarrative: renderAiNarrative,

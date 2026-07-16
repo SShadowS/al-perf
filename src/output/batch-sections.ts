@@ -3,6 +3,7 @@ import type { BatchAnalysisResult } from "./batch-types.js";
 export type BatchSectionType =
 	| "batchSummary"
 	| "activityBreakdown"
+	| "sqlActivity"
 	| "recurringPatterns"
 	| "cumulativeHotspots"
 	| "appBreakdown"
@@ -19,6 +20,7 @@ export const BATCH_SECTION_ORDER: readonly BatchSectionType[] = [
 	"batchSummary",
 	"batchExplanation",
 	"activityBreakdown",
+	"sqlActivity",
 	"recurringPatterns",
 	"cumulativeHotspots",
 	"appBreakdown",

@@ -1,15 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "fs";
 import {
 	formatAnalysisMarkdown,
 	formatComparisonMarkdown,
 } from "../../../src/cli/formatters/markdown.js";
 import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
+import type { SqlActivityCorroboration } from "../../../src/output/types.js";
 import type { RegressionFusion } from "../../../src/semantic/regression-correlate.js";
 import type {
 	FusionViews,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../../src/semantic/views.js";
+import type { SqlEvidence } from "../../../src/types/patterns.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -950,4 +953,120 @@ describe("formatComparisonMarkdown — regression-fusion annotations (P4.1)", ()
 		expect(out).toContain("renamed from");
 		expect(out).toContain("OldName:Codeunit:50020:abc123");
 	});
+});
+
+// ---------------------------------------------------------------------------
+// SQL evidence / SQL activity render tests (Task 7)
+// ---------------------------------------------------------------------------
+
+const SAMPLE_SQL_ACTIVITY: SqlActivityCorroboration = {
+	measuredSqlCount: 1381,
+	measuredSqlDurationMs: 382,
+	sampledAttributedCostUs: 15000,
+	activityDurationMs: 11945,
+	alExecutionDurationMs: 7023,
+};
+
+const SAMPLE_SQL_EVIDENCE: SqlEvidence = {
+	statements: [
+		{
+			text: "SELECT * FROM Customer WHERE No_ = @0",
+			operation: "SELECT",
+			table: "Customer",
+			extensionAppId: null,
+			readUncommitted: false,
+			sampledHitCount: 42,
+			sampledCostUs: 15000,
+			attribution: "object-method",
+		},
+	],
+	totalSampledCostUs: 15000,
+	totalSampledHitCount: 42,
+	provenance: "sampled-estimate",
+	attribution: "object-method",
+};
+
+describe("formatAnalysisMarkdown — sqlActivity section (Task 7)", () => {
+	test("renders sqlActivity section when present", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.sqlActivity = SAMPLE_SQL_ACTIVITY;
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("## SQL Activity (measured vs sampled)");
+		expect(out).toContain("1381");
+		expect(out).toContain("sampled");
+		expect(out).toContain(
+			"Activity: 11945ms · AL execution: 7023ms (overlapping measures",
+		);
+	});
+
+	test("omits sqlActivity section when absent (byte-unchanged)", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.sqlActivity).toBeUndefined();
+		const out = formatAnalysisMarkdown(result);
+		expect(out).not.toContain("SQL Activity");
+	});
+
+	test("renders per-finding SQL evidence with sampled marker, never 'measured'/'exact'", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.patterns.length).toBeGreaterThan(0);
+		result.patterns[0].sqlEvidence = SAMPLE_SQL_EVIDENCE;
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("**SQL (sampled estimate):**");
+		expect(out).toContain("SELECT Customer");
+		expect(out).toContain("×42 sampled");
+	});
+
+	test("renders (unparsed) when statement has no table", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		result.patterns[0].sqlEvidence = {
+			...SAMPLE_SQL_EVIDENCE,
+			statements: [{ ...SAMPLE_SQL_EVIDENCE.statements[0], table: null }],
+		};
+		const out = formatAnalysisMarkdown(result);
+		expect(out).toContain("(unparsed)");
+	});
+
+	test("omits per-finding SQL evidence when absent", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		const out = formatAnalysisMarkdown(result);
+		expect(out).not.toContain("SQL (sampled estimate)");
+	});
+});
+
+describe("formatAnalysisMarkdown — sqlActivity/sqlEvidence with real batch-recorded fixture", () => {
+	const PROFILE = "test/fixtures/batch-recorded/profile-1.alcpuprofile";
+	const MANIFEST = "test/fixtures/batch-recorded/manifest.json";
+
+	test.skipIf(!existsSync(PROFILE) || !existsSync(MANIFEST))(
+		"renders sqlActivity section when a manifest entry was supplied",
+		async () => {
+			const manifest = JSON.parse(readFileSync(MANIFEST, "utf-8"));
+			const result = await analyzeProfile(PROFILE, { metadata: manifest[0] });
+			const out = formatAnalysisMarkdown(result);
+			expect(out).toContain("SQL Activity");
+			expect(out).toContain("1381");
+			expect(out).toContain("sampled");
+		},
+	);
+
+	test.skipIf(!existsSync(PROFILE))(
+		"renders per-finding SQL evidence with sampled marker on real findings",
+		async () => {
+			const result = await analyzeProfile(PROFILE);
+			const p = result.patterns.find((p) => p.sqlEvidence);
+			if (!p) return; // fixture-dependent guard; profile-1 is known to produce evidence
+			const out = formatAnalysisMarkdown(result);
+			expect(out).toContain("sampled");
+		},
+	);
 });

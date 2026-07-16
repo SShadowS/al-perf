@@ -2,7 +2,11 @@ import { basename } from "path";
 import { formatTime } from "../../core/analyzer.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
-import type { BatchAnalysisResult } from "../../output/batch-types.js";
+import type {
+	ActivitySummary,
+	BatchAnalysisResult,
+} from "../../output/batch-types.js";
+import type { SqlActivityCorroboration } from "../../output/types.js";
 
 function renderBatchSummary(result: BatchAnalysisResult): string {
 	const lines: string[] = [];
@@ -80,6 +84,34 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
 	return lines.join("\n");
 }
 
+function renderSqlActivity(result: BatchAnalysisResult): string {
+	const rows: {
+		activity: ActivitySummary;
+		sqlActivity: SqlActivityCorroboration;
+	}[] = [];
+	result.activityBreakdown.forEach((activity, i) => {
+		const sqlActivity = result.profiles[i]?.sqlActivity;
+		if (sqlActivity) rows.push({ activity, sqlActivity });
+	});
+	if (rows.length === 0) return "";
+
+	const lines: string[] = [];
+	lines.push("## SQL Activity (measured vs sampled)");
+	lines.push("");
+	lines.push("| Activity | Measured SQL Calls | Measured ms | Sampled Cost |");
+	lines.push("| --- | --- | --- | --- |");
+
+	for (const { activity, sqlActivity } of rows) {
+		const label =
+			activity.metadata?.activityDescription ?? basename(activity.profilePath);
+		lines.push(
+			`| ${label} | ${sqlActivity.measuredSqlCount} | ${sqlActivity.measuredSqlDurationMs}ms | ${formatTime(sqlActivity.sampledAttributedCostUs)} |`,
+		);
+	}
+
+	return lines.join("\n");
+}
+
 function renderRecurringPatterns(result: BatchAnalysisResult): string {
 	if (result.recurringPatterns.length === 0) return "";
 
@@ -138,6 +170,7 @@ const batchMarkdownSections: BatchSectionRenderers<string> = {
 	batchSummary: renderBatchSummary,
 	batchExplanation: renderBatchExplanation,
 	activityBreakdown: renderActivityBreakdown,
+	sqlActivity: renderSqlActivity,
 	recurringPatterns: renderRecurringPatterns,
 	cumulativeHotspots: renderCumulativeHotspots,
 	appBreakdown: renderAppBreakdown,

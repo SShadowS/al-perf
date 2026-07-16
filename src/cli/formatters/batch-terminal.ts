@@ -5,7 +5,11 @@ import { formatTime } from "../../core/analyzer.js";
 import { truncateFunctionName } from "../../core/display-utils.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
-import type { BatchAnalysisResult } from "../../output/batch-types.js";
+import type {
+	ActivitySummary,
+	BatchAnalysisResult,
+} from "../../output/batch-types.js";
+import type { SqlActivityCorroboration } from "../../output/types.js";
 
 /**
  * Build a simple bar chart string using filled/empty blocks.
@@ -135,6 +139,44 @@ function renderActivityBreakdown(result: BatchAnalysisResult): string {
 	return lines.join("\n");
 }
 
+function renderSqlActivity(result: BatchAnalysisResult): string {
+	const rows: {
+		activity: ActivitySummary;
+		sqlActivity: SqlActivityCorroboration;
+	}[] = [];
+	result.activityBreakdown.forEach((activity, i) => {
+		const sqlActivity = result.profiles[i]?.sqlActivity;
+		if (sqlActivity) rows.push({ activity, sqlActivity });
+	});
+	if (rows.length === 0) return "";
+
+	const lines: string[] = [chalk.bold("SQL Activity (measured vs sampled)")];
+
+	const table = new Table({
+		head: [
+			chalk.gray("Activity"),
+			chalk.gray("Measured SQL Calls"),
+			chalk.gray("Measured ms"),
+			chalk.gray("Sampled Cost"),
+		],
+		style: { head: [], border: [] },
+	});
+
+	for (const { activity, sqlActivity } of rows) {
+		const label =
+			activity.metadata?.activityDescription ?? basename(activity.profilePath);
+		table.push([
+			label,
+			String(sqlActivity.measuredSqlCount),
+			`${sqlActivity.measuredSqlDurationMs}ms`,
+			formatTime(sqlActivity.sampledAttributedCostUs),
+		]);
+	}
+
+	lines.push(table.toString());
+	return lines.join("\n");
+}
+
 function renderRecurringPatterns(result: BatchAnalysisResult): string {
 	if (result.recurringPatterns.length === 0) return "";
 
@@ -217,6 +259,7 @@ const batchTerminalSections: BatchSectionRenderers<string> = {
 	batchSummary: renderBatchSummary,
 	batchExplanation: renderBatchExplanation,
 	activityBreakdown: renderActivityBreakdown,
+	sqlActivity: renderSqlActivity,
 	recurringPatterns: renderRecurringPatterns,
 	cumulativeHotspots: renderCumulativeHotspots,
 	appBreakdown: renderAppBreakdown,
