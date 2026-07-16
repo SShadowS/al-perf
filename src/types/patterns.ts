@@ -31,9 +31,19 @@ export type PatternDetector = (
 /**
  * The canonical set of every pattern id the detectors can emit. Single source
  * of truth: fingerprints, docs, and any id-keyed surface should reference this
- * rather than re-listing ids. Keep in lockstep with the detector `id:` literals
- * in patterns.ts / source-patterns.ts / source-only-patterns.ts — the test in
- * test/types/pattern-ids.test.ts fails if they drift.
+ * rather than re-listing ids.
+ *
+ * What is mechanically enforced, and what is NOT:
+ *  - PATTERN_IDS <-> PATTERN_DOC_HEADINGS: enforced at COMPILE TIME. The map is
+ *    typed `Record<PatternId, string>`, so a missing or stray key is a tsc error.
+ *  - every id's heading -> its prose section exists: enforced by the completeness
+ *    test in test/types/pattern-ids.test.ts.
+ *  - detectors -> PATTERN_IDS: NOT enforced. `DetectedPattern.id` is a plain
+ *    `string`, so a new detector emitting an unregistered id compiles and passes
+ *    every test — its id is silently missing here and undocumented. This list
+ *    must be updated BY HAND when a detector's `id:` literal is added, renamed,
+ *    or removed (in patterns.ts / source-patterns.ts / source-only-patterns.ts).
+ *    Registering the id is the one manual step; tsc and the test force the rest.
  */
 export const PATTERN_IDS = [
 	// profile-only (7)
