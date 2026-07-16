@@ -204,6 +204,16 @@ describe("extractSqlPatterns", () => {
 		expect(result[0].table).toBe("Sales Line");
 	});
 
+	test("groups Company$Table by TABLE name, not company (regression pin)", () => {
+		const node = makeNode(
+			'SELECT COUNT(*) FROM dbo."CRONUS Danmark A_S$Sales Header" WITH(READUNCOMMITTED) WHERE ("Document Type"=@0)',
+			1,
+			50,
+		);
+		const result = extractSqlPatterns([node]);
+		expect(result[0]?.table).toBe("Sales Header");
+	});
+
 	test("mixed SQL and non-SQL nodes", () => {
 		const nodes = [
 			makeNode("OnValidate - Sales Header (CodeUnit 80)", 10, 500),

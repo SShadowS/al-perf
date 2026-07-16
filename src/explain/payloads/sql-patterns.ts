@@ -1,3 +1,4 @@
+import { isSqlNode, parseSqlTable } from "../../core/sql-node.js";
 import type { ProcessedNode } from "../../types/processed.js";
 
 export interface SqlPatternGroup {
@@ -9,54 +10,6 @@ export interface SqlPatternGroup {
 		hitCount: number;
 		selfTime: number;
 	}>;
-}
-
-const SQL_PREFIX_RE = /^(SELECT|INSERT|UPDATE|DELETE|MERGE)\b/i;
-
-/**
- * Extract table name from a SQL statement.
- * Handles:
- *  - FROM "Table Name"
- *  - FROM [Table Name]
- *  - FROM dbo."Table Name$guid"
- *  - INSERT INTO "Table Name"
- *  - UPDATE "Table Name"
- *  - MERGE "Table Name"
- */
-function extractTableName(sql: string): string | null {
-	// For INSERT INTO / MERGE INTO, look after INTO
-	// For UPDATE, the table follows directly
-	// For SELECT/DELETE, look for FROM
-	let match: RegExpMatchArray | null;
-
-	if (/^INSERT\b/i.test(sql)) {
-		match = sql.match(/\bINTO\s+(?:dbo\.)?(?:"([^"]+)"|(\[([^\]]+)\])|(\S+))/i);
-	} else if (/^UPDATE\b/i.test(sql)) {
-		match = sql.match(
-			/^UPDATE\s+(?:dbo\.)?(?:"([^"]+)"|(\[([^\]]+)\])|(\S+))/i,
-		);
-	} else if (/^MERGE\b/i.test(sql)) {
-		match = sql.match(
-			/\bMERGE\s+(?:INTO\s+)?(?:dbo\.)?(?:"([^"]+)"|(\[([^\]]+)\])|(\S+))/i,
-		);
-	} else {
-		// SELECT or DELETE — look for FROM
-		match = sql.match(/\bFROM\s+(?:dbo\.)?(?:"([^"]+)"|(\[([^\]]+)\])|(\S+))/i);
-	}
-
-	if (!match) return null;
-
-	// Extract the raw table name from whichever capture group matched
-	const raw = match[1] || match[3] || match[4];
-	if (!raw) return null;
-
-	// Strip GUID suffix after $
-	const dollarIdx = raw.indexOf("$");
-	return dollarIdx >= 0 ? raw.substring(0, dollarIdx) : raw;
-}
-
-function isSqlNode(node: ProcessedNode): boolean {
-	return SQL_PREFIX_RE.test(node.callFrame.functionName);
 }
 
 export function extractSqlPatterns(nodes: ProcessedNode[]): SqlPatternGroup[] {
@@ -76,7 +29,7 @@ export function extractSqlPatterns(nodes: ProcessedNode[]): SqlPatternGroup[] {
 		if (!isSqlNode(node)) continue;
 
 		const fnName = node.callFrame.functionName;
-		const table = extractTableName(fnName);
+		const table = parseSqlTable(fnName).table;
 		if (!table) continue;
 
 		const truncatedQuery =
