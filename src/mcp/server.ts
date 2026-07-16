@@ -206,9 +206,15 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					.string()
 					.optional()
 					.describe("Comma-separated app names to focus on"),
+				sort: z
+					.enum(["impact", "sql"])
+					.optional()
+					.describe(
+						"Finding order: impact (default) or sql (by sampled SQL cost, sqlRank)",
+					),
 			},
 		},
-		async ({ profilePath, sourcePath, top, appFilter }) => {
+		async ({ profilePath, sourcePath, top, appFilter, sort }) => {
 			try {
 				let resolvedSourcePath = sourcePath ?? options?.defaultSourcePath;
 				let cleanup: (() => Promise<void>) | undefined;
@@ -302,6 +308,16 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 				lastAnalysis = result;
 				// Safe to cleanup before return: result is fully materialized in memory (no lazy refs to temp dir)
 				if (cleanup) await cleanup();
+
+				// Presentation-level reorder only (Task 8): analyzeProfile's own
+				// output stays canonical impact-sorted; sort === "sql" reorders
+				// result.patterns by sqlRank (desc, undefined last) immediately
+				// before serialization.
+				if (sort === "sql") {
+					result.patterns = [...result.patterns].sort(
+						(a, b) => (b.sqlRank ?? -1) - (a.sqlRank ?? -1),
+					);
+				}
 
 				// Build the output JSON: merge the trimmed fusion block (if any) into
 				// the result object without ever including unweightedFindings.

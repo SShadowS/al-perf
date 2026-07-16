@@ -34,6 +34,11 @@ export function registerAnalyzeCommand(program: Command) {
 			"Output format: auto|terminal|json|markdown",
 			"auto",
 		)
+		.option(
+			"--sort <key>",
+			"Finding order: impact (default) or sql (by sampled SQL cost)",
+			"impact",
+		)
 		.option("-n, --top <number>", "Number of top hotspots", "10")
 		.option("--threshold <ms>", "Minimum selfTime in ms to report", "0")
 		.option("--app-filter <names>", "Focus on specific app(s), comma-separated")
@@ -267,6 +272,16 @@ export function registerAnalyzeCommand(program: Command) {
 					const msg = err instanceof Error ? err.message : String(err);
 					process.stderr.write(`al-sem fusion: unexpected error: ${msg}\n`);
 				}
+			}
+
+			// Presentation-level reorder only (Task 8): analyzeProfile's own output
+			// stays canonical impact-sorted (history/fusion above see canonical
+			// order); --sort sql reorders result.patterns by sqlRank (desc,
+			// undefined last) immediately before formatting.
+			if (opts.sort === "sql") {
+				result.patterns = [...result.patterns].sort(
+					(a, b) => (b.sqlRank ?? -1) - (a.sqlRank ?? -1),
+				);
 			}
 
 			process.stdout.write(

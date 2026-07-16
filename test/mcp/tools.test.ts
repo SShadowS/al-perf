@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { analyzeProfile } from "../../src/core/analyzer.js";
@@ -76,6 +76,34 @@ describe("MCP Tool: analyze_profile", () => {
 		expect(text).toContain("Error");
 		expect(result.isError).toBe(true);
 	});
+
+	// Fixture is gitignored (real capture data) — skip when absent.
+	const SQL_PROFILE = "test/fixtures/batch-recorded/profile-1.alcpuprofile";
+
+	test.skipIf(!existsSync(SQL_PROFILE))(
+		"sort: 'sql' orders patterns by sqlRank descending (undefined ranks last)",
+		async () => {
+			const { client } = await createTestClient();
+			const result = await client.callTool(
+				{
+					name: "analyze_profile",
+					arguments: { profilePath: SQL_PROFILE, sort: "sql" },
+				},
+				undefined,
+				{ timeout: 120000 },
+			);
+			const text = (result.content as TextContent)[0].text;
+			const parsed = JSON.parse(text);
+			const ranks = parsed.patterns.map(
+				(p: { sqlRank?: number }) => p.sqlRank ?? -1,
+			);
+			const sorted = [...ranks].sort((a, b) => b - a);
+			expect(ranks).toEqual(sorted);
+			// Sanity: this fixture actually carries sql-ranked findings.
+			expect(ranks.some((r: number) => r > -1)).toBe(true);
+		},
+		120000,
+	);
 });
 
 describe("MCP Tool: get_hotspots", () => {
