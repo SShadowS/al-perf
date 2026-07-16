@@ -78,6 +78,26 @@ So instrumentation records deterministic **AL execution** (every call, variables
 
 **Conclusion, now settled: profile SQL is SAMPLING-ONLY.** The SQL evidence layer's profile-side ingest must target sampling `.alcpuprofile` captures; instrumentation and ir-json cannot supply SQL. Confirms the GPT-5.6-sol panel finding against real data.
 
+## What BC's OWN source exposes to AL (`U:/Git/BC.history`, branch `w1-28` = BC28)
+
+Verified against the decompiled BC28 AL source, not docs.
+
+**Performance Profiler (System App) — SAMPLING ONLY, confirms everything.**
+- `Performance Profiler/src/dotnet.al` wraps `Microsoft.Dynamics.Nav.Runtime.Debugger.**SamplingProfiler**` producing a **V8 `CpuProfile`/`CpuProfileNode`** — i.e. the `.alcpuprofile` is a V8 sampling profile. There is NO instrumentation profiler in the AL API. Source-side confirmation of sampling-only.
+- No SQL toggle — the sampling profiler emits SQL nodes automatically (matches the real captures).
+- `SamplingPerformanceProfiler.Codeunit.al` is the public API the al-perf-bc companion uses: `Start`/`Stop`/`GetData(): InStream` (the raw `.alcpuprofile` bytes) / `GetProfilingNodes` / `GetProfilingCallTree`.
+- The canonical node model, table **"Profiling Node"** (`ProfilingNode.Table.al`): `Object Type`, `Object ID`, `Object Name`, **`Line No`** (field 9), `Method Name` Text[1024] (**where SQL statements ride**, truncated to 1024), `Self Time` (Duration), `Full Time` (Duration), `Hit Count`, `Indentation` (tree depth). Confirms from source: **Self Time is exclusive; Full Time inclusive; durations are derived from `Hit Count` × sampling interval (a sampled ESTIMATE, not per-statement measurement).** al-perf already parses the equivalent from the raw V8.
+- `ScheduledPerfProfiler*` stores these `.alcpuprofile`s on a schedule — the source of the batch-recorded fixtures.
+
+**BCPT / Performance Toolkit — a MEASURED, complementary SQL source.**
+- `BCPTLogEntry.Table.al`: per named operation, field 12 **"No. of SQL Statements"** (Integer) + field 9 "Duration (ms)" (SIFT-indexed), plus Operation, Session No., Status, Error Call Stack. This is a **measured** per-operation SQL-statement COUNT + real duration — SaaS + OnPrem, in-app. NOT the SQL text, NOT rows-read. Complements the sampling profile (which has the SQL text but only estimated cost): profile = SQL *text* (estimated), BCPT = SQL *count* + *measured* duration. Requires running a benchmark suite, not an ad-hoc profile.
+
+**Table Information (System App)** — per-table row counts / size (DB stats), AL-accessible.
+
+**NOT AL-accessible** — per-statement SQL text WITH rows-read / execution time. AL never exposes it; only the profiler's `Method Name` SQL (estimated cost) and BCPT's count. Rows-read + statement + duration together exist only in platform **RT0005 telemetry** (App Insights) → that is project 2 (telemetry-side), unchanged.
+
+**Net for the spec:** the source confirms the profile-side SQL layer must ingest **sampling `.alcpuprofile`** (SQL in `Method Name`, cost a sampled estimate), and identifies **BCPT** as an optional measured corroboration source (SQL count + real duration per operation). Nothing here changes the annotate-only-v1 direction; it grounds it.
+
 ## What still needs a REAL capture (the gaps)
 
 The capture path is proven working: **bc-dev-mcp** (`bcdev_profile_start { kind }` → `bcdev_profile_poll` → `bcdev_profile_finish`, snapshot-debugger port 7083) against **Cronus28**, driven by a fresh **bc-mcp** WebClient session. Sole-user container, so the "next session for user" arm always binds our session.
