@@ -8,6 +8,22 @@ OnPrem-only sources count. Document them; we can ask Microsoft to bring them to 
 
 ---
 
+## ▶ RESUME HERE (next session — after bc-dev-mcp + bc-mcp are connected)
+
+Paused pending live captures. When the MCP env is up, run ONE identical scenario (release a sales document — the profile-1 scenario) captured three ways, then diff payloads:
+
+1. `bcdev_profile_status` — preflight the snapshot-debugger endpoint (port 7083).
+2. **Sampling:** `bcdev_profile_start { kind: "sampling" }` → drive the scenario via bc-mcp (open Sales Order, release it) → `bcdev_profile_poll` until ready → `bcdev_profile_finish` → save `.alcpuprofile`.
+3. **Instrumentation:** repeat with `bcdev_profile_start { kind: "instrumentation" }` on the SAME scenario. **Key question: does it carry SQL nodes, and with EXACT durations?** (Sampling has SQL but hitCount-only; if instrumentation has SQL + real time, it is strictly better for this layer.)
+4. **Snapshot:** capture a debug `.snapshot` of the scenario; document whether it exposes SQL statements/timing at all or only replayable state.
+5. Diff the three payloads: SQL-node presence, whether SQL nodes carry duration, table-name format, and whether `scriptId`/`applicationDefinition` self-identification holds across modes.
+
+Then fold results into the matrix below and either revise the spec (annotate-only v1) or continue to the telemetry/OnPrem doc research.
+
+**Still open, no env needed** (can do anytime): RT0005/RT0018/report/deadlock telemetry field inventory; OnPrem SQL Server DMVs / Query Store / BC system tables.
+
+---
+
 ## Source matrix
 
 | Source | Delivers SQL? | Granularity | Scope | Evidence status |
