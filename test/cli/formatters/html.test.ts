@@ -808,6 +808,36 @@ describe("formatAnalysisHtml — sqlActivity section (Task 7)", () => {
 		const out = formatAnalysisHtml(result);
 		expect(out).not.toContain("SQL (sampled estimate)");
 	});
+
+	test("renders a telemetry evidence block as measured, never as sampled", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.patterns.length).toBeGreaterThan(0);
+		result.patterns[0].sqlEvidence = {
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+			statements: [
+				{
+					text: 'SELECT "No_" FROM "Sales Header"',
+					operation: "SELECT",
+					table: "Sales Header",
+					extensionAppId: null,
+					occurrences: 12,
+					measuredTotalMs: 4200,
+					truncated: false,
+				},
+			],
+			totalMeasuredMs: 4200,
+			totalOccurrences: 12,
+			threshold: { minMs: 750, maxMs: 750 },
+		};
+		result.patterns[0].sqlRank = 4_200_000;
+		const out = formatAnalysisHtml(result);
+		expect(out).toContain("measured");
+		expect(out).not.toContain("sampled");
+		expect(out).toContain("750ms");
+	});
 });
 
 describe("formatAnalysisHtml — sqlActivity/sqlEvidence with real batch-recorded fixture", () => {
