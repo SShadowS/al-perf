@@ -71,12 +71,38 @@ const GUID_RE =
 	/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
 /**
- * Optional leading qualifiers: `dbo.`, or a 3-part `"DB".dbo.` / `[DB].dbo.`
- * form. BC's RT0005 telemetry emits fully-qualified names; the profile's SQL
- * nodes emit the 2-part form. Both must resolve to the TABLE, never to the
- * database (the pre-fix regex captured the first quoted segment, i.e. the DB).
+ * Optional leading qualifiers: `dbo.` (case-insensitive), or a 3-part
+ * `"DB".dbo.` / `[DB].dbo.` form. BC's RT0005 telemetry emits
+ * fully-qualified names; the profile's SQL nodes emit the 2-part form. Both
+ * must resolve to the TABLE, never to the database. Only `dbo` is recognized
+ * as a bare schema name (not arbitrary identifiers like `public`, which are
+ * treated as table names).
  */
-const QUALIFIER = `(?:(?:"[^"]+"|\\[[^\\]]+\\]|\\w+)\\s*\\.\\s*)*`;
+const QUALIFIER = `(?:(?:"[^"]+"|\\[[^\\]]+\\]|dbo)\\s*\\.\\s*)*`;
+
+/** Precompiled INSERT statement matcher with QUALIFIER prefix consumed. */
+const INSERT_MATCHER = new RegExp(
+	`\\bINTO\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
+
+/** Precompiled UPDATE statement matcher with QUALIFIER prefix consumed. */
+const UPDATE_MATCHER = new RegExp(
+	`^UPDATE\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
+
+/** Precompiled MERGE statement matcher with QUALIFIER prefix consumed. */
+const MERGE_MATCHER = new RegExp(
+	`\\bMERGE\\s+(?:INTO\\s+)?${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
+
+/** Precompiled SELECT/FROM statement matcher with QUALIFIER prefix consumed. */
+const FROM_MATCHER = new RegExp(
+	`\\bFROM\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
 
 /**
  * Parse the target table of a SQL statement into logical parts.
@@ -97,33 +123,13 @@ export function parseSqlTable(sql: string): {
 } {
 	let match: RegExpMatchArray | null;
 	if (/^INSERT\b/i.test(sql)) {
-		match = sql.match(
-			new RegExp(
-				`\\bINTO\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
-				"i",
-			),
-		);
+		match = sql.match(INSERT_MATCHER);
 	} else if (/^UPDATE\b/i.test(sql)) {
-		match = sql.match(
-			new RegExp(
-				`^UPDATE\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
-				"i",
-			),
-		);
+		match = sql.match(UPDATE_MATCHER);
 	} else if (/^MERGE\b/i.test(sql)) {
-		match = sql.match(
-			new RegExp(
-				`\\bMERGE\\s+(?:INTO\\s+)?${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
-				"i",
-			),
-		);
+		match = sql.match(MERGE_MATCHER);
 	} else {
-		match = sql.match(
-			new RegExp(
-				`\\bFROM\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
-				"i",
-			),
-		);
+		match = sql.match(FROM_MATCHER);
 	}
 	if (!match) return { table: null, extensionAppId: null };
 

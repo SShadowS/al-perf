@@ -159,4 +159,18 @@ describe("parseSqlTable", () => {
 			extensionAppId: null,
 		});
 	});
+	test("non-dbo bare schema names (public) are NOT stripped", () => {
+		const sql = "SELECT * FROM public.Customer";
+		expect(parseSqlTable(sql)).toEqual({
+			table: "public.Customer",
+			extensionAppId: null,
+		});
+	});
+	test("dbo prefix is recognized and stripped (case-insensitive)", () => {
+		const sql = 'SELECT * FROM DBO."Sales Header"';
+		expect(parseSqlTable(sql)).toEqual({
+			table: "Sales Header",
+			extensionAppId: null,
+		});
+	});
 });
