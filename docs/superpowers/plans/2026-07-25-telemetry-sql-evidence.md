@@ -344,40 +344,64 @@ In `src/core/sql-node.ts`, replace the four `sql.match(...)` regexes so the opti
 
 ```ts
 /**
- * Optional leading qualifiers: `dbo.`, or a 3-part `"DB".dbo.` / `[DB].dbo.`
- * form. BC's RT0005 telemetry emits fully-qualified names; the profile's SQL
- * nodes emit the 2-part form. Both must resolve to the TABLE, never to the
- * database (the pre-fix regex captured the first quoted segment, i.e. the DB).
+ * Optional leading qualifiers: `dbo.` (case-insensitive), or a 3-part
+ * `"DB".dbo.` / `[DB].dbo.` form. BC's RT0005 telemetry emits fully-qualified
+ * names; the profile's SQL nodes emit the 2-part form. Both must resolve to
+ * the TABLE, never to the database (the pre-fix regex captured the first
+ * quoted segment, i.e. the DB).
+ *
+ * Only `dbo` is recognized as a BARE schema name. A permissive `\w+` here
+ * would silently reinterpret `FROM public.Customer` as table `Customer`,
+ * changing behavior on the unquoted branch for no benefit — BC always quotes
+ * its identifiers and always uses dbo.
  */
-const QUALIFIER = `(?:(?:"[^"]+"|\\[[^\\]]+\\]|\\w+)\\s*\\.\\s*)*`;
+const QUALIFIER = `(?:(?:"[^"]+"|\\[[^\\]]+\\]|dbo)\\s*\\.\\s*)*`;
 ```
 
-and build each matcher with it:
+Hoist all four matchers to module constants — `parseSqlTable` runs once per
+distinct SQL shape while scanning profile nodes (`src/semantic/sql-evidence.ts:103`),
+thousands of calls on a large profile, so building them per call recompiles
+four patterns each time:
 
 ```ts
-	if (/^INSERT\b/i.test(sql)) {
-		match = sql.match(
-			new RegExp(`\\bINTO\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`, "i"),
-		);
-	} else if (/^UPDATE\b/i.test(sql)) {
-		match = sql.match(
-			new RegExp(`^UPDATE\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`, "i"),
-		);
-	} else if (/^MERGE\b/i.test(sql)) {
-		match = sql.match(
-			new RegExp(
-				`\\bMERGE\\s+(?:INTO\\s+)?${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
-				"i",
-			),
-		);
-	} else {
-		match = sql.match(
-			new RegExp(`\\bFROM\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`, "i"),
-		);
-	}
+const INSERT_MATCHER = new RegExp(
+	`\\bINTO\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
+const UPDATE_MATCHER = new RegExp(
+	`^UPDATE\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
+const MERGE_MATCHER = new RegExp(
+	`\\bMERGE\\s+(?:INTO\\s+)?${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
+const FROM_MATCHER = new RegExp(
+	`\\bFROM\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+	"i",
+);
 ```
 
+and use them in the existing branch chain (`sql.match(INSERT_MATCHER)` etc.).
 The `$`-splitting tail below the match is unchanged.
+
+Add two tests pinning the bare branch, so the narrowing cannot regress:
+
+```ts
+test("does not treat a non-dbo bare schema as a qualifier", () => {
+	expect(parseSqlTable("SELECT * FROM public.Customer")).toEqual({
+		table: "public.Customer",
+		extensionAppId: null,
+	});
+});
+
+test("strips a bare dbo qualifier case-insensitively", () => {
+	expect(parseSqlTable('SELECT * FROM DBO."Sales Header"')).toEqual({
+		table: "Sales Header",
+		extensionAppId: null,
+	});
+});
+```
 
 - [ ] **Step 4: Run the whole SQL suite**
 
