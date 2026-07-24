@@ -11,7 +11,10 @@ import {
 	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
-import type { SqlEvidence } from "../../types/patterns.js";
+import {
+	isTelemetrySqlEvidence,
+	type SqlEvidence,
+} from "../../types/patterns.js";
 
 /**
  * Escape HTML special characters to prevent XSS.
@@ -399,10 +402,35 @@ function renderSqlActivity(result: AnalysisResult): string {
 }
 
 /**
- * Render per-finding SQL evidence as HTML (sampled estimates only — NEVER
- * "measured"/"exact"/"ran N times" for profile SQL). Up to 5 statement lines.
+ * Render per-finding SQL evidence as HTML. Two provenances, never conflated:
+ * sampled profile estimates (NEVER "measured"/"exact"/"ran N times") or
+ * measured threshold-gated telemetry (NEVER "sampled"). Up to 5 statement
+ * lines.
  */
 function renderSqlEvidenceHtml(evidence: SqlEvidence): string {
+	if (isTelemetrySqlEvidence(evidence)) {
+		const t = evidence.threshold;
+		const gate = t
+			? t.minMs === t.maxMs
+				? `above ${t.minMs}ms`
+				: `above ${t.minMs}-${t.maxMs}ms`
+			: "above the configured threshold";
+		const statementRows = evidence.statements
+			.slice(0, 5)
+			.map((s) => {
+				const table = escapeHtml(s.table ?? "(unparsed)");
+				const text = escapeHtml(
+					s.text.length > 120 ? `${s.text.slice(0, 120)}…` : s.text,
+				);
+				return `<div class="sql-statement">${escapeHtml(s.operation)} ${table} &mdash; ${s.measuredTotalMs}ms &middot; &times;${s.occurrences}${s.truncated ? " (truncated)" : ""} &mdash; ${text}</div>`;
+			})
+			.join("\n");
+		return `<div class="sql-evidence">
+        <p class="impact">SQL (measured, ${escapeHtml(gate)} only): total ${evidence.totalMeasuredMs}ms across ${evidence.totalOccurrences} occurrence(s)</p>
+        ${statementRows}
+      </div>`;
+	}
+
 	const statementRows = evidence.statements
 		.slice(0, 5)
 		.map((s) => {

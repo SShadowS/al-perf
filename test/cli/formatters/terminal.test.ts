@@ -5,14 +5,20 @@ import {
 	formatComparisonTerminal,
 } from "../../../src/cli/formatters/terminal.js";
 import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
-import type { SqlActivityCorroboration } from "../../../src/output/types.js";
+import type {
+	AnalysisResult,
+	SqlActivityCorroboration,
+} from "../../../src/output/types.js";
 import type { RegressionFusion } from "../../../src/semantic/regression-correlate.js";
 import type {
 	FusionViews,
 	HotspotAnnotation,
 	PrioritizedFinding,
 } from "../../../src/semantic/views.js";
-import type { SqlEvidence } from "../../../src/types/patterns.js";
+import type {
+	DetectedPattern,
+	SqlEvidence,
+} from "../../../src/types/patterns.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -1153,6 +1159,52 @@ describe("formatAnalysisTerminal — sqlActivity section (Task 7)", () => {
 		);
 		const out = formatAnalysisTerminal(result);
 		expect(out).not.toContain("SQL (sampled estimate)");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Telemetry SQL evidence render tests (Task 6)
+// ---------------------------------------------------------------------------
+
+/** Real profile + first pattern overridden with the fields under test. */
+async function makeResultWithPattern(
+	overrides: Partial<DetectedPattern>,
+): Promise<AnalysisResult> {
+	const result = await analyzeProfile(
+		`${FIXTURES}/sampling-minimal.alcpuprofile`,
+	);
+	expect(result.patterns.length).toBeGreaterThan(0);
+	Object.assign(result.patterns[0], overrides);
+	return result;
+}
+
+describe("formatAnalysisTerminal — telemetry SQL evidence (Task 6)", () => {
+	test("renders a telemetry evidence block as measured, never as sampled", async () => {
+		const result = await makeResultWithPattern({
+			sqlEvidence: {
+				provenance: "measured-threshold-gated",
+				attribution: "telemetry-stack",
+				statements: [
+					{
+						text: 'SELECT "No_" FROM "Sales Header"',
+						operation: "SELECT",
+						table: "Sales Header",
+						extensionAppId: null,
+						occurrences: 12,
+						measuredTotalMs: 4200,
+						truncated: false,
+					},
+				],
+				totalMeasuredMs: 4200,
+				totalOccurrences: 12,
+				threshold: { minMs: 750, maxMs: 750 },
+			},
+			sqlRank: 4_200_000,
+		});
+		const out = formatAnalysisTerminal(result);
+		expect(out).toContain("measured");
+		expect(out).not.toContain("sampled");
+		expect(out).toContain("750ms");
 	});
 });
 

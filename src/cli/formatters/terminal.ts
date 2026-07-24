@@ -19,7 +19,10 @@ import {
 	type PrioritizedFinding,
 } from "../../semantic/views.js";
 import type { MethodBreakdown } from "../../types/aggregated.js";
-import type { SqlEvidence } from "../../types/patterns.js";
+import {
+	isTelemetrySqlEvidence,
+	type SqlEvidence,
+} from "../../types/patterns.js";
 
 /**
  * Build the "runtime-correlated" badge string for a list of pattern ids.
@@ -394,10 +397,35 @@ function renderSqlActivity(result: AnalysisResult): string {
 }
 
 /**
- * Render per-finding SQL evidence (sampled estimates only — NEVER "measured"/
- * "exact"/"ran N times" for profile SQL). Up to 5 statement lines.
+ * Render per-finding SQL evidence. Two provenances, never conflated: sampled
+ * profile estimates (NEVER "measured"/"exact"/"ran N times") or measured
+ * threshold-gated telemetry (NEVER "sampled"). Up to 5 statement lines.
  */
 function renderSqlEvidence(evidence: SqlEvidence): string {
+	if (isTelemetrySqlEvidence(evidence)) {
+		const t = evidence.threshold;
+		const gate = t
+			? t.minMs === t.maxMs
+				? `above ${t.minMs}ms`
+				: `above ${t.minMs}-${t.maxMs}ms`
+			: "above the configured threshold";
+		const lines: string[] = [
+			chalk.gray(
+				`    SQL (measured, ${gate} only): total ${evidence.totalMeasuredMs}ms across ${evidence.totalOccurrences} occurrence(s)`,
+			),
+		];
+		for (const s of evidence.statements.slice(0, 5)) {
+			const table = s.table ?? "(unparsed)";
+			const text = s.text.length > 120 ? `${s.text.slice(0, 120)}…` : s.text;
+			lines.push(
+				chalk.gray(
+					`      ${s.operation} ${table} — ${s.measuredTotalMs}ms · ×${s.occurrences}${s.truncated ? " (truncated)" : ""} — ${text}`,
+				),
+			);
+		}
+		return lines.join("\n");
+	}
+
 	const lines: string[] = [
 		chalk.gray(
 			`    SQL (sampled estimate): total ${formatTime(evidence.totalSampledCostUs)} across ${evidence.totalSampledHitCount} sampled hits`,

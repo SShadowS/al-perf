@@ -5,7 +5,7 @@ export type PatternSeverity = "critical" | "warning" | "info";
  * aggregate counters. `hitCount` on a sampling profile is a sample count,
  * never an executed-N-times measurement — see `sampledHitCount`/`sampledCostUs`.
  */
-export interface SqlStatementEvidence {
+export interface ProfileSqlStatementEvidence {
 	text: string; // first-seen normalized shape, truncated to 200 chars
 	operation: "SELECT" | "COUNT" | "INSERT" | "UPDATE" | "DELETE" | "OTHER";
 	table: string | null;
@@ -16,16 +16,60 @@ export interface SqlStatementEvidence {
 	attribution: "object-method" | "ancestor-fallback";
 }
 
+/** @deprecated Use ProfileSqlStatementEvidence. Kept for the public export surface. */
+export type SqlStatementEvidence = ProfileSqlStatementEvidence;
+
 /**
- * SQL evidence attached to a `DetectedPattern`: descriptive metadata only,
- * derived from SAMPLED profile counters — never identity, never impact.
+ * SQL evidence attached to a `DetectedPattern`, derived from SAMPLED profile
+ * counters — never identity, never impact.
  */
-export interface SqlEvidence {
-	statements: SqlStatementEvidence[]; // top-5 by sampledCostUs (display only)
+export interface ProfileSqlEvidence {
+	statements: ProfileSqlStatementEvidence[]; // top-5 by sampledCostUs (display only)
 	totalSampledCostUs: number; // full-set total
 	totalSampledHitCount: number; // full-set total
 	provenance: "sampled-estimate";
 	attribution: "object-method" | "ancestor-fallback" | "mixed";
+}
+
+/**
+ * One normalized SQL query shape correlated to a routine via BC telemetry
+ * (RT0005 long-running-SQL events), with MEASURED aggregate counters — real
+ * execution counts and durations, threshold-gated (only statements at/above
+ * the telemetry threshold are captured at all).
+ */
+export interface TelemetrySqlStatementEvidence {
+	text: string;
+	operation: "SELECT" | "COUNT" | "INSERT" | "UPDATE" | "DELETE" | "OTHER";
+	table: string | null;
+	extensionAppId: string | null;
+	occurrences: number;
+	measuredTotalMs: number;
+	truncated: boolean;
+}
+
+/**
+ * SQL evidence attached to a `DetectedPattern`, derived from MEASURED BC
+ * telemetry — real execution counts and durations, but threshold-gated (only
+ * statements at/above the configured threshold are visible at all — never
+ * identity, never impact).
+ */
+export interface TelemetrySqlEvidence {
+	statements: TelemetrySqlStatementEvidence[];
+	totalMeasuredMs: number;
+	totalOccurrences: number;
+	provenance: "measured-threshold-gated";
+	attribution: "telemetry-stack";
+	/** From RT0005's per-row longRunningThreshold; absent -> config default. */
+	threshold?: { minMs: number; maxMs: number };
+}
+
+export type SqlEvidence = ProfileSqlEvidence | TelemetrySqlEvidence;
+
+/** Narrowing helper — the stringify surfaces (json, MCP) get no compiler help. */
+export function isTelemetrySqlEvidence(
+	e: SqlEvidence,
+): e is TelemetrySqlEvidence {
+	return e.provenance === "measured-threshold-gated";
 }
 
 export interface DetectedPattern {
@@ -51,13 +95,16 @@ export interface DetectedPattern {
 	 */
 	fingerprint?: string;
 	/**
-	 * SQL statements correlated to this finding's routines (SAMPLED estimates —
-	 * a sampling profile's hitCount is a sample count, not an invocation count).
-	 * Descriptive metadata only: never identity, never impact. Absent when the
-	 * profile carries no SQL (ir-json, instrumentation) or nothing matched.
+	 * SQL statements correlated to this finding's routines — either SAMPLED
+	 * profile estimates (`ProfileSqlEvidence`, a sampling profile's hitCount is
+	 * a sample count, not an invocation count) or MEASURED telemetry counters
+	 * (`TelemetrySqlEvidence`, threshold-gated). Narrow with
+	 * `isTelemetrySqlEvidence`. Descriptive metadata only: never identity,
+	 * never impact. Absent when nothing matched (or, for the profile variant,
+	 * when the profile carries no SQL — ir-json, instrumentation).
 	 */
 	sqlEvidence?: SqlEvidence;
-	/** = sqlEvidence.totalSampledCostUs. Separate rank signal; impact is untouched. */
+	/** Sampled: = sqlEvidence.totalSampledCostUs. Separate rank signal; impact is untouched. */
 	sqlRank?: number;
 }
 
