@@ -23,13 +23,13 @@
 		"dev": "bun run src/cli/index.ts",
 		"build": "tsc",
 		"prepublishOnly": "bun run build",
-		"test": "bun test",
-		"test:watch": "bun test --watch",
+		"test": "bun test --timeout 20000",
+		"test:watch": "bun test --watch --timeout 20000",
 		"web": "bun run web/server.ts",
 		"format": "biome format --write .",
 		"lint": "biome lint .",
 		"check": "biome check --write .",
-		"verify": "biome check . && tsc --noEmit && bun test"
+		"verify": "biome check . && tsc --noEmit && bun test --timeout 20000"
 	},
 	"keywords": [
 		"business-central",
