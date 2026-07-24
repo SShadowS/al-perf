@@ -1576,14 +1576,13 @@ git commit -m "feat(telemetry): SQL evidence on patterns, in the persisted strin
 
 - [ ] **Step 1: Write the failing tests**
 
-```ts
-// markdown.test.ts
-test("markdown renders a measured block without sampled wording", () => {
-	const out = formatMarkdown(resultWithTelemetryEvidence);
-	expect(out).toContain("measured");
-	expect(out).not.toContain("sampled");
-});
+Note: the markdown and html telemetry-branch tests already exist — Task 6's
+review round added them (`test/cli/formatters/markdown.test.ts`,
+`test/cli/formatters/html.test.ts`, both pinned non-vacuous by inverting the
+branch). Do not duplicate them; this task adds only the json and MCP coverage
+below.
 
+```ts
 // json.test.ts — the compiler cannot help here; the test must
 test("json output for telemetry evidence carries no sampled fields", () => {
 	const parsed = JSON.parse(formatJson(resultWithTelemetryEvidence));
