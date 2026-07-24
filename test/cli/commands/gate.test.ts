@@ -18,8 +18,8 @@ describe("CLI gate command", () => {
 			],
 			{ stdout: "pipe", stderr: "pipe" },
 		);
-		await proc.exited;
 		const text = await new Response(proc.stdout).text();
+		await proc.exited;
 		const result = JSON.parse(text);
 		expect(result.verdict).toBeDefined();
 		expect(result.counts).toBeDefined();
@@ -41,8 +41,8 @@ describe("CLI gate command", () => {
 			],
 			{ stdout: "pipe", stderr: "pipe" },
 		);
-		await proc.exited;
 		const text = await new Response(proc.stdout).text();
+		await proc.exited;
 		const result = JSON.parse(text);
 		expect(result.verdict).toBe("fail");
 		expect(proc.exitCode).toBe(1);

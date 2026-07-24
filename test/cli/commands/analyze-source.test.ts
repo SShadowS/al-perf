@@ -1,76 +1,50 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 
 const CLI = "src/cli/index.ts";
 
+// One spawn for the whole file: every assertion below reads the same
+// `analyze-source ... -f json` payload, and re-spawning the CLI per test paid
+// six extra process launches for identical output.
+//
+// Drain proc.stdout BEFORE awaiting proc.exited — this command emits ~79 KB,
+// past the OS pipe buffer (64 KiB on Windows), so awaiting exit first blocks
+// the child mid-write and hangs the test until its timeout.
+let result: any;
+let exitCode: number | null;
+
+beforeAll(async () => {
+	const proc = Bun.spawn(
+		["bun", "run", CLI, "analyze-source", "test/fixtures/source", "-f", "json"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	const text = await new Response(proc.stdout).text();
+	await proc.exited;
+	exitCode = proc.exitCode;
+	result = JSON.parse(text);
+});
+
 describe("CLI analyze-source command", () => {
-	test("analyzes source directory and returns JSON", async () => {
-		const proc = Bun.spawn(
-			[
-				"bun",
-				"run",
-				CLI,
-				"analyze-source",
-				"test/fixtures/source",
-				"-f",
-				"json",
-			],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		await proc.exited;
-		const text = await new Response(proc.stdout).text();
-		const result = JSON.parse(text);
-		expect(proc.exitCode).toBe(0);
+	test("analyzes source directory and returns JSON", () => {
+		expect(exitCode).toBe(0);
 		expect(result.files).toBeGreaterThan(0);
 		expect(result.objects).toBeDefined();
 		expect(result.findings).toBeDefined();
 		expect(result.findings.length).toBeGreaterThan(0);
 	});
 
-	test("includes nested loop findings", async () => {
-		const proc = Bun.spawn(
-			[
-				"bun",
-				"run",
-				CLI,
-				"analyze-source",
-				"test/fixtures/source",
-				"-f",
-				"json",
-			],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		await proc.exited;
-		const text = await new Response(proc.stdout).text();
-		const result = JSON.parse(text);
-
+	test("includes nested loop findings", () => {
 		const nestedLoop = result.findings.find(
 			(f: any) => f.id === "nested-loops",
 		);
 		expect(nestedLoop).toBeDefined();
 	});
 
-	test("orders findings by severity when impact ties at zero", async () => {
+	test("orders findings by severity when impact ties at zero", () => {
 		// analyze-source has no profile, so every finding — the detected
 		// patterns AND the inline record-ops-in-loop findings — carries
 		// impact: 0. Without a severity fallback, the entire findings list
 		// ties at zero and keeps whatever arbitrary order the array happened
 		// to have.
-		const proc = Bun.spawn(
-			[
-				"bun",
-				"run",
-				CLI,
-				"analyze-source",
-				"test/fixtures/source",
-				"-f",
-				"json",
-			],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		await proc.exited;
-		const text = await new Response(proc.stdout).text();
-		const result = JSON.parse(text);
-
 		expect(result.findings.every((f: any) => f.impact === 0)).toBe(true);
 
 		const rank: Record<string, number> = { critical: 3, warning: 2, info: 1 };
@@ -99,23 +73,7 @@ describe("CLI analyze-source command", () => {
 		expect(severities.size).toBeGreaterThan(1);
 	});
 
-	test("includes table clusters when present", async () => {
-		const proc = Bun.spawn(
-			[
-				"bun",
-				"run",
-				CLI,
-				"analyze-source",
-				"test/fixtures/source",
-				"-f",
-				"json",
-			],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		await proc.exited;
-		const text = await new Response(proc.stdout).text();
-		const result = JSON.parse(text);
-
+	test("includes table clusters when present", () => {
 		expect(result.tableClusters).toBeDefined();
 		expect(Array.isArray(result.tableClusters)).toBe(true);
 	});
@@ -126,32 +84,17 @@ describe("CLI analyze-source command", () => {
 			stderr: "pipe",
 		});
 		const text = await new Response(proc.stdout).text();
+		await proc.exited;
 		expect(text).toContain("analyze-source");
 	});
 
-	test("analyzes BOTH dataitems of a report with two same-named OnAfterGetRecord triggers, without duplicating either", async () => {
+	test("analyzes BOTH dataitems of a report with two same-named OnAfterGetRecord triggers, without duplicating either", () => {
 		// Whole-branch review, final blocker: matchToSource collapsed all
 		// same-named members in an object onto member #1. ReportTwoDataItems.al
 		// (Report 50909) has Customer and Vendor dataitems, each with its own
 		// OnAfterGetRecord — the single most ordinary BC report shape (header +
 		// lines). Before the fix: Customer's CalcFields reported TWICE, Vendor's
 		// CalcFields and Modify absent entirely.
-		const proc = Bun.spawn(
-			[
-				"bun",
-				"run",
-				CLI,
-				"analyze-source",
-				"test/fixtures/source",
-				"-f",
-				"json",
-			],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		await proc.exited;
-		const text = await new Response(proc.stdout).text();
-		const result = JSON.parse(text);
-
 		const onReport = (f: any) =>
 			f.involvedMethods?.[0] === "OnAfterGetRecord (Report 50909)";
 		const calcfields = result.findings.filter(
@@ -164,27 +107,11 @@ describe("CLI analyze-source command", () => {
 		expect(modify.length).toBe(1);
 	});
 
-	test("analyzes BOTH field OnValidate triggers of a table sharing the same trigger name", async () => {
+	test("analyzes BOTH field OnValidate triggers of a table sharing the same trigger name", () => {
 		// TableTwoValidateTriggers.al (Table 50931): field "Customer No." has a
 		// for-loop CalcFields; field "Related No." has a genuine repeat...until
 		// Modify() — a real critical modify-in-loop, not an implicit-loop edge
 		// case (table triggers are not per-row).
-		const proc = Bun.spawn(
-			[
-				"bun",
-				"run",
-				CLI,
-				"analyze-source",
-				"test/fixtures/source",
-				"-f",
-				"json",
-			],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		await proc.exited;
-		const text = await new Response(proc.stdout).text();
-		const result = JSON.parse(text);
-
 		const onTable = (f: any) =>
 			f.involvedMethods?.[0] === "OnValidate (Table 50931)";
 		const calcfields = result.findings.filter(

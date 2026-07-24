@@ -322,8 +322,8 @@ describe("MCP Tool: analyze_source", () => {
 			],
 			{ stdout: "pipe", stderr: "pipe" },
 		);
-		await proc.exited;
 		const cliParsed = JSON.parse(await new Response(proc.stdout).text());
+		await proc.exited;
 
 		const mcpCount = (objectId: number, procedure: string, prefix: string) =>
 			mcpParsed.findings.filter(
