@@ -136,4 +136,27 @@ describe("parseSqlTable", () => {
 			extensionAppId: null,
 		});
 	});
+	test("parses a 3-part database-qualified name", () => {
+		const sql =
+			'SELECT "No_" FROM "SQLDATABASE".dbo."CRONUS Danmark A_S$Sales Header" WITH(READUNCOMMITTED)';
+		expect(parseSqlTable(sql)).toEqual({
+			table: "Sales Header",
+			extensionAppId: null,
+		});
+	});
+	test("parses a 3-part name carrying an extension guid", () => {
+		const sql =
+			'SELECT "No_" FROM "SQLDATABASE".dbo."CRONUS$My Table$aa11bb22-cc33-dd44-ee55-ff6677889900"';
+		expect(parseSqlTable(sql)).toEqual({
+			table: "My Table",
+			extensionAppId: "aa11bb22-cc33-dd44-ee55-ff6677889900",
+		});
+	});
+	test("still parses the plain 2-part form", () => {
+		const sql = 'SELECT "No_" FROM dbo."CRONUS Danmark A_S$Sales Header"';
+		expect(parseSqlTable(sql)).toEqual({
+			table: "Sales Header",
+			extensionAppId: null,
+		});
+	});
 });

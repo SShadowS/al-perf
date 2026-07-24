@@ -71,6 +71,14 @@ const GUID_RE =
 	/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
 /**
+ * Optional leading qualifiers: `dbo.`, or a 3-part `"DB".dbo.` / `[DB].dbo.`
+ * form. BC's RT0005 telemetry emits fully-qualified names; the profile's SQL
+ * nodes emit the 2-part form. Both must resolve to the TABLE, never to the
+ * database (the pre-fix regex captured the first quoted segment, i.e. the DB).
+ */
+const QUALIFIER = `(?:(?:"[^"]+"|\\[[^\\]]+\\]|\\w+)\\s*\\.\\s*)*`;
+
+/**
  * Parse the target table of a SQL statement into logical parts.
  *
  * BC physical names: `Company$Table`, `Company$Table$AppGuid`, `Table$AppGuid`
@@ -89,15 +97,33 @@ export function parseSqlTable(sql: string): {
 } {
 	let match: RegExpMatchArray | null;
 	if (/^INSERT\b/i.test(sql)) {
-		match = sql.match(/\bINTO\s+(?:dbo\.)?(?:"([^"]+)"|\[([^\]]+)\]|(\S+))/i);
+		match = sql.match(
+			new RegExp(
+				`\\bINTO\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+				"i",
+			),
+		);
 	} else if (/^UPDATE\b/i.test(sql)) {
-		match = sql.match(/^UPDATE\s+(?:dbo\.)?(?:"([^"]+)"|\[([^\]]+)\]|(\S+))/i);
+		match = sql.match(
+			new RegExp(
+				`^UPDATE\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+				"i",
+			),
+		);
 	} else if (/^MERGE\b/i.test(sql)) {
 		match = sql.match(
-			/\bMERGE\s+(?:INTO\s+)?(?:dbo\.)?(?:"([^"]+)"|\[([^\]]+)\]|(\S+))/i,
+			new RegExp(
+				`\\bMERGE\\s+(?:INTO\\s+)?${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+				"i",
+			),
 		);
 	} else {
-		match = sql.match(/\bFROM\s+(?:dbo\.)?(?:"([^"]+)"|\[([^\]]+)\]|(\S+))/i);
+		match = sql.match(
+			new RegExp(
+				`\\bFROM\\s+${QUALIFIER}(?:"([^"]+)"|\\[([^\\]]+)\\]|(\\S+))`,
+				"i",
+			),
+		);
 	}
 	if (!match) return { table: null, extensionAppId: null };
 
