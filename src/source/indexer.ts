@@ -768,6 +768,20 @@ const FIELD_NEUTRAL_RECORD_METHODS = new Set([
 	"number",
 	"open",
 	"close",
+	// Metadata and marking: these return a field NUMBER, a caption, or set a
+	// flag. None reads a field VALUE off the receiver, so none can starve a
+	// SetLoadFields — counting them as escapes downgraded findings whose
+	// advice was perfectly safe to follow.
+	"fieldno",
+	"fieldcaption",
+	"tablecaption",
+	"tablename",
+	"mark",
+	"markedonly",
+	"clearmarks",
+	"currentkey",
+	"hasfilter",
+	"filtergroup",
 ]);
 
 /**

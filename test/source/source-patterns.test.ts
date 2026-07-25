@@ -1300,3 +1300,19 @@ describe("incomplete-setloadfields — what counts as a field access", () => {
 		);
 	});
 });
+
+describe("escape analysis — metadata calls are not escapes", () => {
+	it("FieldNo/FieldCaption/Mark read no field values, so they do not downgrade", () => {
+		// These return a field number, a caption, or set a mark. None of them
+		// reads a field VALUE off the record, so they cannot starve a
+		// SetLoadFields and must not push the finding to info.
+		const method = makeMethod({
+			functionName: "FindThenOnlyMetadataCalls",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const p = detectMissingSetLoadFields([method], sourceIndex)[0];
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("warning");
+	});
+});

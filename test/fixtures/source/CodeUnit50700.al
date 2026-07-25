@@ -209,4 +209,19 @@ codeunit 50700 "Field Access Test"
     begin
         Message('%1', Line.Amount);
     end;
+
+    procedure FindThenOnlyMetadataCalls()
+    var
+        SalesLine: Record "Sales Line";
+        n: Integer;
+    begin
+        // FieldNo and FieldCaption are metadata; Mark sets a flag. None reads a
+        // field value, so nothing here can starve a SetLoadFields.
+        if SalesLine.FindSet() then
+            repeat
+                n := SalesLine.FieldNo(Amount);
+                Message('%1 %2', SalesLine.FieldCaption(Amount), SalesLine."Document No.");
+                SalesLine.Mark(true);
+            until SalesLine.Next() = 0;
+    end;
 }
