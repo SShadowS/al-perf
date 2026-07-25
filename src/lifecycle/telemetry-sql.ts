@@ -253,7 +253,17 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	const body = truncated ? sql.slice(0, consumed) : sql;
 
 	const operation = classifySqlOperation(body);
-	const { table, extensionAppId } = parseSqlTable(body);
+	const { table: rawTable, extensionAppId } = parseSqlTable(body);
+	// parseSqlTable deliberately never $-splits a BRACKET-quoted name (brackets
+	// mark system-table syntax, which is never company-prefixed there) — but
+	// BC also uses bracket syntax for ordinary $-prefixed physical names, so
+	// that shortcut lets a company name straight through this field even when
+	// `text` (which $-splits every ident, quote style aside) is already
+	// clean. Route it through the same rule as every other emitted
+	// identifier, and fail the WHOLE statement closed if it still can't be
+	// resolved — a table field is not exempt from the tokenizer's own rule.
+	const table = rawTable === null ? null : logicalIdentifier(rawTable);
+	if (rawTable !== null && table === null) return null; // unrecognized shape -> fail closed
 
 	let out = "";
 	let columnCount: number | null = null;

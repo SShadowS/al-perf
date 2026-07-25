@@ -241,4 +241,24 @@ describe("redactSqlForSink", () => {
 		expect(nonDboSchema?.text).not.toContain("SQLDATABASE");
 		expect(nonDboSchema?.text).not.toContain("CRONUS");
 	});
+
+	test("C2: $-splits the table field even when the physical name is bracket-quoted", () => {
+		const plainDbo = redactSqlForSink(
+			"SELECT [a] FROM dbo.[CRONUS Danmark A_S$Sales Header]",
+		);
+		expect(plainDbo?.table).toBe("Sales Header");
+		expect(plainDbo?.table).not.toContain("CRONUS");
+
+		const bracketedDbo = redactSqlForSink(
+			"SELECT [a] FROM [dbo].[CRONUS Danmark A_S$Sales Header]",
+		);
+		expect(bracketedDbo?.table).toBe("Sales Header");
+		expect(bracketedDbo?.table).not.toContain("CRONUS");
+
+		const withGuid = redactSqlForSink(
+			"SELECT [a] FROM dbo.[CRONUS$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900]",
+		);
+		expect(withGuid?.table).toBe("Sample Table");
+		expect(withGuid?.table).not.toContain("CRONUS");
+	});
 });
