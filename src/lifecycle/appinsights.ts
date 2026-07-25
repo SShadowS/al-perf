@@ -46,6 +46,41 @@ const APPINSIGHTS_API_BASE = "https://api.applicationinsights.io";
 const SIGNAL_ID_RE = /^[A-Za-z0-9_]+$/;
 
 /**
+ * The statement-level RT0005 query's own availability/error label (Task 9,
+ * Fix Round 1) — distinct from the plain `"RT0005"` signalId the aggregate
+ * query reports under, so a `signalAvailability.find(a => a.signalId ===
+ * "RT0005")` lookup can never silently pick up (or be shadowed by) the
+ * statement query's own outcome, and vice versa. Reused as both the
+ * runKqlQuery error-message label and the signalAvailability entry's
+ * signalId, so the two always agree.
+ */
+const STATEMENT_QUERY_LABEL = "RT0005 statements";
+
+/**
+ * The App Insights v1 Analytics REST API (`/v1/apps/{id}/query`, used here)
+ * caps a single query's result at this many rows — Microsoft's documented
+ * default. A statement-query response landing AT this boundary is evidence
+ * rows were cut off server-side, separate from this module's own deliberate
+ * per-routine top-5 cap (`buildStatementKqlQuery`). NOT independently
+ * verified against live telemetry the way the query shape itself was
+ * (`verified-statement-kql.md`) — this threshold is Microsoft's documented
+ * figure, not a Gate-0-style live measurement, so treat it as best-effort
+ * until confirmed against a real truncated response.
+ */
+const APPINSIGHTS_QUERY_ROW_CAP = 500_000;
+
+/**
+ * Case-insensitive membership check for a requested signal id list — matches
+ * SIGNAL_ID_RE's own case tolerance (`rt0005` passes it, same as `RT0005`).
+ * Used to gate the statement-query enrichment: without this, `--signals
+ * rt0005` would silently skip SQL evidence while still pulling RT0005 rows
+ * under the lowercase id.
+ */
+function hasSignalId(signalIds: readonly string[], target: string): boolean {
+	return signalIds.some((id) => id.toUpperCase() === target.toUpperCase());
+}
+
+/**
  * `--client-types` values are spliced into the KQL `in (...)` filter clause —
  * same injection posture as SIGNAL_ID_RE, and the same shape the
  * telemetry-parser validates a pulled clientType against
@@ -275,42 +310,86 @@ export function buildKqlQuery(
  * query SEPARATE from `buildKqlQuery`'s per-signal aggregate above: grouped
  * by the stack AND the statement text itself (never `any()`), so a routine's
  * individual statements survive into TypeScript instead of collapsing under
- * one arbitrary statement per object. Verified against live BC telemetry
- * 2026-07-25 (`.superpowers/sdd/2026-07-25-telemetry-sql-evidence/verified-statement-kql.md`):
- * 7,087 RT0005 rows/day collapse to 625 (routine, statement) groups, 604 rows
- * across 563 distinct stacks after the per-routine top-5 cap — volume is not
- * a concern.
+ * one arbitrary statement per object.
  *
- * The outer `top-nested of X` levels carry NO number. That is what makes the
- * trailing `top-nested 5 of sqlStatement` a per-ROUTINE (and, in split mode,
- * per-TENANT — see below) top-5 rather than a global one: a number on any
- * outer level would cap distinct routines/stacks themselves, not just their
- * statements.
+ * Fix Round 1 (CRITICAL): `top-nested` returns ONLY its own clause columns —
+ * `<Expr>` plus `aggregated_<Expr>` per level — never the summarize's own
+ * columns un-nested. The first version of this query read
+ * occurrences/measuredTotalMs/thresholdMs straight off the summarize and got
+ * `NaN` in production; verified live
+ * (`.superpowers/sdd/2026-07-25-telemetry-sql-evidence/verified-statement-kql.md`,
+ * corrected 2026-07-25) that those three columns must ALSO ride their own
+ * uncapped `top-nested of X by Ignore<N> = max(1)` pass-through level —
+ * Microsoft's documented idiom for carrying a column through `top-nested`
+ * without capping on it — same as every other non-capped dimension.
+ * `sqlStatement` is the only CAPPED level (top 5 by `measuredTotalMs`); every
+ * level above and below it stays uncapped, which is what makes that cap
+ * per-ROUTINE (and, in split mode, per-TENANT/per-clientType — see below)
+ * rather than global. The trailing `project` whitelists exactly the columns
+ * the normalizer reads (rather than `project-away`ing the Ignore names) —
+ * "safer, and makes the contract between query and normalizer explicit"
+ * (verified-statement-kql.md); it also drops `aggregated_sqlStatement`, the
+ * capped level's own extra aggregate column, which `project-away` alone
+ * would have left behind.
  *
- * Split mode extends `aadTenantId`/`environmentName` into both the
- * summarize `by` list and their own uncapped top-nested levels, above the
- * `sqlStatement` cap — the same two dimensions `pullTelemetrySplit` groups
- * signal rows on. `attachEvidenceToSignals` (telemetry-sql.ts) joins per
- * split group, never globally: a statement row without these dimensions
- * could never be routed back to the right group.
+ * Fix Round 1 also adds `clientType`: the aggregate SIGNAL query
+ * (`buildKqlQuery`) groups BY clientType, so a routine with several
+ * clientType constituents mints one `TelemetrySignal` per constituent.
+ * Without `clientType` here too, every constituent would match the exact
+ * same statement rows and a later summing merge (Task 10) would double- (or
+ * N-)count. `--client-types` filters this query the same way it filters the
+ * aggregate one, or evidence measured in an unfiltered session could attach
+ * to a `--client-types`-filtered finding.
+ *
+ * Split mode extends `aadTenantId`/`environmentName` into the summarize `by`
+ * list and their own uncapped top-nested levels, above the `sqlStatement`
+ * cap — the same two dimensions `pullTelemetrySplit` groups signal rows on.
+ * `attachEvidenceToSignals` (telemetry-sql.ts) joins per split group, never
+ * globally: a statement row without these dimensions could never be routed
+ * back to the right group.
  */
-export function buildStatementKqlQuery(sinceIso: string, split: boolean): string {
+export function buildStatementKqlQuery(
+	sinceIso: string,
+	split: boolean,
+	clientTypes?: readonly string[],
+): string {
 	const by = split
-		? "extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, aadTenantId, environmentName"
-		: "extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement";
+		? "extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, aadTenantId, environmentName"
+		: "extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType";
+
+	let ignoreIndex = 0;
+	const passThrough = (col: string) =>
+		`top-nested of ${col} by Ignore${ignoreIndex++} = max(1)`;
+
 	const outerLevels = [
 		"extensionId",
 		"alObjectType",
 		"alObjectId",
 		"alStackTrace",
+		"clientType",
 		...(split ? ["aadTenantId", "environmentName"] : []),
 	];
 	const topNested = [
-		...outerLevels.map(
-			(col) => `top-nested of ${col} by max(measuredTotalMs)`,
-		),
+		...outerLevels.map(passThrough),
 		"top-nested 5 of sqlStatement by max(measuredTotalMs)",
+		passThrough("occurrences"),
+		passThrough("measuredTotalMs"),
+		passThrough("thresholdMs"),
 	].join(",\n  ");
+
+	const projected = [
+		"extensionId",
+		"alObjectType",
+		"alObjectId",
+		"alStackTrace",
+		"sqlStatement",
+		"clientType",
+		...(split ? ["aadTenantId", "environmentName"] : []),
+		"occurrences",
+		"measuredTotalMs",
+		"thresholdMs",
+	].join(", ");
+
 	const lines = [
 		"traces",
 		`| where timestamp > datetime(${sinceIso})`,
@@ -320,6 +399,7 @@ export function buildStatementKqlQuery(sinceIso: string, split: boolean): string
 		"         alObjectId = toint(customDimensions.alObjectId),",
 		"         alStackTrace = tostring(customDimensions.alStackTrace),",
 		"         sqlStatement = tostring(customDimensions.sqlStatement),",
+		"         clientType = tostring(customDimensions.clientType),",
 		// Both are .NET timespans; the *InMs aliases are absent on real rows
 		// (Gate 0). RT0005's threshold measured a uniform 750ms.
 		"         thresholdMs = toreal(totimespan(customDimensions.longRunningThreshold)) / 10000,",
@@ -333,9 +413,14 @@ export function buildStatementKqlQuery(sinceIso: string, split: boolean): string
 			"         environmentName = tostring(customDimensions.environmentName)",
 		);
 	}
+	if (clientTypes && clientTypes.length > 0) {
+		const list = clientTypes.map((ct) => `"${ct}"`).join(", ");
+		lines.push(`| where clientType in (${list})`);
+	}
 	lines.push(
 		`| summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by ${by}`,
 		`| ${topNested}`,
+		`| project ${projected}`,
 	);
 	return lines.join("\n");
 }
@@ -556,7 +641,9 @@ interface NormalizedStatementRows {
  * construction of that query), unlike the guarded sqlExecutes/sqlRowsRead
  * counters on RT0018 rows.
  */
-function normalizeStatementTable(table: AppInsightsTable): NormalizedStatementRows {
+function normalizeStatementTable(
+	table: AppInsightsTable,
+): NormalizedStatementRows {
 	const cell = makeCellReader(table);
 	const rows: NormalizedStatementRow[] = [];
 	let skipped = 0;
@@ -576,6 +663,7 @@ function normalizeStatementTable(table: AppInsightsTable): NormalizedStatementRo
 		}
 		const thresholdRaw = cell(raw, "thresholdMs");
 		const environmentNameRaw = asDisplayString(cell(raw, "environmentName"));
+		const clientTypeRaw = asDisplayString(cell(raw, "clientType"));
 		rows.push({
 			row: {
 				appId,
@@ -589,6 +677,10 @@ function normalizeStatementTable(table: AppInsightsTable): NormalizedStatementRo
 					typeof thresholdRaw === "number" && Number.isFinite(thresholdRaw)
 						? thresholdRaw
 						: undefined,
+				// Fix Round 1: undefined, not "" -- matches TelemetrySignal.clientType's
+				// own convention, and evidenceKey (telemetry-sql.ts) treats the two
+				// differently by design.
+				clientType: clientTypeRaw !== "" ? clientTypeRaw : undefined,
 			},
 			aadTenantId: asDisplayString(cell(raw, "aadTenantId")),
 			environmentName: environmentNameRaw !== "" ? environmentNameRaw : null,
@@ -728,18 +820,22 @@ async function fetchSignalTable(
  * fetchSignalTable's per-signal aggregate, always issued as its own request
  * (never folded into the RT0005 aggregate query above: buildKqlQuery and
  * buildStatementKqlQuery group on different dimensions and serve different
- * consumers). Its own label ("RT0005 statements") keeps its error messages
- * distinguishable from the aggregate RT0005 query's.
+ * consumers). `clientTypes` is threaded through the same as the aggregate
+ * query's own filter (Fix Round 1) — otherwise evidence measured in an
+ * unfiltered session could attach to a `--client-types`-filtered finding.
+ * STATEMENT_QUERY_LABEL keeps its error messages distinguishable from the
+ * aggregate RT0005 query's.
  */
 async function fetchStatementTable(
 	appId: string,
 	apiKey: string,
 	sinceIso: string,
 	split: boolean,
+	clientTypes: readonly string[] | undefined,
 	fetchImpl: typeof fetch,
 ): Promise<AppInsightsTable> {
-	const kql = buildStatementKqlQuery(sinceIso, split);
-	return runKqlQuery(appId, apiKey, kql, "RT0005 statements", fetchImpl);
+	const kql = buildStatementKqlQuery(sinceIso, split, clientTypes);
+	return runKqlQuery(appId, apiKey, kql, STATEMENT_QUERY_LABEL, fetchImpl);
 }
 
 // ---------------------------------------------------------------------------
@@ -762,8 +858,9 @@ export async function pullTelemetry(
 	// API key or app id must stay loud); that thrown message concatenates
 	// each signal's own captured error so the status/retryability an operator
 	// needs still surfaces.
-	const availability: NonNullable<TelemetryBatchDocument["signalAvailability"]> =
-		[];
+	const availability: NonNullable<
+		TelemetryBatchDocument["signalAvailability"]
+	> = [];
 	let succeeded = 0;
 	for (const signalId of signalIds) {
 		try {
@@ -806,27 +903,45 @@ export async function pullTelemetry(
 
 	// Statement-level SQL evidence (Task 9): a query SEPARATE from the
 	// per-signal aggregates above, best-effort — its own failure never aborts
-	// the pull (evidence is enrichment, not identity) and is logged rather
-	// than folded into `availability`, which already carries RT0005's own
-	// aggregate-query outcome under that same signalId.
-	if (signalIds.includes("RT0005")) {
+	// the pull (evidence is enrichment, not identity) and never counts toward
+	// the total-failure throw above. Fix Round 1: its outcome DOES get its own
+	// signalAvailability entry (STATEMENT_QUERY_LABEL, distinct from the plain
+	// "RT0005" the aggregate query reports under) — without one, a total
+	// statement-query outage was indistinguishable from "queried, genuinely no
+	// slow SQL", which would render every RT0005 finding as falsely clean.
+	if (hasSignalId(signalIds, "RT0005")) {
 		try {
 			const table = await fetchStatementTable(
 				opts.appId,
 				apiKey,
 				sinceIso,
 				false,
+				clientTypes,
 				fetchImpl,
 			);
-			const { rows } = normalizeStatementTable(table);
+			const { rows, skipped } = normalizeStatementTable(table);
+			if (skipped > 0) {
+				console.error(
+					`pull-telemetry: skipped ${skipped} RT0005 statement row(s) with empty identity fields after normalization`,
+				);
+			}
 			attachEvidenceToSignals(
 				allSignals,
 				rows.map((r) => r.row),
 			);
+			availability.push({
+				signalId: STATEMENT_QUERY_LABEL,
+				queried: true,
+				rows: rows.length,
+				truncated: table.rows.length >= APPINSIGHTS_QUERY_ROW_CAP,
+			});
 		} catch (err) {
-			console.error(
-				`pull-telemetry: RT0005 statement query failed, continuing without SQL evidence: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			availability.push({
+				signalId: STATEMENT_QUERY_LABEL,
+				queried: true,
+				rows: 0,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 
@@ -849,6 +964,18 @@ interface SplitGroupAccumulator {
 	aadTenantId: string;
 	environmentName: string | null;
 	signals: TelemetrySignal[];
+}
+
+/**
+ * The ONE grouping key expression for the (aadTenantId, environmentName)
+ * pair — used to group both signal rows and statement rows into the same
+ * split groups. Extracted to a single function (Fix Round 1, minor) so
+ * tenant isolation is structural: signals and statements can never drift
+ * onto two subtly different key computations, which two independently
+ * hand-written `JSON.stringify([...])` call sites would risk.
+ */
+function splitGroupKey(aadTenantId: string, environmentName: string | null): string {
+	return JSON.stringify([aadTenantId, environmentName]);
 }
 
 /**
@@ -880,8 +1007,9 @@ export async function pullTelemetrySplit(
 	let skippedTotal = 0;
 	// Per-signal failure capture — same rule as pullTelemetry (Task 9): a
 	// failing signal degrades, the pull only throws if every signal failed.
-	const availability: NonNullable<TelemetryBatchDocument["signalAvailability"]> =
-		[];
+	const availability: NonNullable<
+		TelemetryBatchDocument["signalAvailability"]
+	> = [];
 	let succeeded = 0;
 	for (const signalId of signalIds) {
 		try {
@@ -924,7 +1052,7 @@ export async function pullTelemetrySplit(
 
 	const groupsByKey = new Map<string, SplitGroupAccumulator>();
 	for (const row of allRows) {
-		const key = JSON.stringify([row.aadTenantId, row.environmentName]);
+		const key = splitGroupKey(row.aadTenantId, row.environmentName);
 		let acc = groupsByKey.get(key);
 		if (!acc) {
 			acc = {
@@ -941,24 +1069,31 @@ export async function pullTelemetrySplit(
 	// PER SPLIT GROUP, never globally — a global join keyed on the routine
 	// alone would attach one tenant's redacted SQL onto another tenant's
 	// finding whose app/object/method happen to match, shipping it straight
-	// into that tenant's issue tracker. Statement rows are grouped by the
-	// exact same (aadTenantId, environmentName) key used for signals above,
-	// then joined only within each already-formed group — never across.
-	// Best-effort like the non-split path: a failure here degrades to "no SQL
-	// evidence this pull", never the pull itself.
-	if (signalIds.includes("RT0005")) {
+	// into that tenant's issue tracker. Statement rows are grouped by
+	// splitGroupKey, the SAME function used for signals above, then joined
+	// only within each already-formed group — never across. Best-effort like
+	// the non-split path: a failure here degrades to "no SQL evidence this
+	// pull", never the pull itself, but DOES get its own signalAvailability
+	// entry (see the non-split path's comment for why).
+	if (hasSignalId(signalIds, "RT0005")) {
 		try {
 			const table = await fetchStatementTable(
 				opts.appId,
 				apiKey,
 				sinceIso,
 				true,
+				clientTypes,
 				fetchImpl,
 			);
-			const { rows } = normalizeStatementTable(table);
+			const { rows, skipped } = normalizeStatementTable(table);
+			if (skipped > 0) {
+				console.error(
+					`pull-telemetry: skipped ${skipped} RT0005 statement row(s) with empty identity fields after normalization`,
+				);
+			}
 			const statementsByGroupKey = new Map<string, StatementRow[]>();
 			for (const r of rows) {
-				const key = JSON.stringify([r.aadTenantId, r.environmentName]);
+				const key = splitGroupKey(r.aadTenantId, r.environmentName);
 				const list = statementsByGroupKey.get(key) ?? [];
 				list.push(r.row);
 				statementsByGroupKey.set(key, list);
@@ -967,10 +1102,19 @@ export async function pullTelemetrySplit(
 				const statementRows = statementsByGroupKey.get(key);
 				if (statementRows) attachEvidenceToSignals(acc.signals, statementRows);
 			}
+			availability.push({
+				signalId: STATEMENT_QUERY_LABEL,
+				queried: true,
+				rows: rows.length,
+				truncated: table.rows.length >= APPINSIGHTS_QUERY_ROW_CAP,
+			});
 		} catch (err) {
-			console.error(
-				`pull-telemetry: RT0005 statement query failed, continuing without SQL evidence: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			availability.push({
+				signalId: STATEMENT_QUERY_LABEL,
+				queried: true,
+				rows: 0,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 

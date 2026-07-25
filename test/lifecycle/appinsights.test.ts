@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { parseTelemetryBatch } from "../../src/core/telemetry-parser.js";
 import {
 	buildKqlQuery,
+	buildStatementKqlQuery,
 	DEFAULT_API_KEY_ENV,
 	listTenants,
 	normalizeTable,
@@ -204,6 +205,73 @@ describe("normalizeTable — RT0005 header-only stack no longer becomes the meth
 	});
 });
 
+// ---------------------------------------------------------------------------
+// buildStatementKqlQuery — value columns via pass-through levels (Task 9,
+// Fix Round 1 CRITICAL): top-nested returns ONLY its own clause columns, so
+// occurrences/measuredTotalMs/thresholdMs must EACH ride an uncapped
+// Ignore<N> = max(1) pass-through level to survive at all — reading them
+// straight off the summarize (the pre-fix version) produced NaN in
+// production. Asserted here directly against the real column names
+// (verified-statement-kql.md), not a hand-written fixture — a fabricated
+// fixture is exactly what let the NaN bug pass a green suite the first time.
+// ---------------------------------------------------------------------------
+
+describe("buildStatementKqlQuery — value columns and clientType (Fix Round 1)", () => {
+	it("non-split: projects exactly the columns the normalizer reads, with every non-capped dimension passed through via Ignore<N> = max(1)", () => {
+		const kql = buildStatementKqlQuery("2026-07-25T00:00:00.000Z", false);
+		expect(kql).toContain(
+			"| project extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, occurrences, measuredTotalMs, thresholdMs",
+		);
+		// extensionId, alObjectType, alObjectId, alStackTrace, clientType,
+		// occurrences, measuredTotalMs, thresholdMs = 8 pass-through levels.
+		expect(kql.match(/top-nested of \w+ by Ignore\d+ = max\(1\)/g)).toHaveLength(
+			8,
+		);
+		expect(kql).toContain(
+			"top-nested 5 of sqlStatement by max(measuredTotalMs)",
+		);
+		// sqlStatement is the ONLY level capped with a number.
+		expect(kql.match(/top-nested \d+ of/g)).toEqual([
+			"top-nested 5 of",
+		]);
+	});
+
+	it("split: also carries aadTenantId/environmentName through the project and as two more pass-through levels", () => {
+		const kql = buildStatementKqlQuery("2026-07-25T00:00:00.000Z", true);
+		expect(kql).toContain(
+			"| project extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, aadTenantId, environmentName, occurrences, measuredTotalMs, thresholdMs",
+		);
+		expect(kql.match(/top-nested of \w+ by Ignore\d+ = max\(1\)/g)).toHaveLength(
+			10,
+		);
+		expect(kql).toContain(
+			"summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, aadTenantId, environmentName",
+		);
+	});
+
+	it("carries clientType through extend/summarize (so it can match the aggregate query's own clientType grouping)", () => {
+		const kql = buildStatementKqlQuery("2026-07-25T00:00:00.000Z", false);
+		expect(kql).toContain("clientType = tostring(customDimensions.clientType)");
+		expect(kql).toMatch(/summarize[^\n]*\bby\b[^\n]*clientType/);
+	});
+
+	it("--client-types filters the statement query, same shape as the aggregate query's own filter", () => {
+		const withFilter = buildStatementKqlQuery("2026-07-25T00:00:00.000Z", false, [
+			"Background",
+			"WebClient",
+		]);
+		expect(withFilter).toContain(
+			'| where clientType in ("Background", "WebClient")',
+		);
+
+		const withoutFilter = buildStatementKqlQuery(
+			"2026-07-25T00:00:00.000Z",
+			false,
+		);
+		expect(withoutFilter).not.toContain("| where clientType in");
+	});
+});
+
 describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan Task 2, behavior 1: captured BEFORE the split-mode refactor, must stay byte-identical after; RT0005/RT0018 shapes diverged and re-baselined under Task 8 — see expectedKql)", () => {
 	const FIXED_NOW = new Date("2026-01-01T12:00:00.000Z");
 
@@ -251,11 +319,15 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 		return lines.join("\n");
 	}
 
-	// Task 9: a third call — the statement-level RT0005 query, separate from
-	// the two per-signal aggregate queries above — is issued whenever RT0005
-	// is among the requested signals. Mirrors buildStatementKqlQuery exactly
-	// (verified-statement-kql.md); see that function's doc comment for why
-	// the outer top-nested levels carry no number.
+	// Task 9 (Fix Round 1): a third call — the statement-level RT0005 query,
+	// separate from the two per-signal aggregate queries above — is issued
+	// whenever RT0005 is among the requested signals. Mirrors
+	// buildStatementKqlQuery exactly (verified-statement-kql.md, corrected
+	// 2026-07-25): the value columns (occurrences/measuredTotalMs/thresholdMs)
+	// ride their own uncapped Ignore<N> = max(1) pass-through levels — a
+	// top-nested clause returns ONLY its own clause columns, never the
+	// summarize's columns un-nested — and the trailing `project` whitelists
+	// exactly what the normalizer reads.
 	function expectedStatementKql(): string {
 		return [
 			"traces",
@@ -266,10 +338,12 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 			"         alObjectId = toint(customDimensions.alObjectId),",
 			"         alStackTrace = tostring(customDimensions.alStackTrace),",
 			"         sqlStatement = tostring(customDimensions.sqlStatement),",
+			"         clientType = tostring(customDimensions.clientType),",
 			"         thresholdMs = toreal(totimespan(customDimensions.longRunningThreshold)) / 10000,",
 			"         ms = toreal(totimespan(customDimensions.executionTime)) / 10000",
-			"| summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement",
-			"| top-nested of extensionId by max(measuredTotalMs),\n  top-nested of alObjectType by max(measuredTotalMs),\n  top-nested of alObjectId by max(measuredTotalMs),\n  top-nested of alStackTrace by max(measuredTotalMs),\n  top-nested 5 of sqlStatement by max(measuredTotalMs)",
+			"| summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType",
+			"| top-nested of extensionId by Ignore0 = max(1),\n  top-nested of alObjectType by Ignore1 = max(1),\n  top-nested of alObjectId by Ignore2 = max(1),\n  top-nested of alStackTrace by Ignore3 = max(1),\n  top-nested of clientType by Ignore4 = max(1),\n  top-nested 5 of sqlStatement by max(measuredTotalMs),\n  top-nested of occurrences by Ignore5 = max(1),\n  top-nested of measuredTotalMs by Ignore6 = max(1),\n  top-nested of thresholdMs by Ignore7 = max(1)",
+			"| project extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, occurrences, measuredTotalMs, thresholdMs",
 		].join("\n");
 	}
 
@@ -413,6 +487,22 @@ describe("pullTelemetry — request pinning", () => {
 		await pullTelemetry({ appId: APP_ID, signals: ["RT0018"] }, fetchImpl);
 
 		expect(calls).toHaveLength(1);
+	});
+
+	// Fix Round 1, minor: SIGNAL_ID_RE permits lowercase ("rt0005" is a valid
+	// --signals value), so the statement-query gate must not be case-sensitive
+	// or `--signals rt0005` would silently pull RT0005 rows with no SQL
+	// evidence enrichment at all.
+	it("still issues the statement query when --signals uses lowercase 'rt0005'", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetry({ appId: APP_ID, signals: ["rt0005"] }, fetchImpl);
+
+		expect(calls).toHaveLength(2); // the aggregate query + the statement query
 	});
 });
 
@@ -904,6 +994,7 @@ describe("pullTelemetry — per-signal failure capture (Task 9)", () => {
 		expect(message).toContain("RT0018");
 		expect(message).toContain("RT0005");
 		expect(message).toContain("500");
+		expect(message).not.toContain(DECOY_KEY);
 	});
 
 	it("a normalization throw (not just an HTTP error) degrades one signal, not the pull", async () => {
@@ -1370,17 +1461,23 @@ describe("pullTelemetrySplit — round-trip through parseTelemetryBatch (behavio
 // each see only their own statement rows.
 // ---------------------------------------------------------------------------
 
+// Fix Round 1: these column names/order MUST match buildStatementKqlQuery's
+// own `| project` line exactly — a fixture inventing a different column set
+// (e.g. one the query cannot actually emit) is what let the NaN bug pass a
+// green suite the first time. Pinned by the "projects exactly the columns"
+// tests above.
 const STATEMENT_COLUMNS = [
 	{ name: "extensionId", type: "string" },
 	{ name: "alObjectType", type: "string" },
 	{ name: "alObjectId", type: "long" },
 	{ name: "alStackTrace", type: "string" },
 	{ name: "sqlStatement", type: "string" },
+	{ name: "clientType", type: "string" },
+	{ name: "aadTenantId", type: "string" },
+	{ name: "environmentName", type: "string" },
 	{ name: "occurrences", type: "long" },
 	{ name: "measuredTotalMs", type: "real" },
 	{ name: "thresholdMs", type: "real" },
-	{ name: "aadTenantId", type: "string" },
-	{ name: "environmentName", type: "string" },
 ];
 
 function statementTableResponse(rows: unknown[][]) {
@@ -1394,6 +1491,7 @@ function makeStatementRow(opts: {
 	objectId?: number;
 	stackTrace?: string;
 	sqlStatement: string;
+	clientType?: string;
 	occurrences?: number;
 	measuredTotalMs?: number;
 	thresholdMs?: number;
@@ -1407,11 +1505,12 @@ function makeStatementRow(opts: {
 		opts.stackTrace ??
 			'AL CallStack: "Sales Post"(Codeunit 50100).ProcessLine line 1',
 		opts.sqlStatement,
+		opts.clientType ?? "",
+		opts.aadTenantId,
+		opts.environmentName ?? "PROD",
 		opts.occurrences ?? 1,
 		opts.measuredTotalMs ?? 1000,
 		opts.thresholdMs ?? 750,
-		opts.aadTenantId,
-		opts.environmentName ?? "PROD",
 	];
 }
 
@@ -1529,8 +1628,17 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 		expect(result.groups).toHaveLength(2);
 		const [g1, g2] = result.groups;
 		expect(g1.batch.signalAvailability).toEqual(g2.batch.signalAvailability);
+		// The statement query gets its OWN entry (Fix Round 1) — distinct
+		// signalId from the aggregate RT0005 query's, so a total statement-
+		// query outage is never indistinguishable from "queried, no slow SQL".
 		expect(g1.batch.signalAvailability).toEqual([
 			{ signalId: "RT0005", queried: true, rows: 2 },
+			{
+				signalId: "RT0005 statements",
+				queried: true,
+				rows: 0,
+				truncated: false,
+			},
 		]);
 	});
 });
