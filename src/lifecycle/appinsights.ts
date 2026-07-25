@@ -25,7 +25,11 @@ import {
 	type TelemetryBatchDocument,
 	type TelemetrySignal,
 } from "../types/telemetry.js";
-import { parseAlStackFrame } from "./telemetry-sql.js";
+import {
+	attachEvidenceToSignals,
+	parseAlStackFrame,
+	type StatementRow,
+} from "./telemetry-sql.js";
 
 /** Default env var holding the App Insights API key (CLI default, overridable via --api-key-env). */
 export const DEFAULT_API_KEY_ENV = "APPINSIGHTS_API_KEY";
@@ -266,6 +270,76 @@ export function buildKqlQuery(
 	return lines.join("\n");
 }
 
+/**
+ * Statement-level RT0005 query (telemetry-sql-evidence plan, Task 9) — a
+ * query SEPARATE from `buildKqlQuery`'s per-signal aggregate above: grouped
+ * by the stack AND the statement text itself (never `any()`), so a routine's
+ * individual statements survive into TypeScript instead of collapsing under
+ * one arbitrary statement per object. Verified against live BC telemetry
+ * 2026-07-25 (`.superpowers/sdd/2026-07-25-telemetry-sql-evidence/verified-statement-kql.md`):
+ * 7,087 RT0005 rows/day collapse to 625 (routine, statement) groups, 604 rows
+ * across 563 distinct stacks after the per-routine top-5 cap — volume is not
+ * a concern.
+ *
+ * The outer `top-nested of X` levels carry NO number. That is what makes the
+ * trailing `top-nested 5 of sqlStatement` a per-ROUTINE (and, in split mode,
+ * per-TENANT — see below) top-5 rather than a global one: a number on any
+ * outer level would cap distinct routines/stacks themselves, not just their
+ * statements.
+ *
+ * Split mode extends `aadTenantId`/`environmentName` into both the
+ * summarize `by` list and their own uncapped top-nested levels, above the
+ * `sqlStatement` cap — the same two dimensions `pullTelemetrySplit` groups
+ * signal rows on. `attachEvidenceToSignals` (telemetry-sql.ts) joins per
+ * split group, never globally: a statement row without these dimensions
+ * could never be routed back to the right group.
+ */
+export function buildStatementKqlQuery(sinceIso: string, split: boolean): string {
+	const by = split
+		? "extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, aadTenantId, environmentName"
+		: "extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement";
+	const outerLevels = [
+		"extensionId",
+		"alObjectType",
+		"alObjectId",
+		"alStackTrace",
+		...(split ? ["aadTenantId", "environmentName"] : []),
+	];
+	const topNested = [
+		...outerLevels.map(
+			(col) => `top-nested of ${col} by max(measuredTotalMs)`,
+		),
+		"top-nested 5 of sqlStatement by max(measuredTotalMs)",
+	].join(",\n  ");
+	const lines = [
+		"traces",
+		`| where timestamp > datetime(${sinceIso})`,
+		'| where customDimensions.eventId == "RT0005"',
+		"| extend extensionId = tostring(customDimensions.extensionId),",
+		"         alObjectType = tostring(customDimensions.alObjectType),",
+		"         alObjectId = toint(customDimensions.alObjectId),",
+		"         alStackTrace = tostring(customDimensions.alStackTrace),",
+		"         sqlStatement = tostring(customDimensions.sqlStatement),",
+		// Both are .NET timespans; the *InMs aliases are absent on real rows
+		// (Gate 0). RT0005's threshold measured a uniform 750ms.
+		"         thresholdMs = toreal(totimespan(customDimensions.longRunningThreshold)) / 10000,",
+		split
+			? "         ms = toreal(totimespan(customDimensions.executionTime)) / 10000,"
+			: "         ms = toreal(totimespan(customDimensions.executionTime)) / 10000",
+	];
+	if (split) {
+		lines.push(
+			"         aadTenantId = tostring(customDimensions.aadTenantId),",
+			"         environmentName = tostring(customDimensions.environmentName)",
+		);
+	}
+	lines.push(
+		`| summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by ${by}`,
+		`| ${topNested}`,
+	);
+	return lines.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Response shape + row normalization
 // ---------------------------------------------------------------------------
@@ -453,6 +527,77 @@ function normalizeSplitTable(
 }
 
 // ---------------------------------------------------------------------------
+// Statement-row normalization (telemetry-sql-evidence plan, Task 9): the
+// response shape for buildStatementKqlQuery. Carries aadTenantId/
+// environmentName alongside every row (empty/absent in non-split mode,
+// simply unused there) so pullTelemetrySplit can group statement rows by the
+// exact same key it groups signal rows by, before handing each group's rows
+// to attachEvidenceToSignals — the join must never run globally (see that
+// function's doc comment in telemetry-sql.ts).
+// ---------------------------------------------------------------------------
+
+interface NormalizedStatementRow {
+	row: StatementRow;
+	aadTenantId: string;
+	/** null when absent/empty — mirrors NormalizedSplitRow's environmentName (D2). */
+	environmentName: string | null;
+}
+
+interface NormalizedStatementRows {
+	rows: NormalizedStatementRow[];
+	skipped: number;
+}
+
+/**
+ * Row -> StatementRow, or dropped when identity fields are empty. Mirrors
+ * buildSignalFromRow's skip-not-crash posture: a malformed statement row
+ * degrades the evidence for one routine, never the pull. `occurrences` and
+ * `measuredTotalMs` come straight from the KQL summarize (never absent by
+ * construction of that query), unlike the guarded sqlExecutes/sqlRowsRead
+ * counters on RT0018 rows.
+ */
+function normalizeStatementTable(table: AppInsightsTable): NormalizedStatementRows {
+	const cell = makeCellReader(table);
+	const rows: NormalizedStatementRow[] = [];
+	let skipped = 0;
+	for (const raw of table.rows) {
+		const appId = asDisplayString(cell(raw, "extensionId"));
+		const objectType = asDisplayString(cell(raw, "alObjectType"));
+		const stackTrace = asDisplayString(cell(raw, "alStackTrace"));
+		const sqlStatement = asDisplayString(cell(raw, "sqlStatement"));
+		if (
+			appId === "" ||
+			objectType === "" ||
+			stackTrace === "" ||
+			sqlStatement === ""
+		) {
+			skipped++;
+			continue;
+		}
+		const thresholdRaw = cell(raw, "thresholdMs");
+		const environmentNameRaw = asDisplayString(cell(raw, "environmentName"));
+		rows.push({
+			row: {
+				appId,
+				objectType,
+				objectId: Number(cell(raw, "alObjectId")),
+				stackTrace,
+				sqlStatement,
+				occurrences: Number(cell(raw, "occurrences")),
+				measuredTotalMs: Number(cell(raw, "measuredTotalMs")),
+				thresholdMs:
+					typeof thresholdRaw === "number" && Number.isFinite(thresholdRaw)
+						? thresholdRaw
+						: undefined,
+			},
+			aadTenantId: asDisplayString(cell(raw, "aadTenantId")),
+			environmentName: environmentNameRaw !== "" ? environmentNameRaw : null,
+		});
+	}
+	return { rows, skipped };
+}
+
+// ---------------------------------------------------------------------------
 // HTTP error classification (v1 does not retry — classification is for the
 // operator's own alerting/retry cadence, not automatic retry here)
 // ---------------------------------------------------------------------------
@@ -532,7 +677,39 @@ function resolvePullContext(opts: PullTelemetryOptions): PullContext {
 	return { apiKey, signalIds, clientTypes, sinceIso, windowEnd };
 }
 
-/** Build the URL, fetch, and classify HTTP errors — identical for both modes. */
+/**
+ * Fetch + classify HTTP errors for one already-built KQL string — shared by
+ * fetchSignalTable and fetchStatementTable (Task 9) so the URL construction,
+ * network-error wrapping and HTTP classification exist exactly once. `label`
+ * is spliced into any thrown error message only — a real signalId for the
+ * per-signal queries, "RT0005 statements" for the statement query, so the two
+ * never collide in an operator-facing message.
+ */
+async function runKqlQuery(
+	appId: string,
+	apiKey: string,
+	kql: string,
+	label: string,
+	fetchImpl: typeof fetch,
+): Promise<AppInsightsTable> {
+	const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(appId)}/query?query=${encodeURIComponent(kql)}`;
+
+	let res: Response;
+	try {
+		res = await fetchImpl(url, { headers: { "x-api-key": apiKey } });
+	} catch (err) {
+		throw new Error(
+			`pull-telemetry: network error querying App Insights for ${label}: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	if (!res.ok) {
+		throw new Error(httpErrorMessage(res.status, res.statusText, label));
+	}
+	const json = await res.json();
+	return selectPrimaryTable(json, label);
+}
+
+/** Build the per-signal URL/KQL, fetch, and classify HTTP errors — identical for both modes. */
 async function fetchSignalTable(
 	appId: string,
 	apiKey: string,
@@ -543,21 +720,26 @@ async function fetchSignalTable(
 	fetchImpl: typeof fetch,
 ): Promise<AppInsightsTable> {
 	const kql = buildKqlQuery(signalId, sinceIso, clientTypes, split);
-	const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(appId)}/query?query=${encodeURIComponent(kql)}`;
+	return runKqlQuery(appId, apiKey, kql, signalId, fetchImpl);
+}
 
-	let res: Response;
-	try {
-		res = await fetchImpl(url, { headers: { "x-api-key": apiKey } });
-	} catch (err) {
-		throw new Error(
-			`pull-telemetry: network error querying App Insights for ${signalId}: ${err instanceof Error ? err.message : String(err)}`,
-		);
-	}
-	if (!res.ok) {
-		throw new Error(httpErrorMessage(res.status, res.statusText, signalId));
-	}
-	const json = await res.json();
-	return selectPrimaryTable(json, signalId);
+/**
+ * Statement-level RT0005 fetch (Task 9) — a query separate from
+ * fetchSignalTable's per-signal aggregate, always issued as its own request
+ * (never folded into the RT0005 aggregate query above: buildKqlQuery and
+ * buildStatementKqlQuery group on different dimensions and serve different
+ * consumers). Its own label ("RT0005 statements") keeps its error messages
+ * distinguishable from the aggregate RT0005 query's.
+ */
+async function fetchStatementTable(
+	appId: string,
+	apiKey: string,
+	sinceIso: string,
+	split: boolean,
+	fetchImpl: typeof fetch,
+): Promise<AppInsightsTable> {
+	const kql = buildStatementKqlQuery(sinceIso, split);
+	return runKqlQuery(appId, apiKey, kql, "RT0005 statements", fetchImpl);
 }
 
 // ---------------------------------------------------------------------------
@@ -573,25 +755,79 @@ export async function pullTelemetry(
 
 	const allSignals: TelemetrySignal[] = [];
 	let skippedTotal = 0;
+	// Per-signal failure capture (telemetry-sql-evidence plan, Task 9): a
+	// failing signal — an HTTP error OR a normalization throw (asDurationMs
+	// can throw mid-row) — degrades ONE signal, recorded here, rather than
+	// aborting the whole pull. Only "every signal failed" still throws (a bad
+	// API key or app id must stay loud); that thrown message concatenates
+	// each signal's own captured error so the status/retryability an operator
+	// needs still surfaces.
+	const availability: NonNullable<TelemetryBatchDocument["signalAvailability"]> =
+		[];
+	let succeeded = 0;
 	for (const signalId of signalIds) {
-		const table = await fetchSignalTable(
-			opts.appId,
-			apiKey,
-			signalId,
-			sinceIso,
-			clientTypes,
-			false,
-			fetchImpl,
+		try {
+			const table = await fetchSignalTable(
+				opts.appId,
+				apiKey,
+				signalId,
+				sinceIso,
+				clientTypes,
+				false,
+				fetchImpl,
+			);
+			const { signals, skipped } = normalizeTable(table, signalId);
+			allSignals.push(...signals);
+			skippedTotal += skipped;
+			availability.push({ signalId, queried: true, rows: signals.length });
+			succeeded++;
+		} catch (err) {
+			availability.push({
+				signalId,
+				queried: true,
+				rows: 0,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+	if (succeeded === 0) {
+		throw new Error(
+			`pull-telemetry: every signal query failed — ${availability
+				.map((a) => `${a.signalId}: ${a.error}`)
+				.join("; ")}`,
 		);
-		const { signals, skipped } = normalizeTable(table, signalId);
-		allSignals.push(...signals);
-		skippedTotal += skipped;
 	}
 
 	if (skippedTotal > 0) {
 		console.error(
 			`pull-telemetry: skipped ${skippedTotal} row(s) with empty identity fields (methodName/appId/objectType) after normalization`,
 		);
+	}
+
+	// Statement-level SQL evidence (Task 9): a query SEPARATE from the
+	// per-signal aggregates above, best-effort — its own failure never aborts
+	// the pull (evidence is enrichment, not identity) and is logged rather
+	// than folded into `availability`, which already carries RT0005's own
+	// aggregate-query outcome under that same signalId.
+	if (signalIds.includes("RT0005")) {
+		try {
+			const table = await fetchStatementTable(
+				opts.appId,
+				apiKey,
+				sinceIso,
+				false,
+				fetchImpl,
+			);
+			const { rows } = normalizeStatementTable(table);
+			attachEvidenceToSignals(
+				allSignals,
+				rows.map((r) => r.row),
+			);
+		} catch (err) {
+			console.error(
+				`pull-telemetry: RT0005 statement query failed, continuing without SQL evidence: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	}
 
 	return {
@@ -601,6 +837,7 @@ export async function pullTelemetry(
 		windowEnd,
 		source: opts.source ?? "appinsights-api",
 		signals: allSignals,
+		signalAvailability: availability,
 	};
 }
 
@@ -641,19 +878,42 @@ export async function pullTelemetrySplit(
 
 	const allRows: NormalizedSplitRow[] = [];
 	let skippedTotal = 0;
+	// Per-signal failure capture — same rule as pullTelemetry (Task 9): a
+	// failing signal degrades, the pull only throws if every signal failed.
+	const availability: NonNullable<TelemetryBatchDocument["signalAvailability"]> =
+		[];
+	let succeeded = 0;
 	for (const signalId of signalIds) {
-		const table = await fetchSignalTable(
-			opts.appId,
-			apiKey,
-			signalId,
-			sinceIso,
-			clientTypes,
-			true,
-			fetchImpl,
+		try {
+			const table = await fetchSignalTable(
+				opts.appId,
+				apiKey,
+				signalId,
+				sinceIso,
+				clientTypes,
+				true,
+				fetchImpl,
+			);
+			const { rows, skipped } = normalizeSplitTable(table, signalId);
+			allRows.push(...rows);
+			skippedTotal += skipped;
+			availability.push({ signalId, queried: true, rows: rows.length });
+			succeeded++;
+		} catch (err) {
+			availability.push({
+				signalId,
+				queried: true,
+				rows: 0,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+	if (succeeded === 0) {
+		throw new Error(
+			`pull-telemetry: every signal query failed — ${availability
+				.map((a) => `${a.signalId}: ${a.error}`)
+				.join("; ")}`,
 		);
-		const { rows, skipped } = normalizeSplitTable(table, signalId);
-		allRows.push(...rows);
-		skippedTotal += skipped;
 	}
 
 	if (skippedTotal > 0) {
@@ -675,6 +935,43 @@ export async function pullTelemetrySplit(
 			groupsByKey.set(key, acc);
 		}
 		acc.signals.push(row.signal);
+	}
+
+	// Statement-level SQL evidence (Task 9), split mode: the join must run
+	// PER SPLIT GROUP, never globally — a global join keyed on the routine
+	// alone would attach one tenant's redacted SQL onto another tenant's
+	// finding whose app/object/method happen to match, shipping it straight
+	// into that tenant's issue tracker. Statement rows are grouped by the
+	// exact same (aadTenantId, environmentName) key used for signals above,
+	// then joined only within each already-formed group — never across.
+	// Best-effort like the non-split path: a failure here degrades to "no SQL
+	// evidence this pull", never the pull itself.
+	if (signalIds.includes("RT0005")) {
+		try {
+			const table = await fetchStatementTable(
+				opts.appId,
+				apiKey,
+				sinceIso,
+				true,
+				fetchImpl,
+			);
+			const { rows } = normalizeStatementTable(table);
+			const statementsByGroupKey = new Map<string, StatementRow[]>();
+			for (const r of rows) {
+				const key = JSON.stringify([r.aadTenantId, r.environmentName]);
+				const list = statementsByGroupKey.get(key) ?? [];
+				list.push(r.row);
+				statementsByGroupKey.set(key, list);
+			}
+			for (const [key, acc] of groupsByKey) {
+				const statementRows = statementsByGroupKey.get(key);
+				if (statementRows) attachEvidenceToSignals(acc.signals, statementRows);
+			}
+		} catch (err) {
+			console.error(
+				`pull-telemetry: RT0005 statement query failed, continuing without SQL evidence: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	}
 
 	const tenantMapLower = new Map(
@@ -713,6 +1010,10 @@ export async function pullTelemetrySplit(
 				windowEnd,
 				source: "appinsights-api-split",
 				signals: acc.signals,
+				// Availability is per PULL, not per tenant row (a failed signal
+				// returns no tenant dimensions, so there's nothing to attribute it
+				// to) — every group emitted from this pull carries the SAME array.
+				signalAvailability: availability,
 			},
 		});
 	}

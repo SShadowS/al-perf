@@ -251,7 +251,29 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 		return lines.join("\n");
 	}
 
-	it("generated KQL for both default signals is byte-identical to the pre-refactor shape", async () => {
+	// Task 9: a third call — the statement-level RT0005 query, separate from
+	// the two per-signal aggregate queries above — is issued whenever RT0005
+	// is among the requested signals. Mirrors buildStatementKqlQuery exactly
+	// (verified-statement-kql.md); see that function's doc comment for why
+	// the outer top-nested levels carry no number.
+	function expectedStatementKql(): string {
+		return [
+			"traces",
+			"| where timestamp > datetime(2026-01-01T08:00:00.000Z)",
+			'| where customDimensions.eventId == "RT0005"',
+			"| extend extensionId = tostring(customDimensions.extensionId),",
+			"         alObjectType = tostring(customDimensions.alObjectType),",
+			"         alObjectId = toint(customDimensions.alObjectId),",
+			"         alStackTrace = tostring(customDimensions.alStackTrace),",
+			"         sqlStatement = tostring(customDimensions.sqlStatement),",
+			"         thresholdMs = toreal(totimespan(customDimensions.longRunningThreshold)) / 10000,",
+			"         ms = toreal(totimespan(customDimensions.executionTime)) / 10000",
+			"| summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement",
+			"| top-nested of extensionId by max(measuredTotalMs),\n  top-nested of alObjectType by max(measuredTotalMs),\n  top-nested of alObjectId by max(measuredTotalMs),\n  top-nested of alStackTrace by max(measuredTotalMs),\n  top-nested 5 of sqlStatement by max(measuredTotalMs)",
+		].join("\n");
+	}
+
+	it("generated KQL for both default signals is byte-identical to the pre-refactor shape, plus a third statement-query call (Task 9)", async () => {
 		const calls: string[] = [];
 		const fetchImpl = (async (url: string) => {
 			calls.push(url);
@@ -268,15 +290,16 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 			fetchImpl,
 		);
 
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 		const decoded = calls.map((u) =>
 			decodeURIComponent(new URL(u).searchParams.get("query") ?? ""),
 		);
 		expect(decoded[0]).toBe(expectedKql("RT0018"));
 		expect(decoded[1]).toBe(expectedKql("RT0005"));
+		expect(decoded[2]).toBe(expectedStatementKql());
 	});
 
-	it("output batch for the row-normalization fixture is byte-identical to the pre-refactor shape", async () => {
+	it("output batch for the row-normalization fixture is byte-identical to the pre-refactor shape, plus signalAvailability (Task 9)", async () => {
 		const numericRow = [
 			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			"My ISV App",
@@ -292,6 +315,8 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 		const fetchImpl = (async () =>
 			okResponse(primaryTableResponse([numericRow]))) as typeof fetch;
 
+		// Only RT0018 requested -> no statement query fires (gated on RT0005
+		// being among the requested signals), so this stays a single fetch call.
 		const batch = await pullTelemetry(
 			{ appId: APP_ID, signals: ["RT0018"], since: "4h", now: () => FIXED_NOW },
 			fetchImpl,
@@ -318,6 +343,7 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 					avgDurationMs: 9500,
 				},
 			],
+			signalAvailability: [{ signalId: "RT0018", queried: true, rows: 1 }],
 		});
 	});
 });
@@ -356,7 +382,7 @@ describe("pullTelemetry — request pinning", () => {
 		expect(headers["x-api-key"]).toBe(DECOY_KEY);
 	});
 
-	it("queries once per requested signal", async () => {
+	it("queries once per requested signal, plus one statement query when RT0005 is requested (Task 9)", async () => {
 		const calls: string[] = [];
 		const fetchImpl = (async (url: string) => {
 			calls.push(url);
@@ -368,9 +394,25 @@ describe("pullTelemetry — request pinning", () => {
 			fetchImpl,
 		);
 
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 		expect(decodeURIComponent(calls[0])).toContain('eventId == "RT0018"');
 		expect(decodeURIComponent(calls[1])).toContain('eventId == "RT0005"');
+		// The 3rd call is the statement query: also filters RT0005, but groups
+		// on sqlStatement rather than methodName/stackTrace.
+		expect(decodeURIComponent(calls[2])).toContain('eventId == "RT0005"');
+		expect(decodeURIComponent(calls[2])).toContain("sqlStatement");
+	});
+
+	it("issues no statement query when RT0005 is not among the requested signals", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		await pullTelemetry({ appId: APP_ID, signals: ["RT0018"] }, fetchImpl);
+
+		expect(calls).toHaveLength(1);
 	});
 });
 
@@ -786,6 +828,125 @@ describe("pullTelemetry — HTTP error classification (v1 does not retry)", () =
 });
 
 // ---------------------------------------------------------------------------
+// Per-signal failure capture (telemetry-sql-evidence plan, Task 9): a failing
+// signal — HTTP error OR a normalization throw — degrades that ONE signal,
+// recorded in signalAvailability, rather than aborting the whole pull. Only
+// "every signal failed" still throws.
+// ---------------------------------------------------------------------------
+
+describe("pullTelemetry — per-signal failure capture (Task 9)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	const okRt0018Row = [
+		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"My ISV App",
+		"Codeunit",
+		50100,
+		"Sales Post",
+		"ProcessLine",
+		3,
+		12000,
+		9500,
+		"",
+	];
+
+	it("a failing signal records availability instead of aborting the pull; the other signal's rows survive", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes('eventId == "RT0005"')) {
+				return errorResponse(500, "Internal Server Error");
+			}
+			return okResponse(primaryTableResponse([okRt0018Row]));
+		}) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018", "RT0005"] },
+			fetchImpl,
+		);
+
+		expect(batch.signals.length).toBeGreaterThan(0); // RT0018 rows survived
+		expect(batch.signals.every((s) => s.signalId === "RT0018")).toBe(true);
+
+		const rt0005Avail = batch.signalAvailability?.find(
+			(a) => a.signalId === "RT0005",
+		);
+		expect(rt0005Avail?.queried).toBe(true);
+		expect(rt0005Avail?.rows).toBe(0);
+		expect(rt0005Avail?.error).toContain("500");
+
+		const rt0018Avail = batch.signalAvailability?.find(
+			(a) => a.signalId === "RT0018",
+		);
+		expect(rt0018Avail?.error).toBeUndefined();
+		expect(rt0018Avail?.rows).toBe(1);
+	});
+
+	it("all signals failing still throws, naming every failed signal", async () => {
+		const fetchImpl = (async () =>
+			errorResponse(500, "Internal Server Error")) as typeof fetch;
+
+		let message = "";
+		try {
+			await pullTelemetry(
+				{ appId: APP_ID, signals: ["RT0018", "RT0005"] },
+				fetchImpl,
+			);
+			throw new Error("expected pullTelemetry to reject");
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toContain("every signal query failed");
+		expect(message).toContain("RT0018");
+		expect(message).toContain("RT0005");
+		expect(message).toContain("500");
+	});
+
+	it("a normalization throw (not just an HTTP error) degrades one signal, not the pull", async () => {
+		// maxDurationMs is a garbage timespan string -> asDurationMs throws
+		// mid-normalization for every RT0005 row; RT0018 must still survive.
+		const badDurationRow = [
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"My ISV App",
+			"Codeunit",
+			50200,
+			"Sales Post",
+			"ProcessLine2",
+			1,
+			"not-a-timespan",
+			undefined,
+			"",
+		];
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(primaryTableResponse([])); // statement query, irrelevant here
+			}
+			if (decoded.includes('eventId == "RT0005"')) {
+				return okResponse(primaryTableResponse([badDurationRow]));
+			}
+			return okResponse(primaryTableResponse([okRt0018Row]));
+		}) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0018", "RT0005"] },
+			fetchImpl,
+		);
+
+		expect(batch.signals).toHaveLength(1);
+		expect(batch.signals[0].signalId).toBe("RT0018");
+		const rt0005Avail = batch.signalAvailability?.find(
+			(a) => a.signalId === "RT0005",
+		);
+		expect(rt0005Avail?.error).toContain("timespan");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // pullTelemetrySplit (telemetry-multitenant plan, Task 2): split-mode KQL
 // dimensions, per-(aadTenantId, environmentName) grouping, tenantMap/policy
 // application. Non-split pullTelemetry's behavior is pinned above and MUST
@@ -841,7 +1002,7 @@ describe("pullTelemetrySplit — KQL dimensions (behavior 2)", () => {
 		delete process.env[DEFAULT_API_KEY_ENV];
 	});
 
-	it("extends + groups by aadTenantId/environmentName for both signal queries", async () => {
+	it("extends + groups by aadTenantId/environmentName for both signal queries, and the Task-9 statement query", async () => {
 		const calls: string[] = [];
 		const fetchImpl = (async (url: string) => {
 			calls.push(url);
@@ -859,7 +1020,10 @@ describe("pullTelemetrySplit — KQL dimensions (behavior 2)", () => {
 			fetchImpl,
 		);
 
-		expect(calls).toHaveLength(2);
+		// 2 signal queries + 1 statement query, all three carrying the tenant
+		// dimensions — the statement query's join happens per split group, so
+		// it must carry them too (verified-statement-kql.md).
+		expect(calls).toHaveLength(3);
 		for (const url of calls) {
 			const decoded = decodeURIComponent(url);
 			expect(decoded).toContain(
@@ -1196,6 +1360,178 @@ describe("pullTelemetrySplit — round-trip through parseTelemetryBatch (behavio
 				expect(p.fingerprint).toMatch(/^telemetry:[0-9a-f]{16}$/);
 			}
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Statement-level SQL evidence, split mode (telemetry-sql-evidence plan,
+// Task 9): the join must happen PER SPLIT GROUP, after tenant grouping —
+// never globally. Two tenants whose findings share app/object/method must
+// each see only their own statement rows.
+// ---------------------------------------------------------------------------
+
+const STATEMENT_COLUMNS = [
+	{ name: "extensionId", type: "string" },
+	{ name: "alObjectType", type: "string" },
+	{ name: "alObjectId", type: "long" },
+	{ name: "alStackTrace", type: "string" },
+	{ name: "sqlStatement", type: "string" },
+	{ name: "occurrences", type: "long" },
+	{ name: "measuredTotalMs", type: "real" },
+	{ name: "thresholdMs", type: "real" },
+	{ name: "aadTenantId", type: "string" },
+	{ name: "environmentName", type: "string" },
+];
+
+function statementTableResponse(rows: unknown[][]) {
+	return {
+		tables: [{ name: "PrimaryTable", columns: STATEMENT_COLUMNS, rows }],
+	};
+}
+
+function makeStatementRow(opts: {
+	appId?: string;
+	objectId?: number;
+	stackTrace?: string;
+	sqlStatement: string;
+	occurrences?: number;
+	measuredTotalMs?: number;
+	thresholdMs?: number;
+	aadTenantId: string;
+	environmentName?: string;
+}): unknown[] {
+	return [
+		opts.appId ?? "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"Codeunit",
+		opts.objectId ?? 50100,
+		opts.stackTrace ??
+			'AL CallStack: "Sales Post"(Codeunit 50100).ProcessLine line 1',
+		opts.sqlStatement,
+		opts.occurrences ?? 1,
+		opts.measuredTotalMs ?? 1000,
+		opts.thresholdMs ?? 750,
+		opts.aadTenantId,
+		opts.environmentName ?? "PROD",
+	];
+}
+
+describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", () => {
+	beforeEach(() => {
+		process.env[DEFAULT_API_KEY_ENV] = DECOY_KEY;
+	});
+	afterEach(() => {
+		delete process.env[DEFAULT_API_KEY_ENV];
+	});
+
+	it("does not attach across tenants — join runs per group", async () => {
+		// Both tenants share the SAME app/object/method (Codeunit 50100 /
+		// ProcessLine) -- exactly the shape that would collide under a global
+		// join keyed on the routine alone.
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(
+					statementTableResponse([
+						makeStatementRow({
+							aadTenantId: TENANT_X,
+							sqlStatement: 'SELECT "No_" FROM dbo."CRONUS$Sales Header"',
+						}),
+						makeStatementRow({
+							aadTenantId: TENANT_Y,
+							sqlStatement:
+								'SELECT "Entry No_" FROM dbo."CRONUS$Item Ledger Entry"',
+						}),
+					]),
+				);
+			}
+			return okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+					makeSplitRow({ aadTenantId: TENANT_Y, environmentName: "PROD" }),
+				]),
+			);
+		}) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0005"],
+				tenantMap: { [TENANT_X]: "tenant-a", [TENANT_Y]: "tenant-b" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		const a = result.groups.find((g) => g.tenant === "tenant-a");
+		const b = result.groups.find((g) => g.tenant === "tenant-b");
+		expect(a?.batch.signals[0]?.sqlEvidence?.statements[0]?.table).toBe(
+			"Sales Header",
+		);
+		expect(b?.batch.signals[0]?.sqlEvidence?.statements[0]?.table).toBe(
+			"Item Ledger Entry",
+		);
+		// Neither group's evidence carries the OTHER tenant's statement.
+		expect(a?.batch.signals[0]?.sqlEvidence?.statements).toHaveLength(1);
+		expect(b?.batch.signals[0]?.sqlEvidence?.statements).toHaveLength(1);
+	});
+
+	it("issues no statement query when RT0005 is not among the requested signals", async () => {
+		const calls: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			calls.push(url);
+			return okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+				]),
+			);
+		}) as typeof fetch;
+
+		await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0018"],
+				tenantMap: { [TENANT_X]: "tenant-a" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(calls).toHaveLength(1);
+	});
+
+	it("every group's batch carries the SAME signalAvailability array (availability is per pull, not per tenant)", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(statementTableResponse([]));
+			}
+			return okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+					makeSplitRow({ aadTenantId: TENANT_Y, environmentName: "PROD" }),
+				]),
+			);
+		}) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0005"],
+				tenantMap: { [TENANT_X]: "tenant-a", [TENANT_Y]: "tenant-b" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(2);
+		const [g1, g2] = result.groups;
+		expect(g1.batch.signalAvailability).toEqual(g2.batch.signalAvailability);
+		expect(g1.batch.signalAvailability).toEqual([
+			{ signalId: "RT0005", queried: true, rows: 2 },
+		]);
 	});
 });
 
