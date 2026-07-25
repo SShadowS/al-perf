@@ -67,6 +67,11 @@ export interface ObjectInfo {
 	triggers: TriggerInfo[];
 	fields: TableFieldInfo[];
 	keys: TableKeyInfo[];
+	/**
+	 * Page/Query `SourceTableTemporary = true` -- the object's `Rec` is an
+	 * in-memory buffer, so no operation on it reaches SQL.
+	 */
+	sourceTableTemporary?: boolean;
 }
 
 export interface TableFieldInfo {

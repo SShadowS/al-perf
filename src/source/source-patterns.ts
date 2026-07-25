@@ -2,6 +2,7 @@ import { sortPatterns } from "../core/patterns.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
 import type {
+	ObjectInfo,
 	RecordOpInfo,
 	SourceIndex,
 	TableFieldInfo,
@@ -20,12 +21,30 @@ import { matchAllToSource } from "./locator.js";
 export function isTemporaryOp(
 	op: RecordOpInfo,
 	variables: VariableInfo[],
+	owner?: ObjectInfo,
 ): boolean {
 	if (!op.recordVariable) return false;
+	// `Rec` has no `var` declaration, so its temp-ness lives on the owning
+	// object: `SourceTableTemporary = true` makes the whole record an in-memory
+	// buffer. Without this, every Rec op on such a page reads as SQL.
+	if (
+		owner?.sourceTableTemporary === true &&
+		op.recordVariable.toLowerCase() === "rec"
+	) {
+		return true;
+	}
 	const variable = variables.find(
 		(v) => v.name.toLowerCase() === op.recordVariable!.toLowerCase(),
 	);
 	return variable?.isTemporary === true;
+}
+
+/** The `ObjectInfo` a matched member belongs to, if the index still holds it. */
+export function ownerObject(
+	member: { objectType: string; objectId: number },
+	index: SourceIndex,
+): ObjectInfo | undefined {
+	return index.objects.get(`${member.objectType}_${member.objectId}`);
 }
 
 /**
@@ -240,7 +259,11 @@ export function detectCalcFieldsInLoop(
 			const opsInLoop = match.features.recordOpsInLoops.filter(
 				(op) =>
 					(op.type === "CalcFields" || op.type === "CalcSums") &&
-					!isTemporaryOp(op, match.features.variables) &&
+					!isTemporaryOp(
+						op,
+						match.features.variables,
+						ownerObject(match, index),
+					) &&
 					!isKnownNonRecordOp(op, match.features.variables),
 			);
 
@@ -304,7 +327,11 @@ export function detectModifyInLoop(
 			const opsInLoop = match.features.recordOpsInLoops.filter(
 				(op) =>
 					(op.type === "Modify" || op.type === "ModifyAll") &&
-					!isTemporaryOp(op, match.features.variables) &&
+					!isTemporaryOp(
+						op,
+						match.features.variables,
+						ownerObject(match, index),
+					) &&
 					!isKnownNonRecordOp(op, match.features.variables),
 			);
 
@@ -356,7 +383,11 @@ export function detectInsertInLoop(
 			const opsInLoop = match.features.recordOpsInLoops.filter(
 				(op) =>
 					op.type === "Insert" &&
-					!isTemporaryOp(op, match.features.variables) &&
+					!isTemporaryOp(
+						op,
+						match.features.variables,
+						ownerObject(match, index),
+					) &&
 					!isKnownNonRecordOp(op, match.features.variables),
 			);
 
@@ -408,7 +439,11 @@ export function detectDeleteInLoop(
 			const opsInLoop = match.features.recordOpsInLoops.filter(
 				(op) =>
 					(op.type === "Delete" || op.type === "DeleteAll") &&
-					!isTemporaryOp(op, match.features.variables) &&
+					!isTemporaryOp(
+						op,
+						match.features.variables,
+						ownerObject(match, index),
+					) &&
 					!isKnownNonRecordOp(op, match.features.variables),
 			);
 
@@ -463,7 +498,11 @@ export function detectRecordOpInLoop(
 			const opsInLoop = match.features.recordOpsInLoops.filter(
 				(op) =>
 					LOOKUP_OPS.has(op.type) &&
-					!isTemporaryOp(op, match.features.variables) &&
+					!isTemporaryOp(
+						op,
+						match.features.variables,
+						ownerObject(match, index),
+					) &&
 					!isKnownNonRecordOp(op, match.features.variables),
 			);
 
@@ -638,7 +677,10 @@ export function detectMissingSetLoadFields(
 			const opsByVar = setLoadFieldsOpsByVar(allOps, match.features.variables);
 
 			for (const op of findOps) {
-				if (isTemporaryOp(op, match.features.variables)) continue; // no SQL load on a temp record
+				if (
+					isTemporaryOp(op, match.features.variables, ownerObject(match, index))
+				)
+					continue; // no SQL load on a temp record
 				// FIND_OPS matches method NAMES, and RecordRef/Query have
 				// FindFirst/FindSet too. Fails open on an unresolved receiver, so
 				// object-level globals and a page's implicit Rec keep reporting.

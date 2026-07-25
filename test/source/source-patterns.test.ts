@@ -221,6 +221,34 @@ describe("detectRecordOpInLoop", () => {
 	});
 });
 
+describe("SourceTableTemporary", () => {
+	it("does not charge SQL cost to Rec on a temporary-source page", () => {
+		// SourceTableTemporary = true makes the page's whole Rec in-memory, so
+		// "each iteration triggers a separate SQL query" is false for it. The
+		// temp-ness is an object property -- there is no `var` declaration for
+		// Rec, so variable-level resolution cannot see it. Vend in the same
+		// loop is a real Record and must still be reported.
+		const method = makeMethod({
+			functionName: "FillFromJournal",
+			objectType: "Page",
+			objectId: 50804,
+		});
+		const patterns = detectRecordOpInLoop([method], sourceIndex);
+		const receivers = patterns.map((p) => p.description);
+		expect(receivers.some((d) => d.includes("Get() on Vend"))).toBe(true);
+		expect(receivers.some((d) => d.includes("Get() on Rec"))).toBe(false);
+	});
+
+	it("does not report Insert on a temporary-source page's Rec", () => {
+		const method = makeMethod({
+			functionName: "FillFromJournal",
+			objectType: "Page",
+			objectId: 50804,
+		});
+		expect(detectInsertInLoop([method], sourceIndex)).toHaveLength(0);
+	});
+});
+
 describe("detectMissingSetLoadFields", () => {
 	it("should detect FindSet without SetLoadFields in ProcessRecords", () => {
 		const method = makeMethod({

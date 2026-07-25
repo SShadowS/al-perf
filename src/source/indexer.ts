@@ -1355,7 +1355,27 @@ export async function indexALFile(
 		triggers,
 		fields,
 		keys,
+		sourceTableTemporary: extractSourceTableTemporary(declNode),
 	};
+}
+
+/**
+ * Read the object-level `SourceTableTemporary` property. When it is true the
+ * object's whole `Rec` is an in-memory buffer -- every record operation on it
+ * costs no SQL at all. There is no `var` declaration for `Rec`, so this is the
+ * only place that fact is available (see `isTemporaryOp`).
+ */
+function extractSourceTableTemporary(declNode: SyntaxNode): boolean {
+	// Object properties sit inside `declaration_body`, not directly under the
+	// declaration node (which holds only the keyword, id and name).
+	const body = declNode.namedChildren.find(
+		(c) => c.type === "declaration_body",
+	);
+	for (const child of body?.namedChildren ?? []) {
+		if (!isPropertyNamed(child, "SourceTableTemporary")) continue;
+		return child.childForFieldName("value")?.text?.toLowerCase() === "true";
+	}
+	return false;
 }
 
 /**
