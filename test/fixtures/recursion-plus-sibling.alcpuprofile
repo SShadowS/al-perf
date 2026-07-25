@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": { "functionName": "OnRun", "scriptId": "CU_50001", "url": "", "lineNumber": 10, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [2, 5],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Mixed Caller", "objectId": 50001 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 1
+    },
+    {
+      "id": 2,
+      "callFrame": { "functionName": "Check", "scriptId": "CU_50001", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 10,
+      "children": [3],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Mixed Caller", "objectId": 50001 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2
+    },
+    {
+      "id": 3,
+      "callFrame": { "functionName": "Check", "scriptId": "CU_50001", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 100,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Mixed Caller", "objectId": 50001 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2
+    },
+    {
+      "id": 5,
+      "callFrame": { "functionName": "Unrelated", "scriptId": "CU_50001", "url": "", "lineNumber": 40, "columnNumber": 0 },
+      "hitCount": 1,
+      "children": [6],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Mixed Caller", "objectId": 50001 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 5
+    },
+    {
+      "id": 6,
+      "callFrame": { "functionName": "Check", "scriptId": "CU_50001", "url": "", "lineNumber": 20, "columnNumber": 0 },
+      "hitCount": 5,
+      "children": [],
+      "applicationDefinition": { "objectType": "CodeUnit", "objectName": "Mixed Caller", "objectId": 50001 },
+      "declaringApplication": { "appName": "Test App", "appPublisher": "Test", "appVersion": "1.0.0.0" },
+      "frameIdentifier": 2
+    }
+  ],
+  "startTime": 63793000000000000,
+  "endTime":   63793000012000000,
+  "samples": [3, 3, 6],
+  "timeDeltas": [0, 100000, 100000],
+  "kind": 1
+}

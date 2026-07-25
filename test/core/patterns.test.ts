@@ -697,3 +697,31 @@ describe("pattern ordering", () => {
 		expect(sorted).toEqual([b, a]);
 	});
 });
+
+describe("detectRecursion — counts only the recursive chain", () => {
+	test("a separate non-nested call site is not counted as part of the chain", async () => {
+		// recursion-plus-sibling: Check appears 3 times — twice nested
+		// (OnRun > Check > Check) and once under an unrelated sibling
+		// (OnRun > Unrelated > Check), which is an ordinary call, not
+		// recursion. The finding claimed all 3 "in the call tree as a
+		// recursive chain" and summed all 3 selfTimes into its impact.
+		// Real instance: CheckPrivacyNoticeApprovalState in a captured BC
+		// profile, 3 claimed vs 2 actually recursing.
+		const parsed = await parseProfile(
+			`${FIXTURES}/recursion-plus-sibling.alcpuprofile`,
+		);
+		const processed = processProfile(parsed);
+		const patterns = detectRecursion(processed);
+
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].description).toContain("2 times");
+		expect(patterns[0].evidence).toContain("2 instances");
+
+		// Impact must come from the chain only. Node 6 (the sibling call) has
+		// its own selfTime, and including it overstates the finding.
+		const chainSelf = processed.allNodes
+			.filter((n) => [2, 3].includes(n.id))
+			.reduce((s, n) => s + n.selfTime, 0);
+		expect(patterns[0].impact).toBe(chainSelf);
+	});
+});

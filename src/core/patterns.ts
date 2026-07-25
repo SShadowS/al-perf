@@ -474,6 +474,25 @@ export const detectEventSubscriberHotspot: PatternDetector = (
  * Detect recursive calls: a method that appears as its own ancestor.
  * Severity: warning.
  */
+/**
+ * Whether `node` genuinely participates in a recursive chain for `key` — it
+ * has an ancestor OR a descendant that is the same method. A node that merely
+ * shares the method name with a recursion happening elsewhere in the tree is
+ * an ordinary call and must not be counted as part of it.
+ */
+function isInRecursiveChain(node: ProcessedNode, key: string): boolean {
+	for (let a = node.parent; a; a = a.parent) {
+		if (methodGroupKey(a) === key) return true;
+	}
+	const stack = [...node.children];
+	while (stack.length > 0) {
+		const child = stack.pop()!;
+		if (methodGroupKey(child) === key) return true;
+		stack.push(...child.children);
+	}
+	return false;
+}
+
 export const detectRecursion: PatternDetector = (
 	profile: ProcessedProfile,
 ): DetectedPattern[] => {
@@ -492,8 +511,16 @@ export const detectRecursion: PatternDetector = (
 			if (methodGroupKey(ancestor) === key) {
 				reported.add(key);
 
+				// Only nodes that are THEMSELVES part of a recursive chain —
+				// i.e. that have a same-method ancestor or descendant. Counting
+				// every occurrence of the method anywhere in the tree inflated
+				// both the number and the impact, while the text claimed all of
+				// them were "in the call tree as a recursive chain": an ordinary
+				// call from an unrelated branch is not recursion. Measured on
+				// captured BC profiles, 5 of 38 findings overstated their count
+				// this way.
 				const allInstances = profile.allNodes.filter(
-					(n) => methodGroupKey(n) === key,
+					(n) => methodGroupKey(n) === key && isInRecursiveChain(n, key),
 				);
 				const totalImpact = allInstances.reduce(
 					(sum, n) => sum + n.selfTime,
