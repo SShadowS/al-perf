@@ -271,4 +271,23 @@ describe("redactSqlForSink", () => {
 		);
 		expect(out).toBeNull();
 	});
+
+	test("C4: fails CLOSED on a bare (unquoted) $-prefixed identifier", () => {
+		expect(
+			redactSqlForSink("SELECT * FROM dbo.CRONUS$Sales_Header WHERE No_=@0"),
+		).toBeNull();
+
+		// The FROM reference is quoted and would otherwise redact cleanly, but
+		// the bare ORDER BY reference to the same table must still sink the
+		// whole statement -- never emit a half-redacted result.
+		expect(
+			redactSqlForSink(
+				'SELECT * FROM dbo."CRONUS$Cust" ORDER BY dbo.CRONUS$Cust.No_',
+			),
+		).toBeNull();
+
+		expect(
+			redactSqlForSink("INSERT INTO dbo.CRONUS$Sales_Line (a) VALUES (1)"),
+		).toBeNull();
+	});
 });

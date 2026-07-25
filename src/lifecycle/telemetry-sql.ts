@@ -296,6 +296,16 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		if (/\bFROM\b\s*$/i.test(out)) seenFrom = true;
 	}
 
+	// A bare (unquoted) identifier is only ever emitted as plain "other"
+	// characters above — it never becomes a `kind: "ident"` token, so it never
+	// goes through logicalIdentifier. parseSqlTable itself supports this bare
+	// form (src/core/sql-node.ts), so a bare $-prefixed physical name (company
+	// or company+table[+guid]) would otherwise echo straight through
+	// untouched. Scan the reassembled text for any leftover run of
+	// non-boundary characters that still carries "$" and fail the whole
+	// statement closed rather than emit it.
+	if (/[^\s.,()]*\$[^\s.,()]*/.test(out)) return null;
+
 	// A dropped qualifier ident leaves a stray "." (or a run of them, for a
 	// chain of several dropped idents) before whatever follows it — a bare
 	// schema word like "dbo", or directly the final quoted/bracketed table
