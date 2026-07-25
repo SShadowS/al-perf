@@ -87,6 +87,25 @@ function hasSignalId(signalIds: readonly string[], target: string): boolean {
  */
 const CLIENT_TYPE_RE = /^[A-Za-z]+$/;
 
+/**
+ * A pulled clientType, kept only if the parser would accept it.
+ *
+ * The adapter used to pass Azure's value through verbatim, gated on nothing
+ * but `!== ""`. telemetry-parser rejects anything outside CLIENT_TYPE_RE by
+ * THROWING, and that throw fails the entire batch — so a single row carrying
+ * an unexpected client type would cost the whole pull window. clientType is
+ * an optional field, so dropping just the field keeps the row's timing and
+ * finding data and loses only the client-type dimension (the row falls back
+ * to the default severity key, `${signalId}` with no `@clientType` part).
+ *
+ * All five values observed in production are letters-only, so this is not
+ * firing on measured data — it is there so an unmeasured sixth cannot take a
+ * window down with it.
+ */
+export function safeClientType(raw: string): string | undefined {
+	return CLIENT_TYPE_RE.test(raw) ? raw : undefined;
+}
+
 export interface PullTelemetryOptions {
 	/** Application Insights application id (GUID). */
 	appId: string;
@@ -533,7 +552,7 @@ function buildSignalFromRow(
 		objectId: Number(cell(row, "objectId")),
 		objectName: objectName !== "" ? objectName : undefined,
 		methodName,
-		clientType: clientType !== "" ? clientType : undefined,
+		clientType: safeClientType(clientType),
 		count: Number(cell(row, "count")),
 		maxDurationMs: asDurationMs(
 			cell(row, "maxDurationMs"),
@@ -679,7 +698,7 @@ function normalizeStatementTable(
 				// Fix Round 1: undefined, not "" -- matches TelemetrySignal.clientType's
 				// own convention, and evidenceKey (telemetry-sql.ts) treats the two
 				// differently by design.
-				clientType: clientTypeRaw !== "" ? clientTypeRaw : undefined,
+				clientType: safeClientType(clientTypeRaw),
 			},
 			aadTenantId: asDisplayString(cell(raw, "aadTenantId")),
 			environmentName: environmentNameRaw !== "" ? environmentNameRaw : null,

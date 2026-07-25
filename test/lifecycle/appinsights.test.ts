@@ -27,6 +27,7 @@ import {
 	parseTimespanMs,
 	pullTelemetry,
 	pullTelemetrySplit,
+	safeClientType,
 } from "../../src/lifecycle/appinsights.js";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.js";
 
@@ -2038,5 +2039,45 @@ describe("listTenants — row normalization", () => {
 		);
 
 		expect(result[0].environments).toEqual(["X", "Y"]);
+	});
+});
+
+describe("clientType validation at the adapter boundary", () => {
+	// The adapter took Azure's clientType verbatim; the parser rejects anything
+	// that is not /^[A-Za-z]+$/ by THROWING, which fails the whole batch. One
+	// unexpected value would therefore cost the entire pull window. Drop the
+	// field instead: it is optional, so the row's timing and finding data
+	// survive and only the client-type dimension is lost.
+	it("keeps a letters-only client type", () => {
+		expect(safeClientType("Background")).toBe("Background");
+		expect(safeClientType("WebClient")).toBe("WebClient");
+	});
+
+	it("drops a client type the parser would reject, rather than passing it on", () => {
+		expect(safeClientType("Web Client")).toBeUndefined(); // space
+		expect(safeClientType("Client-1")).toBeUndefined(); // punctuation + digit
+		expect(safeClientType("OData_V4")).toBeUndefined(); // underscore
+		expect(safeClientType("__proto__")).toBeUndefined();
+		expect(safeClientType("")).toBeUndefined();
+	});
+
+	it("normalizeTable emits the row with no clientType instead of failing the batch", () => {
+		const table = {
+			columns: [
+				{ name: "appId" },
+				{ name: "objectType" },
+				{ name: "objectId" },
+				{ name: "methodName" },
+				{ name: "clientType" },
+				{ name: "count" },
+				{ name: "maxDurationMs" },
+			],
+			rows: [["app", "CodeUnit", 80, "DoWork", "Web Client", 1, 900]],
+		};
+		const { signals, skipped } = normalizeTable(table, "RT0018");
+		expect(skipped).toBe(0);
+		expect(signals).toHaveLength(1);
+		expect(signals[0].clientType).toBeUndefined();
+		expect(signals[0].methodName).toBe("DoWork");
 	});
 });
