@@ -390,6 +390,32 @@ describe("detectUnindexedFilters", () => {
 		);
 		expect(secondaryFilter).toBeUndefined();
 	});
+
+	test("does not flag a residual filter when a sibling filter covers a key's leading field", async () => {
+		// FilterWithCoveringSibling filters "Customer No." (leading field of key
+		// CustomerDate) and Description (leading field of nothing) on the same
+		// record. SQL seeks CustomerDate and applies Description as a residual
+		// predicate — there is no scan, so flagging Description is a false positive.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnindexedFilters(index);
+		const residual = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("FilterWithCoveringSibling")),
+		);
+		expect(residual).toBeUndefined();
+	});
+
+	test("still flags when the covering filter is on a different record variable", async () => {
+		// A filter on OtherKeyTest cannot give KeyTest a seekable access path,
+		// so suppression must be scoped to the same record variable.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnindexedFilters(index).filter((p) =>
+			p.involvedMethods.some((m) =>
+				m.includes("FilterWithSiblingOnOtherRecord"),
+			),
+		);
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].title).toContain("Description");
+	});
 });
 
 describe("runSourceOnlyDetectors", () => {

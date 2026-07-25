@@ -267,10 +267,28 @@ export function detectExternalCallInLoop(
 	return patterns;
 }
 
+/** True if `field` is the leading (first) field of any key on `table`. */
+function isKeyLeadingField(table: ObjectInfo, field: string): boolean {
+	const target = field.toLowerCase();
+	return (table.keys ?? []).some(
+		(key) => key.fields.length > 0 && key.fields[0].toLowerCase() === target,
+	);
+}
+
 /**
  * Detect SetRange/SetFilter on fields not covered by any key in the target table.
  * Requires: table keys (3.7), variable type resolution (3.3).
  * Severity: warning.
+ *
+ * A filter is only a scan risk if *no* filter on that record variable hits a
+ * key's leading field. When a sibling filter in the same member does, SQL seeks
+ * that key and the remaining filters are residual predicates evaluated over the
+ * seek result — flagging them is a false positive. Filters accumulate on the
+ * record independently of source order, so sibling position is not checked.
+ *
+ * Deliberately conservative: a sibling in a mutually exclusive branch (an
+ * if/else arm) still suppresses, trading recall for precision, since this
+ * detector's measured false-positive rate is what motivated the sibling check.
  */
 export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 	const FILTER_OPS = new Set(["SetRange", "SetFilter"]);
@@ -301,14 +319,21 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 				if (!tableObj?.keys || tableObj.keys.length === 0) continue;
 
 				// Check if any key has the filtered field as a leading (first) field
-				const filteredField = op.fieldArgument.toLowerCase();
-				const isCovered = tableObj.keys.some(
-					(key) =>
-						key.fields.length > 0 &&
-						key.fields[0].toLowerCase() === filteredField,
+				if (isKeyLeadingField(tableObj, op.fieldArgument)) continue;
+
+				// A sibling filter on the same record variable that does hit a
+				// key's leading field makes this one a residual predicate, not a scan.
+				const recordVariable = op.recordVariable.toLowerCase();
+				const coveredBySibling = member.features.recordOps.some(
+					(sibling) =>
+						sibling !== op &&
+						FILTER_OPS.has(sibling.type) &&
+						sibling.fieldArgument !== undefined &&
+						sibling.recordVariable?.toLowerCase() === recordVariable &&
+						isKeyLeadingField(tableObj, sibling.fieldArgument),
 				);
 
-				if (!isCovered) {
+				if (!coveredBySibling) {
 					patterns.push({
 						id: "unindexed-filter",
 						severity: "warning",
