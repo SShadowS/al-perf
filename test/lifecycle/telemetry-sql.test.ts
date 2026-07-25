@@ -342,4 +342,18 @@ describe("redactSqlForSink", () => {
 		);
 		expect(quoteSwallowsStatement).toBeNull();
 	});
+
+	test("minor: re-escapes a literal ] when re-emitting a bracket identifier", () => {
+		// The column list identifier below has no $, so it survives
+		// logicalIdentifier unchanged: "a]b" (a physical name legitimately
+		// containing a literal "]", escaped as "]]" in the wire text). Without
+		// re-doubling it on the way back out, "[a]b]" would close the bracket
+		// one character early -- malformed SQL, not just a leak.
+		const out = redactSqlForSink("SELECT [a]]b] FROM dbo.[Cust]");
+		expect(out?.text).toBe("SELECT [a]]b] FROM dbo.[Cust]");
+	});
+
+	test("minor: returns null when no operation classifies, including empty input", () => {
+		expect(redactSqlForSink("")).toBeNull();
+	});
 });

@@ -295,6 +295,7 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	const body = truncated ? sql.slice(0, consumed) : sql;
 
 	const operation = classifySqlOperation(body);
+	if (operation === "OTHER") return null; // no operation classifies (incl. "") -> fail closed rather than emit a meaningless result
 	const { table: rawTable, extensionAppId } = parseSqlTable(body);
 	// parseSqlTable deliberately never $-splits a BRACKET-quoted name (brackets
 	// mark system-table syntax, which is never company-prefixed there) — but
@@ -330,7 +331,14 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 				namedColumns++;
 				if (namedColumns > MAX_NAMED_COLUMNS) continue;
 			}
-			out += t.quote === "[" ? `[${logical}]` : `"${logical}"`;
+			// A kept bracket identifier can still carry a literal "]" (from a
+			// "]]"-escaped physical name whose logical segment wasn't
+			// discarded by the $-split) — re-double it on the way back out, or
+			// the emitted "[...]" closes early and the tail reads as raw SQL.
+			out +=
+				t.quote === "["
+					? `[${logical.replace(/\]/g, "]]")}]`
+					: `"${logical}"`;
 			continue;
 		}
 		out += t.value;
