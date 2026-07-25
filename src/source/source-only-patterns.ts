@@ -146,23 +146,38 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 					// caller may equally have filtered nothing) but not as a
 					// stated full table scan, which is a claim this detector
 					// cannot support there.
-					const fromCaller =
-						member.features.variables.find(
-							(v) => v.name.toLowerCase() === varLower,
-						)?.isParameter === true;
+					const declared = member.features.variables.find(
+						(v) => v.name.toLowerCase() === varLower,
+					);
+					// The same blindness, one step further out: an object's
+					// IMPLICIT record has no declaration anywhere, and arrives
+					// filtered by SourceTableView / DataItemTableView, by whatever
+					// the caller passed through SetTableView, and — on a Page — by
+					// the user's filter pane. 253 candidates on the corpus are an
+					// implicit Rec, 173 of them on Pages.
+					const implicitRec =
+						!declared &&
+						varLower === "rec" &&
+						IMPLICIT_REC_OBJECT_TYPES.has(obj.objectType);
+					const fromCaller = declared?.isParameter === true || implicitRec;
+					const whyUnknown = implicitRec
+						? `${op.recordVariable} is this ${obj.objectType}'s implicit record: it arrives filtered by SourceTableView, by whatever the caller set through SetTableView, and by the user's filter pane — none of which is visible here.`
+						: `${op.recordVariable} is a parameter, and filters travel with a record in AL, so the caller may already have filtered it — or may not have.`;
 					patterns.push({
 						id: "unfiltered-findset",
 						severity: fromCaller ? "info" : "warning",
 						title: `${op.type} without filters on ${op.recordVariable} in ${member.name}`,
 						description: fromCaller
-							? `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter() in this member. ${op.recordVariable} is a parameter, and filters travel with a record in AL, so the caller may already have filtered it — or may not have.`
+							? `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter() in this member. ${whyUnknown}`
 							: `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter(). This queries all records in the table, which can be extremely slow on large tables.`,
 						impact: 0,
 						involvedMethods: [memberLabel(member)],
-						evidence: `${op.type}() at line ${op.line} on ${op.recordVariable} with no SetRange/SetFilter${fromCaller ? " in this member (parameter — caller may have filtered it)" : ""}`,
-						suggestion: fromCaller
-							? `Check every caller of ${member.name}: if any passes ${op.recordVariable} unfiltered, this reads the whole table. Filtering inside the member instead makes the guarantee local.`
-							: "Add SetRange() or SetFilter() before the record retrieval to limit the result set. Querying entire tables causes full table scans.",
+						evidence: `${op.type}() at line ${op.line} on ${op.recordVariable} with no SetRange/SetFilter${fromCaller ? ` in this member (${implicitRec ? "implicit record — filtered outside the member" : "parameter — caller may have filtered it"})` : ""}`,
+						suggestion: implicitRec
+							? `Confirm the ${obj.objectType}'s SourceTableView, and every caller that opens it, leave ${op.recordVariable} filtered. Nothing in this member constrains the read.`
+							: fromCaller
+								? `Check every caller of ${member.name}: if any passes ${op.recordVariable} unfiltered, this reads the whole table. Filtering inside the member instead makes the guarantee local.`
+								: "Add SetRange() or SetFilter() before the record retrieval to limit the result set. Querying entire tables causes full table scans.",
 					});
 				}
 			}
@@ -371,6 +386,19 @@ export function detectExternalCallInLoop(
 
 	return patterns;
 }
+
+/**
+ * Object types whose members can reference a record named `Rec` with no
+ * declaration anywhere — the object's own source record. Report/XMLport are
+ * absent on purpose: their implicit record is the dataitem's instance name,
+ * never the literal `Rec`.
+ */
+const IMPLICIT_REC_OBJECT_TYPES = new Set([
+	"Table",
+	"TableExtension",
+	"Page",
+	"PageExtension",
+]);
 
 /** True if `field` is the leading (first) field of any key on `table`. */
 function isKeyLeadingField(table: ObjectInfo, field: string): boolean {

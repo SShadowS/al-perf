@@ -87,6 +87,20 @@ describe("detectUnfilteredFindSet", () => {
 		}
 	});
 
+	test("downgrades a find on an object's implicit Rec", async () => {
+		// A Page/Table `Rec` arrives filtered by SourceTableView, by the
+		// caller's SetTableView, and by the user's filter pane — none of it
+		// visible in the member. 253 candidates on a 15,436-file corpus are an
+		// implicit Rec, 173 of them on Pages.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const p = detectUnfilteredFindSet(index).find((x) =>
+			x.involvedMethods.some((m) => m.includes("PositionOnFirstEntry")),
+		);
+		expect(p).toBeDefined();
+		expect(p!.severity).toBe("info");
+		expect(p!.description).toMatch(/SourceTableView|caller|filter pane/i);
+	});
+
 	test("keeps warning for a find on a LOCAL record", async () => {
 		// A local is declared right here with no filters, so the full-table
 		// claim is one this detector can actually support.

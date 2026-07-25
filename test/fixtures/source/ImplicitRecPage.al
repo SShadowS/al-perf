@@ -21,4 +21,13 @@ page 50903 "Implicit Rec Page"
         // insideLoop, unbroken by adding the implicit-Rec collection).
         CalcFields(Balance);
     end;
+
+    procedure PositionOnFirstEntry()
+    begin
+        // A Page's `Rec` is already filtered by SourceTableView, by whatever
+        // the caller passed through SetTableView, and by the user's filter
+        // pane. None of that is visible here, so "this queries all records in
+        // the table" is a claim this file cannot support.
+        if Rec.FindFirst() then;
+    end;
 }
