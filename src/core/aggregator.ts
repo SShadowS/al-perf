@@ -12,7 +12,10 @@ import { isIdleNode } from "./processor.js";
  * recursive re-entry whose totalTime is already counted by an ancestor.
  * `key` must be the same `functionName_objectType_objectId` the caller groups by.
  */
-function hasSameMethodAncestor(node: ProcessedNode, key: string): boolean {
+export function hasSameMethodAncestor(
+	node: ProcessedNode,
+	key: string,
+): boolean {
 	for (let a = node.parent; a; a = a.parent) {
 		const { objectType, objectId } = a.applicationDefinition;
 		if (`${a.callFrame.functionName}_${objectType}_${objectId}` === key) {

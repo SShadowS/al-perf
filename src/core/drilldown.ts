@@ -1,4 +1,5 @@
 import type { ChildContribution, SubtreeDrillDown } from "../output/types.js";
+import { hasSameMethodAncestor } from "./aggregator.js";
 import { parseProfile } from "./parser.js";
 import { isIdleNode, processProfile } from "./processor.js";
 
@@ -32,9 +33,17 @@ export async function drilldownMethod(
 	let totalTotalTime = 0;
 	let totalHitCount = 0;
 
+	const methodKey = `${primaryNode.callFrame.functionName}_${primaryNode.applicationDefinition.objectType}_${primaryNode.applicationDefinition.objectId}`;
+
 	for (const node of matchingNodes) {
 		totalSelfTime += node.selfTime;
-		totalTotalTime += node.totalTime;
+		// Outermost occurrences only — a node's totalTime already contains its
+		// descendants', so summing every level of a recursive call charges the
+		// same microseconds repeatedly. selfTime and hitCount are disjoint per
+		// node and still sum. Same rule aggregateByMethod applies.
+		if (!hasSameMethodAncestor(node, methodKey)) {
+			totalTotalTime += node.totalTime;
+		}
 		totalHitCount += node.hitCount;
 
 		for (const child of node.children) {
@@ -74,7 +83,14 @@ export async function drilldownMethod(
 			appName: primaryNode.declaringApplication?.appName ?? "(System)",
 			selfTime: totalSelfTime,
 			totalTime: totalTotalTime,
-			totalTimePercent: primaryNode.totalTimePercent,
+			// Derived from the total reported RIGHT ABOVE it. This used to read
+			// `primaryNode.totalTimePercent` — one node's share sitting next to a
+			// figure summed over all of them, so the value and its percentage
+			// described different scopes and disagreed with explain_method.
+			totalTimePercent:
+				processed.activeSelfTime > 0
+					? (totalTotalTime / processed.activeSelfTime) * 100
+					: 0,
 			hitCount: totalHitCount,
 		},
 		breakdown: {
