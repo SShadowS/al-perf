@@ -87,6 +87,18 @@ export interface RedactedStatement {
 const MAX_NAMED_COLUMNS = 5;
 
 /**
+ * BC's telemetry pipeline caps the raw SQL text it emits at this many
+ * characters. A cut that happens to land exactly on a token boundary (e.g.
+ * right after a closing quote, or right at a keyword) leaves the tokenizer
+ * with a perfectly well-formed prefix — `tokenize()` has no unterminated
+ * literal/comment to report, so its own `truncated` signal is a false
+ * negative (I3). The length itself is independent evidence of truncation:
+ * a `SELECT * FROM dbo."Cust" WHERE` sql string is never spontaneously
+ * exactly this long by legitimate coincidence at BC's own emission cap.
+ */
+const PLATFORM_TRUNCATION_LENGTH = 8192;
+
+/**
  * Sentinel spliced into `out` at the LIVE clause boundary (the exact point
  * in the tokenizer loop where the projection ends — "FROM" for SELECT/COUNT,
  * "WHERE" for UPDATE, the column list's closing ")" for INSERT), then
@@ -303,8 +315,14 @@ function logicalIdentifier(raw: string): string | null {
 export function redactSqlForSink(sql: string): RedactedStatement | null {
 	const result = tokenize(sql);
 	if (!result) return null;
-	const { tokens, truncated, consumed } = result;
-	const body = truncated ? sql.slice(0, consumed) : sql;
+	const { tokens, truncated: tokenizeTruncated, consumed } = result;
+	const body = tokenizeTruncated ? sql.slice(0, consumed) : sql;
+	// The tokenizer's own signal only fires on an unterminated literal/comment
+	// mid-scan; a cut landing on a token boundary produces a well-formed
+	// prefix with nothing for it to report. sql.length hitting the platform's
+	// own emission cap is truncation evidence tokenize() can't see on its own.
+	const truncated =
+		tokenizeTruncated || sql.length >= PLATFORM_TRUNCATION_LENGTH;
 
 	const operation = classifySqlOperation(body);
 	if (operation === "OTHER") return null; // no operation classifies (incl. "") -> fail closed rather than emit a meaningless result

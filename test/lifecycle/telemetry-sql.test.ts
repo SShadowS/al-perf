@@ -450,6 +450,36 @@ describe("redactSqlForSink", () => {
 			expect(out?.text).toContain("TOP (?)"); // the LITERAL "1" is still blanked
 		});
 
+		test("I3: sql.length hitting the platform's 8192-char cap flags truncation even at a clean token boundary", () => {
+			// No unterminated literal/comment here for tokenize()'s own signal
+			// to catch -- the cut lands right after a bare "1" digit. Length
+			// hitting BC's own documented emission cap is independent
+			// evidence the platform cut this short, which tokenize() alone
+			// can't see.
+			const prefix = 'SELECT "No_" FROM dbo."CRONUS$Cust" WHERE ';
+			let sql = prefix;
+			while (sql.length < 8192) sql += "AND 1=1 ";
+			sql = sql.slice(0, 8192);
+			expect(sql.length).toBe(8192);
+			expect(redactSqlForSink(sql)?.truncated).toBe(true);
+		});
+
+		test("I3: does not flag an ordinary short statement as truncated just because it ends after WHERE", () => {
+			const out = redactSqlForSink('SELECT * FROM dbo."CRONUS$Cust" WHERE');
+			expect(out?.truncated).toBe(false);
+		});
+
+		test("I3: 8191 chars (one under the cap) is not flagged; 8192 is", () => {
+			const prefix = 'SELECT "No_" FROM dbo."CRONUS$Cust" WHERE ';
+			const build = (len: number) => {
+				let sql = prefix;
+				while (sql.length < len) sql += "AND 1=1 ";
+				return sql.slice(0, len);
+			};
+			expect(redactSqlForSink(build(8191))?.truncated).toBe(false);
+			expect(redactSqlForSink(build(8192))?.truncated).toBe(true);
+		});
+
 		test("corpus gap: UPDATE without a collapsed column list", () => {
 			const out = redactSqlForSink(
 				'UPDATE dbo."CRONUS$Cust" SET "Name"=\'Acme Ltd\' WHERE "No_"=\'X\'',
