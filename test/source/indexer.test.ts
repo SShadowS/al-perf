@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(31);
-		expect(index.objects.size).toBe(31);
+		expect(index.files.length).toBe(32);
+		expect(index.objects.size).toBe(32);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -434,5 +434,53 @@ describe("implicit Rec", () => {
 			"test/fixtures/source/ImplicitRecReportGlobalProc.al",
 		);
 		expect(feats.recordOps).toHaveLength(0);
+	});
+});
+
+describe("paren-less (classic C/AL) calls", () => {
+	it("indexes argument-less record calls written without parentheses", async () => {
+		// `Customer.FindSet` / `SalesLine.Modify` / `Customer.Next` parse as
+		// member_expression, not call_expression. Without a branch for them the
+		// record op is lost and every detector goes blind on old-style code.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "CodeUnitOldStyle.al"),
+			fixturesDir,
+		))!;
+		const proc = result.procedures.find((p) => p.name === "ConvertSetups")!;
+		const ops = proc.features.recordOps.map(
+			(o) => `${o.recordVariable}.${o.type}`,
+		);
+		expect(ops).toContain("Customer.FindSet");
+		expect(ops).toContain("SalesLine.FindSet");
+		expect(ops).toContain("SalesLine.Modify");
+		expect(ops).toContain("SalesLine.Next");
+		expect(ops).toContain("Customer.Next");
+	});
+
+	it("does not also record those calls as field accesses", async () => {
+		// Before the fix `Customer.FindSet` produced a fieldAccess named
+		// "FindSet", which incomplete-setloadfields would then demand appear in
+		// a SetLoadFields list.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "CodeUnitOldStyle.al"),
+			fixturesDir,
+		))!;
+		const proc = result.procedures.find((p) => p.name === "ConvertSetups")!;
+		const names = proc.features.fieldAccesses.map((a) =>
+			a.fieldName.toLowerCase(),
+		);
+		expect(names).not.toContain("findset");
+		expect(names).not.toContain("next");
+		expect(names).not.toContain("modify");
+	});
+
+	it("marks a paren-less op inside a loop as inside a loop", async () => {
+		const result = (await indexALFile(
+			resolve(fixturesDir, "CodeUnitOldStyle.al"),
+			fixturesDir,
+		))!;
+		const proc = result.procedures.find((p) => p.name === "ConvertSetups")!;
+		const modify = proc.features.recordOps.find((o) => o.type === "Modify")!;
+		expect(modify.insideLoop).toBe(true);
 	});
 });

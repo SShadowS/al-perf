@@ -513,6 +513,24 @@ function collectRecordOps(
 					}
 				}
 			}
+		} else if (isParenLessRecordOp(n)) {
+			// Classic C/AL omits parentheses on argument-less calls --
+			// `Customer.FindSet`, `SalesLine.Modify`, `until Customer.Next = 0`.
+			// The grammar parses those as member_expression, not
+			// call_expression, so without this branch the op is lost entirely
+			// AND misread as a field access named "FindSet" (see
+			// collectFieldAccesses). Migrated BC code is full of them.
+			const objNode = n.childForFieldName("object") ?? n.namedChildren[0];
+			const propNode = n.childForFieldName("member") ?? n.namedChildren[1];
+			ops.push({
+				node: n,
+				methodName: stripQuotes(propNode!.text),
+				recordVariable: objNode ? objNode.text : "",
+				// No argument list exists, so there are no field arguments to
+				// extract -- a paren-less call is by definition argument-less.
+				fieldArgument: undefined,
+				allFieldArguments: undefined,
+			});
 		}
 
 		for (const child of n.namedChildren) {
@@ -522,6 +540,22 @@ function collectRecordOps(
 
 	walk(node);
 	return ops;
+}
+
+/**
+ * A `member_expression` that is a record op written without parentheses:
+ * `Customer.FindSet`, not `Customer.FindSet()`. Excludes the function part of
+ * a real call_expression, which the call branch already handles.
+ *
+ * Shared with `collectFieldAccesses` so the two can never disagree about
+ * whether a given node is an op or a field read.
+ */
+function isParenLessRecordOp(n: SyntaxNode): boolean {
+	if (n.type !== "member_expression") return false;
+	if (n.parent?.type === "call_expression") return false;
+	const propNode = n.childForFieldName("member") ?? n.namedChildren[1];
+	if (!propNode) return false;
+	return RECORD_OPS.has(stripQuotes(propNode.text).toLowerCase());
 }
 
 const DANGEROUS_CALLS = new Set(["commit", "error", "testfield"]);
@@ -703,7 +737,10 @@ function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
 	function walk(n: SyntaxNode) {
 		if (
 			n.type === "member_expression" &&
-			n.parent?.type !== "call_expression"
+			n.parent?.type !== "call_expression" &&
+			// `Customer.FindSet` is a paren-less call, not a field named
+			// "FindSet" -- collectRecordOps claims it (see isParenLessRecordOp).
+			!isParenLessRecordOp(n)
 		) {
 			// Rec.Field style, but NOT when it's the function part of a call
 			const objNode = n.childForFieldName("object") ?? n.namedChildren[0];
