@@ -11,6 +11,7 @@ import {
 	computeTelemetryFingerprint,
 	formatFingerprint,
 } from "../../src/lifecycle/fingerprint.js";
+import type { TelemetrySqlEvidence } from "../../src/types/patterns.js";
 import type {
 	TelemetryBatchDocument,
 	TelemetrySignal,
@@ -739,7 +740,12 @@ describe("responsibility 8: signalAvailability validation", () => {
 	// optionalNonNegativeInteger, same as sqlExecutes/sqlRowsRead.
 	test("validateSignalAvailability carries unmatchedRows through", () => {
 		const parsed = validateSignalAvailability([
-			{ signalId: "RT0005 statements", queried: true, rows: 5, unmatchedRows: 2 },
+			{
+				signalId: "RT0005 statements",
+				queried: true,
+				rows: 5,
+				unmatchedRows: 2,
+			},
 		]);
 		expect(parsed?.[0].unmatchedRows).toBe(2);
 	});
@@ -747,7 +753,12 @@ describe("responsibility 8: signalAvailability validation", () => {
 	test("rejects a negative unmatchedRows fail-closed", () => {
 		const doc = batch([signal()], {
 			signalAvailability: [
-				{ signalId: "RT0005 statements", queried: true, rows: 0, unmatchedRows: -1 },
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					unmatchedRows: -1,
+				},
 			],
 		});
 		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
@@ -860,5 +871,260 @@ describe("responsibility 8: signalAvailability validation", () => {
 		expect(withAvail.result.patterns[0]?.fingerprint).toBe(
 			withoutAvail.result.patterns[0]?.fingerprint,
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Responsibility 9: SQL evidence on patterns (telemetry-sql-evidence plan,
+// Task 10). Copies `TelemetrySignal.sqlEvidence` onto `DetectedPattern`,
+// formats it into the evidence string (the ONLY thing that survives to an
+// issue tracker), merges it across same-fingerprint constituents, and gates
+// `meta.incompleteInvocations` on signal-query availability — deliberately
+// NOT on the enrichment (RT0005 statements) query. See the amended brief
+// (task-10-brief.md, points 1-2) for the rationale this suite pins.
+// ---------------------------------------------------------------------------
+
+function sqlStatement(
+	overrides: Partial<TelemetrySqlEvidence["statements"][number]> = {},
+): TelemetrySqlEvidence["statements"][number] {
+	return {
+		text: "SELECT * FROM [Sales Line] WHERE [Document No_]=@0",
+		operation: "SELECT",
+		table: "Sales Line",
+		extensionAppId: null,
+		occurrences: 1,
+		measuredTotalMs: 100,
+		truncated: false,
+		...overrides,
+	};
+}
+
+describe("responsibility 9: SQL evidence on patterns (Task 10)", () => {
+	test("copies evidence onto the pattern and sets sqlRank in microseconds", () => {
+		const evidence: TelemetrySqlEvidence = {
+			statements: [sqlStatement({ occurrences: 10, measuredTotalMs: 4200 })],
+			totalMeasuredMs: 4200,
+			totalOccurrences: 10,
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+		};
+		const doc = batch([signal({ sqlEvidence: evidence })]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const p = parsed.result.patterns[0];
+		expect(p?.sqlEvidence?.provenance).toBe("measured-threshold-gated");
+		expect(p?.sqlRank).toBe(4200 * 1000);
+	});
+
+	test("never touches impact, severity, or fingerprint", () => {
+		const evidence: TelemetrySqlEvidence = {
+			statements: [sqlStatement()],
+			totalMeasuredMs: 500,
+			totalOccurrences: 1,
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+		};
+		const s = signal();
+		const withEvidence = parseTelemetryBatch(
+			batch([{ ...s, sqlEvidence: evidence }]),
+			DEFAULT_LIFECYCLE_CONFIG,
+		);
+		const without = parseTelemetryBatch(batch([s]), DEFAULT_LIFECYCLE_CONFIG);
+		expect(withEvidence.result.patterns[0]?.impact).toBe(
+			without.result.patterns[0]?.impact,
+		);
+		expect(withEvidence.result.patterns[0]?.severity).toBe(
+			without.result.patterns[0]?.severity,
+		);
+		expect(withEvidence.result.patterns[0]?.fingerprint).toBe(
+			without.result.patterns[0]?.fingerprint,
+		);
+	});
+
+	test("formats up to three statements into the persisted evidence string, plain text", () => {
+		// text deliberately omits the literal "SELECT" keyword — the rendered
+		// line's own "SELECT" comes from `operation`, so the match count below
+		// pins "one rendered line per statement", not an artifact of the text.
+		const statements = ["A", "B", "C", "D"].map((label, i) =>
+			sqlStatement({
+				text: `${label} FROM [Sales Line] WHERE [No_]=@0`,
+				occurrences: i + 1,
+				measuredTotalMs: 100 * (i + 1),
+			}),
+		);
+		const evidence: TelemetrySqlEvidence = {
+			statements,
+			totalMeasuredMs: statements.reduce((n, s) => n + s.measuredTotalMs, 0),
+			totalOccurrences: statements.reduce((n, s) => n + s.occurrences, 0),
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+			threshold: { minMs: 500, maxMs: 500 },
+		};
+		// appName carries a value ("CRONUS...") that must NEVER leak into the
+		// evidence string — proves the renderer only emits SQL evidence fields,
+		// not arbitrary signal metadata.
+		const doc = batch([
+			signal({ appName: "CRONUS International Ltd.", sqlEvidence: evidence }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const p = parsed.result.patterns[0];
+		expect(p?.evidence).toContain("SQL (measured");
+		expect(p?.evidence.match(/SELECT/g)?.length).toBe(3);
+		expect(p?.evidence).not.toContain("```");
+		expect(p?.evidence).not.toContain("CRONUS");
+	});
+
+	test("a failed non-statement signal marks the run incomplete so absence cannot accrue", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{ signalId: "RT0005", queried: true, rows: 0, error: "500" },
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.meta.incompleteInvocations).toBeGreaterThan(0);
+	});
+
+	test("healthy availability leaves the run complete", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [{ signalId: "RT0005", queried: true, rows: 4 }],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.meta.incompleteInvocations ?? 0).toBe(0);
+	});
+
+	// Load-bearing (brief point 1): the statement query is enrichment, not a
+	// signal query — its failure must NOT suppress the absence pass, or
+	// findings that are genuinely fixed would never resolve while the
+	// enrichment query happens to be flaky.
+	test("a failed RT0005 statements (enrichment) query does NOT mark the run incomplete", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "timeout",
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.meta.incompleteInvocations ?? 0).toBe(0);
+	});
+
+	test("a failed RT0005 statements query still surfaces in the evidence note text", () => {
+		const evidence: TelemetrySqlEvidence = {
+			statements: [],
+			totalMeasuredMs: 0,
+			totalOccurrences: 0,
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+		};
+		const doc = batch([signal({ signalId: "RT0005", sqlEvidence: evidence })], {
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "timeout",
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns[0]?.evidence).toContain(
+			"RT0005 statements (timeout)",
+		);
+	});
+
+	// Load-bearing (brief point 2): rows/unmatchedRows are pull-wide, not
+	// per-tenant, and must never be rendered as tenant-specific counts.
+	test("rows and unmatchedRows never appear in the evidence note (pull-wide, not per-tenant)", () => {
+		const evidence: TelemetrySqlEvidence = {
+			statements: [],
+			totalMeasuredMs: 0,
+			totalOccurrences: 0,
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+		};
+		const doc = batch([signal({ signalId: "RT0005", sqlEvidence: evidence })], {
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 42,
+					unmatchedRows: 7,
+					error: "boom",
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).toContain("RT0005 statements (boom)");
+		expect(evidenceText).not.toMatch(/\b42\b/);
+		expect(evidenceText).not.toMatch(/\b7\b/);
+	});
+
+	test("counts line renders only the present field", () => {
+		const doc = batch([signal({ sqlExecutes: 12 })]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns[0]?.evidence).toContain(
+			"Measured: 12 SQL statement(s)",
+		);
+		expect(parsed.result.patterns[0]?.evidence).not.toContain("row(s) read");
+	});
+
+	test("no counts line and no SQL block when neither sqlExecutes/sqlRowsRead/sqlEvidence is present", () => {
+		const doc = batch([signal()]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns[0]?.evidence).not.toContain("Measured:");
+		expect(parsed.result.patterns[0]?.evidence).not.toContain("SQL (measured");
+	});
+
+	test("merges evidence across clientType constituents without double-counting", () => {
+		const stmtText = "SELECT * FROM [Sales Line] WHERE [Document No_]=@0";
+		const evidenceA: TelemetrySqlEvidence = {
+			statements: [
+				sqlStatement({ text: stmtText, occurrences: 2, measuredTotalMs: 800 }),
+			],
+			totalMeasuredMs: 800,
+			totalOccurrences: 2,
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+		};
+		const evidenceB: TelemetrySqlEvidence = {
+			statements: [
+				sqlStatement({
+					text: stmtText,
+					occurrences: 3,
+					measuredTotalMs: 1200,
+				}),
+			],
+			totalMeasuredMs: 1200,
+			totalOccurrences: 3,
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+		};
+		const doc = batch([
+			signal({ clientType: "Background", sqlEvidence: evidenceA }),
+			signal({ clientType: "WebClient", sqlEvidence: evidenceB }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1);
+		const p = parsed.result.patterns[0];
+		expect(p?.sqlEvidence?.statements).toHaveLength(1); // same text unioned
+		expect(p?.sqlEvidence?.totalOccurrences).toBe(5); // 2 + 3
+		expect(p?.sqlEvidence?.totalMeasuredMs).toBe(2000);
+		expect(p?.sqlRank).toBe(2000 * 1000);
+	});
+
+	test("merged pattern renders one counts line per constituent, never summed", () => {
+		const doc = batch([
+			signal({ clientType: "Background", sqlExecutes: 12, sqlRowsRead: 3400 }),
+			signal({ clientType: "WebClient", sqlExecutes: 4 }),
+		]);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).toContain(
+			"Measured: 12 SQL statement(s), 3400 row(s) read (Background)",
+		);
+		expect(evidenceText).toContain("Measured: 4 SQL statement(s) (WebClient)");
 	});
 });

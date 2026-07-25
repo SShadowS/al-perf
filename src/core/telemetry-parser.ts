@@ -18,6 +18,7 @@ import type {
 	DetectedPattern,
 	PatternSeverity,
 	TelemetrySqlEvidence,
+	TelemetrySqlStatementEvidence,
 } from "../types/patterns.js";
 import {
 	TELEMETRY_BATCH_SCHEMA_VERSION,
@@ -470,14 +471,67 @@ interface SignalSeverity {
 	fingerprint: string;
 }
 
-/** Group size 1 — byte-identical to the pre-clientType pattern shape. */
+// ---------------------------------------------------------------------------
+// SQL evidence rendering (telemetry-sql-evidence plan, Task 10).
+// ---------------------------------------------------------------------------
+
+/**
+ * The block appended to `DetectedPattern.evidence`. That string is the ONLY
+ * thing that survives to the lifecycle store (evaluate.ts collectFindings) and
+ * therefore to a GitHub/Azure DevOps issue body. PLAIN TEXT ONLY: GitHub fences
+ * the string and Azure DevOps escapes it into <pre>, so markdown would render
+ * literally in one of the two.
+ */
+function renderEvidenceSqlBlock(
+	e: TelemetrySqlEvidence,
+	availabilityNote: string | null,
+): string {
+	const gate = e.threshold
+		? e.threshold.minMs === e.threshold.maxMs
+			? `above ${e.threshold.minMs}ms`
+			: `above ${e.threshold.minMs}-${e.threshold.maxMs}ms`
+		: "above the configured threshold";
+	const lines = [
+		`SQL (measured, ${gate} only): ${e.totalMeasuredMs}ms across ${e.totalOccurrences} occurrence(s)`,
+	];
+	for (const s of e.statements.slice(0, 3)) {
+		const text = s.text.length > 200 ? `${s.text.slice(0, 200)}…` : s.text;
+		lines.push(
+			`  ${s.operation} ${s.table ?? "(unparsed)"} — ${s.measuredTotalMs}ms x${s.occurrences}${s.truncated ? " (truncated)" : ""}: ${text}`,
+		);
+	}
+	if (availabilityNote) lines.push(availabilityNote);
+	return lines.join("\n");
+}
+
+/** RT0018's measured counts. Absent means unknown, never zero — never rendered as "0". */
+function renderCountsLine(s: TelemetrySignal): string | null {
+	if (s.sqlExecutes === undefined && s.sqlRowsRead === undefined) return null;
+	const parts: string[] = [];
+	if (s.sqlExecutes !== undefined)
+		parts.push(`${s.sqlExecutes} SQL statement(s)`);
+	if (s.sqlRowsRead !== undefined) parts.push(`${s.sqlRowsRead} row(s) read`);
+	return `Measured: ${parts.join(", ")}`;
+}
+
+/** Group size 1 — byte-identical to the pre-clientType pattern shape when no SQL fields are present. */
 function buildSinglePattern(
 	item: SignalSeverity,
 	windowStart: string,
 	windowEnd: string,
+	availabilityNote: string | null,
 ): DetectedPattern {
 	const { signal: s, severity, fingerprint } = item;
 	const title = `${s.signalId}: ${s.methodName} (${s.objectType} ${s.objectId}) slow — max ${s.maxDurationMs}ms × ${s.count}`;
+	const baseEvidence = `${s.count} occurrence(s) in window ${windowStart}..${windowEnd}, max ${s.maxDurationMs}ms, avg ${s.avgDurationMs ?? "n/a"}ms`;
+
+	const extras: string[] = [];
+	const counts = renderCountsLine(s);
+	if (counts) extras.push(counts);
+	if (s.sqlEvidence) {
+		extras.push(renderEvidenceSqlBlock(s.sqlEvidence, availabilityNote));
+	}
+
 	return {
 		id: `telemetry-${s.signalId.toLowerCase()}`,
 		severity,
@@ -485,8 +539,63 @@ function buildSinglePattern(
 		description: `Telemetry signal ${s.signalId} recorded ${s.count} occurrence(s) of ${s.methodName} (${s.objectType} ${s.objectId}) at or above the ${severity} threshold, up to ${s.maxDurationMs}ms.`,
 		impact: s.maxDurationMs * 1000,
 		involvedMethods: [`${s.methodName} (${s.objectType} ${s.objectId})`],
-		evidence: `${s.count} occurrence(s) in window ${windowStart}..${windowEnd}, max ${s.maxDurationMs}ms, avg ${s.avgDurationMs ?? "n/a"}ms`,
+		evidence: [baseEvidence, ...extras].join("\n"),
+		sqlEvidence: s.sqlEvidence,
+		sqlRank: s.sqlEvidence ? s.sqlEvidence.totalMeasuredMs * 1000 : undefined,
 		fingerprint,
+	};
+}
+
+/**
+ * Union constituent SQL evidence by redacted text; sum occurrences and ms;
+ * widen the threshold range. Evidence now arrives scoped per clientType, so
+ * two constituents of one merge genuinely carry DIFFERENT statements — a
+ * shared-text match means the SAME normalized statement was measured under
+ * more than one clientType, which is a real total, not double-counting.
+ */
+function mergeEvidence(
+	group: readonly SignalSeverity[],
+): TelemetrySqlEvidence | undefined {
+	const byText = new Map<string, TelemetrySqlStatementEvidence>();
+	let threshold: { minMs: number; maxMs: number } | undefined;
+	for (const { signal } of group) {
+		const e = signal.sqlEvidence;
+		if (!e) continue;
+		for (const s of e.statements) {
+			const prev = byText.get(s.text);
+			byText.set(
+				s.text,
+				prev
+					? {
+							...prev,
+							occurrences: prev.occurrences + s.occurrences,
+							measuredTotalMs: prev.measuredTotalMs + s.measuredTotalMs,
+							truncated: prev.truncated || s.truncated,
+						}
+					: { ...s },
+			);
+		}
+		if (e.threshold) {
+			threshold = threshold
+				? {
+						minMs: Math.min(threshold.minMs, e.threshold.minMs),
+						maxMs: Math.max(threshold.maxMs, e.threshold.maxMs),
+					}
+				: e.threshold;
+		}
+	}
+	if (byText.size === 0) return undefined;
+	const statements = Array.from(byText.values()).sort(
+		(a, b) =>
+			b.measuredTotalMs - a.measuredTotalMs || a.text.localeCompare(b.text),
+	);
+	return {
+		statements: statements.slice(0, 5),
+		totalMeasuredMs: statements.reduce((n, s) => n + s.measuredTotalMs, 0),
+		totalOccurrences: statements.reduce((n, s) => n + s.occurrences, 0),
+		provenance: "measured-threshold-gated",
+		attribution: "telemetry-stack",
+		threshold,
 	};
 }
 
@@ -505,6 +614,7 @@ function buildMergedPattern(
 	group: readonly SignalSeverity[],
 	windowStart: string,
 	windowEnd: string,
+	availabilityNote: string | null,
 ): DetectedPattern {
 	const first = group[0].signal;
 	const fingerprint = group[0].fingerprint;
@@ -534,6 +644,23 @@ function buildMergedPattern(
 	);
 
 	const title = `${first.signalId}: ${first.methodName} (${first.objectType} ${first.objectId}) slow — max ${maxDurationMs}ms × ${totalCount}`;
+	const baseEvidence = `${totalCount} occurrence(s) in window ${windowStart}..${windowEnd}, max ${maxDurationMs}ms, avg ${avgDurationMs ?? "n/a"}ms — ${constituentLines.join("; ")}`;
+
+	// Counts (sqlExecutes/sqlRowsRead) are per-constituent, never summed: an
+	// absent count on one constituent means unknown for THAT constituent, not
+	// zero, so a sum would misrepresent partial data as a complete total. One
+	// line per constituent that reports counts, labeled the same way the
+	// occurrence breakdown above is.
+	const extras: string[] = [];
+	for (const { signal: s } of group) {
+		const counts = renderCountsLine(s);
+		if (counts) extras.push(`${counts} (${s.clientType ?? "unspecified"})`);
+	}
+	const mergedSqlEvidence = mergeEvidence(group);
+	if (mergedSqlEvidence) {
+		extras.push(renderEvidenceSqlBlock(mergedSqlEvidence, availabilityNote));
+	}
+
 	return {
 		id: `telemetry-${first.signalId.toLowerCase()}`,
 		severity,
@@ -543,7 +670,11 @@ function buildMergedPattern(
 		involvedMethods: [
 			`${first.methodName} (${first.objectType} ${first.objectId})`,
 		],
-		evidence: `${totalCount} occurrence(s) in window ${windowStart}..${windowEnd}, max ${maxDurationMs}ms, avg ${avgDurationMs ?? "n/a"}ms — ${constituentLines.join("; ")}`,
+		evidence: [baseEvidence, ...extras].join("\n"),
+		sqlEvidence: mergedSqlEvidence,
+		sqlRank: mergedSqlEvidence
+			? mergedSqlEvidence.totalMeasuredMs * 1000
+			: undefined,
 		fingerprint,
 	};
 }
@@ -606,6 +737,37 @@ export function parseTelemetryBatch(
 	// wasn't a silently-ignored unknown key before.
 	const signalAvailability = validateSignalAvailability(raw.signalAvailability);
 
+	// TWO derived sets from the one signalAvailability array — the split is
+	// deliberate (telemetry-sql-evidence plan §9, Task 10 amendment).
+	//
+	// `failedSignals` drives the note text appended to evidence: an operator
+	// wants to see every query that failed, enrichment included.
+	//
+	// `failedSignalQueries` drives meta.incompleteInvocations below, and
+	// EXCLUDES the statement query (STATEMENT_LABEL). §9's incompleteness
+	// rule exists so a failed SIGNAL query cannot falsely resolve findings —
+	// absent signal data means routines genuinely went unobserved. The
+	// statement query is enrichment: its failure does not mean those routines
+	// went unobserved, so letting it suppress the absence pass would
+	// needlessly delay resolving findings that are actually fixed. Do not
+	// collapse these two sets back together.
+	const STATEMENT_LABEL = "RT0005 statements";
+	const failedSignals = (signalAvailability ?? []).filter(
+		(a) => a.error !== undefined,
+	);
+	const failedSignalQueries = failedSignals.filter(
+		(a) => a.signalId !== STATEMENT_LABEL,
+	);
+	// Note text: signalId + error only. Never rows/unmatchedRows — those two
+	// integers are PULL-WIDE (every group emitted from one pull carries the
+	// same signalAvailability array, so they may describe another tenant's
+	// rows) and must never be rendered as tenant-specific text or gate a
+	// per-tenant "clean" claim.
+	const availabilityNote =
+		failedSignals.length > 0
+			? `Signal(s) unavailable this window: ${failedSignals.map((a) => `${a.signalId} (${a.error})`).join("; ")} — absence not counted.`
+			: null;
+
 	// Severity assignment (D3) happens per-signal, BEFORE the D4 merge below —
 	// each constituent's severity is resolved against its own clientType.
 	const withSeverity: SignalSeverity[] = signals.map((s) => ({
@@ -638,8 +800,8 @@ export function parseTelemetryBatch(
 	const patterns: DetectedPattern[] = Array.from(groups.values()).map(
 		(group) =>
 			group.length === 1
-				? buildSinglePattern(group[0], windowStart, windowEnd)
-				: buildMergedPattern(group, windowStart, windowEnd),
+				? buildSinglePattern(group[0], windowStart, windowEnd, availabilityNote)
+				: buildMergedPattern(group, windowStart, windowEnd, availabilityNote),
 	);
 
 	const patternCount = { critical: 0, warning: 0, info: 0 };
@@ -654,6 +816,14 @@ export function parseTelemetryBatch(
 			idleSelfTime: 0,
 			totalNodes: 0,
 			maxDepth: 0,
+			// A window in which a signal failed is an INCOMPLETE run: evaluateRun
+			// reads meta.incompleteInvocations (evaluate.ts:353) and skips the
+			// absence pass entirely (evaluate.ts:610-611). Without this, an
+			// RT0018-only batch would accrue absence against every RT0005 finding
+			// of the same app and eventually resolve them.
+			// failedSignalQueries, NOT failedSignals — a failed enrichment query
+			// must not suppress the absence pass (see the derivation above).
+			incompleteInvocations: failedSignalQueries.length,
 			sourceAvailable: false,
 			confidenceScore: 0,
 			confidenceFactors: {
