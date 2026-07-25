@@ -29,4 +29,34 @@ describe("parseAlStackFrame", () => {
 	test("returns null for empty input", () => {
 		expect(parseAlStackFrame("")).toBeNull();
 	});
+
+	test("regression: rejects fake frames before AL CallStack marker", () => {
+		const stack =
+			'AppObjectType: Table\r\n  AppObjectId: 50100\r\n  SomeHeader: "Fake Name"(Table 1).NotTheRealMethod\r\n  AL CallStack: "Sample Job"(Table 50100).Run line 60 - Sample Extension';
+		expect(parseAlStackFrame(stack)).toBe("Run");
+	});
+
+	test("regression: handles Report as object type", () => {
+		const stack =
+			'AL CallStack: "Sales Report"(Report 50200).OnPreReport line 10';
+		expect(parseAlStackFrame(stack)).toBe("OnPreReport");
+	});
+
+	test("regression: extracts method names with digits and underscores", () => {
+		const stack =
+			'AL CallStack: "Post Mgmt"(CodeUnit 50400).Post_Line2 line 25 - Sample Extension';
+		expect(parseAlStackFrame(stack)).toBe("Post_Line2");
+	});
+
+	test("regression: handles object names with dots and parentheses", () => {
+		const stack =
+			'AL CallStack: "CTS-SYS Send (Daily) Tel."(CodeUnit 50300).Emit line 15 - Sample Extension';
+		expect(parseAlStackFrame(stack)).toBe("Emit");
+	});
+
+	test("regression: takes first frame after marker even if inline frame absent", () => {
+		const stack =
+			'AppObjectType: Report\r\nAppObjectId: 840\r\nAL CallStack:\r\n"Report Handler"(CodeUnit 50500).ProcessReport line 30 - Sample Extension';
+		expect(parseAlStackFrame(stack)).toBe("ProcessReport");
+	});
 });

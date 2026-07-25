@@ -11,12 +11,20 @@
  *   "<Object Name>"(<ObjectType> <ObjectId>).<Method> line <N> - <app info>
  * Header lines (`AppObjectType:`, `AppObjectId:`) precede `AL CallStack:` and
  * are NOT frames — taking line 0 (the pre-fix behavior) yields a header string,
- * never a method.
+ * never a method. The marker `AL CallStack:` must be found first to avoid
+ * matching fake frames that appear before it in the input.
  */
 const AL_FRAME_RE = /"[^"]*"\([A-Za-z]+\s+\d+\)\.([A-Za-z_][\w]*)/;
 
 export function parseAlStackFrame(stack: string): string | null {
 	if (!stack) return null;
-	const match = AL_FRAME_RE.exec(stack);
+
+	// Find the AL CallStack marker first; skip any fake frames that precede it
+	const idx = stack.indexOf("AL CallStack:");
+	if (idx === -1) return null;
+
+	// Search for the frame pattern starting from the marker
+	const frameText = stack.slice(idx);
+	const match = AL_FRAME_RE.exec(frameText);
 	return match ? match[1] : null;
 }
