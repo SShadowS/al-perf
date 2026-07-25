@@ -1263,6 +1263,31 @@ describe("missing-setloadfields — records that escape the member", () => {
 		expect(p).toBeDefined();
 		expect(p.severity).toBe("warning");
 	});
+
+	it("downgrades when the find target is a `var` (by-reference) parameter", () => {
+		// `procedure Sel(var Tmpl: Record "Item Journal Template")` that only
+		// filters and finds is a LOOKUP HELPER: every field read happens in the
+		// caller. SetLoadFields here starves a caller this member cannot see.
+		const p = f("FindIntoVarParameter");
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("info");
+	});
+
+	it("keeps warning for a by-VALUE record parameter", () => {
+		// Passed by value the caller gets a copy and never sees this find, so
+		// the field reads really are all visible here.
+		const p = f("FindIntoValueParameter");
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("warning");
+	});
+
+	it("downgrades when the whole record is assigned to another record", () => {
+		// `TempLineValue := LineValue` copies EVERY field out of LineValue.
+		// Narrowing its load leaves the copy holding defaults.
+		const p = f("FindThenCopyWholeRecord");
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("info");
+	});
 });
 
 describe("incomplete-setloadfields — what counts as a field access", () => {

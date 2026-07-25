@@ -184,6 +184,12 @@ export interface VariableInfo {
 	tableName?: string;
 	/** True if declared with 'temporary' keyword */
 	isTemporary: boolean;
+	/**
+	 * True when this is a `var` (by-reference) PARAMETER. Whatever the member
+	 * puts in it is handed back to the caller, which reads fields the member
+	 * itself never names — see `escapedRecordVariables`.
+	 */
+	isVarParameter?: boolean;
 	line: number;
 }
 

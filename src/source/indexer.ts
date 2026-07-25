@@ -786,19 +786,44 @@ const FIELD_NEUTRAL_RECORD_METHODS = new Set([
 
 /**
  * Record variables whose contents leave this member's analysis: passed WHOLE
- * as a call argument, or used as the receiver of a method that is not a
- * field-neutral built-in.
+ * as a call argument, assigned WHOLE into another record, used as the receiver
+ * of a method that is not a field-neutral built-in, or declared as a `var`
+ * (by-reference) parameter.
  *
  * `missing-setloadfields` needs this because its advice is only safe when
  * every field read is visible right here. Handing the record to a callee, or
  * calling a table method on it, means fields this member never names may be
  * read from it -- and narrowing the load would starve exactly those reads.
  * 218 of Document Output's 387 find-receivers are in one of these two shapes.
+ *
+ * `variables` supplies the `var`-parameter case, which no shape inside the
+ * code block can reveal: `procedure Sel(var Tmpl: Record "Item Journal
+ * Template")` that only filters and finds is a LOOKUP HELPER -- it reads no
+ * field at all, because every read happens in the CALLER, through the same
+ * record. Passing by VALUE is deliberately not an escape: the caller gets a
+ * copy and never sees this member's find.
  */
-function collectEscapedRecordVariables(node: SyntaxNode): string[] {
+function collectEscapedRecordVariables(
+	node: SyntaxNode,
+	variables: VariableInfo[] | undefined,
+): string[] {
 	const escaped = new Set<string>();
 
+	for (const v of variables ?? []) {
+		if (v.isVarParameter) escaped.add(v.name.toLowerCase());
+	}
+
 	function walk(n: SyntaxNode) {
+		// `A := B` between two records copies EVERY field out of B -- narrowing
+		// B's load leaves the copy holding defaults for everything not loaded.
+		// `Amount := SalesLine.Amount` is a member_expression on the right and
+		// moves ONE field, so it does not escape anything.
+		if (n.type === "assignment_statement") {
+			const rhs = n.namedChildren[1];
+			if (rhs?.type === "identifier" || rhs?.type === "quoted_identifier") {
+				escaped.add(stripQuotes(rhs.text).toLowerCase());
+			}
+		}
 		if (n.type === "call_expression") {
 			const funcNode = n.childForFieldName("function") ?? n.namedChildren[0];
 			if (funcNode?.type === "member_expression") {
@@ -908,12 +933,20 @@ function variableFromTypedNode(node: SyntaxNode): VariableInfo | undefined {
 		}
 	}
 
+	// `var_keyword` only ever appears under a `parameter` node here: a local
+	// `var` section carries its own `var_keyword` on the SECTION, not on each
+	// `variable_declaration` inside it.
+	const isVarParameter =
+		node.type === "parameter" &&
+		node.namedChildren.some((c) => c.type === "var_keyword");
+
 	return {
 		name: nameNode.text,
 		typeStr: typeSpecNode.text,
 		isRecord,
 		tableName,
 		isTemporary,
+		...(isVarParameter ? { isVarParameter: true } : {}),
 		line: node.startPosition.row + 1,
 	};
 }
@@ -1142,7 +1175,10 @@ function extractFeatures(
 	// Collect field accesses
 	const fieldAccesses = collectFieldAccesses(codeBlock);
 
-	const escapedRecordVariables = collectEscapedRecordVariables(codeBlock);
+	const escapedRecordVariables = collectEscapedRecordVariables(
+		codeBlock,
+		context?.variables,
+	);
 
 	// Compute nesting depth
 	const nestingDepth = computeNestingDepth(codeBlock);

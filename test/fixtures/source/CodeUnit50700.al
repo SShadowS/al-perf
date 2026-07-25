@@ -224,4 +224,33 @@ codeunit 50700 "Field Access Test"
                 SalesLine.Mark(true);
             until SalesLine.Next() = 0;
     end;
+
+    procedure FindIntoVarParameter(var OutLine: Record "Sales Line")
+    begin
+        // A `var` parameter is by reference: whatever this member finds is
+        // handed BACK to the caller, which reads fields nobody names here.
+        OutLine.SetRange("Document No.", 'X');
+        if OutLine.FindFirst() then;
+    end;
+
+    procedure FindIntoValueParameter(InLine: Record "Sales Line")
+    begin
+        // Passed by VALUE — the caller never sees this find, so every field
+        // read really is visible right here.
+        InLine.SetRange("Document No.", 'X');
+        if InLine.FindFirst() then
+            Message('%1', InLine.Amount);
+    end;
+
+    procedure FindThenCopyWholeRecord()
+    var
+        SalesLine: Record "Sales Line";
+        TempSalesLine: Record "Sales Line" temporary;
+    begin
+        // `A := B` copies EVERY field out of B. Narrowing B's load silently
+        // empties the copy.
+        SalesLine.FindFirst();
+        TempSalesLine := SalesLine;
+        TempSalesLine.Insert();
+    end;
 }
