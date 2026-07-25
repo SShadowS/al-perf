@@ -8,13 +8,16 @@
  */
 export function isSqlStatement(name: string): boolean {
 	const upper = name.trimStart().toUpperCase();
+	// The keyword may be followed by whitespace OR by punctuation: BC emits
+	// statements it has already elided itself, in the form
+	// `SELECT...WHERE ("Sales Line$0"."Document Type"=...)`. Requiring a space
+	// after the keyword missed every one of those, so none of the formatters
+	// truncated them and a 1,028-character statement went into a table cell
+	// verbatim — in markdown, the format most likely to be pasted into a pull
+	// request.
 	return (
-		upper.startsWith("SELECT ") ||
-		upper.startsWith("INSERT ") ||
-		upper.startsWith("UPDATE ") ||
-		upper.startsWith("DELETE ") ||
+		/^(?:SELECT|INSERT|UPDATE|DELETE|EXEC)(?:\s|\.|\()/.test(upper) ||
 		upper.startsWith("IF EXISTS(SELECT") ||
-		upper.startsWith("EXEC ") ||
 		upper.startsWith("BEGIN")
 	);
 }

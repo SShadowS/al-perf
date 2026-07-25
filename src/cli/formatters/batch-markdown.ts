@@ -1,5 +1,6 @@
 import { basename } from "path";
 import { formatTime } from "../../core/analyzer.js";
+import { truncateFunctionName } from "../../core/display-utils.js";
 import type { BatchSectionRenderers } from "../../output/batch-sections.js";
 import { BATCH_SECTION_ORDER } from "../../output/batch-sections.js";
 import type {
@@ -150,7 +151,7 @@ function renderCumulativeHotspots(result: BatchAnalysisResult): string {
 
 	for (const hotspot of result.cumulativeHotspots) {
 		lines.push(
-			`| **${hotspot.functionName}** | ${hotspot.objectType} ${hotspot.objectId} (${hotspot.objectName}) | ${formatTime(hotspot.cumulativeSelfTime)} | ${hotspot.profileCount}/${result.meta.profileCount} | ${formatTime(hotspot.avgSelfTime)} |`,
+			`| **${truncateFunctionName(hotspot.functionName)}** | ${hotspot.objectType} ${hotspot.objectId} (${hotspot.objectName}) | ${formatTime(hotspot.cumulativeSelfTime)} | ${hotspot.profileCount}/${result.meta.profileCount} | ${formatTime(hotspot.avgSelfTime)} |`,
 		);
 	}
 

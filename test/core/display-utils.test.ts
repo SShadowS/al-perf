@@ -68,3 +68,31 @@ describe("truncateFunctionName", () => {
 		expect(result.endsWith("\u2026")).toBe(true);
 	});
 });
+
+describe("isSqlStatement — BC's own elided form", () => {
+	test("recognizes a statement BC has already elided", () => {
+		// BC emits `SELECT...WHERE (...)` — keyword, then punctuation, no space.
+		// Requiring a space after the keyword missed every one of these, so no
+		// formatter truncated them.
+		expect(
+			isSqlStatement('SELECT...WHERE ("Sales Line$0"."Document Type"=@0)'),
+		).toBe(true);
+		expect(
+			truncateFunctionName("SELECT...WHERE (x)".repeat(20), 60).length,
+		).toBe(61);
+	});
+
+	test("still recognizes the ordinary spaced forms", () => {
+		expect(isSqlStatement("SELECT [a] FROM dbo.[T]")).toBe(true);
+		expect(isSqlStatement("INSERT INTO dbo.[T] VALUES (1)")).toBe(true);
+		expect(isSqlStatement("IF EXISTS(SELECT TOP 1 NULL FROM x)")).toBe(true);
+	});
+
+	test("does not mistake an AL method for SQL", () => {
+		// A method named Select/Update/Deleted must not be truncated as SQL.
+		expect(isSqlStatement("ProcessLine")).toBe(false);
+		expect(isSqlStatement("Selected")).toBe(false);
+		expect(isSqlStatement("UpdateAmounts")).toBe(false);
+		expect(isSqlStatement("DeleteAll")).toBe(false);
+	});
+});

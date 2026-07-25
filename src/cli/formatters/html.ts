@@ -284,7 +284,7 @@ function renderCriticalPath(result: AnalysisResult): string {
 				.map((step) => {
 					const indent = "\u00A0\u00A0\u00A0\u00A0".repeat(step.depth);
 					const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
-					return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(step.functionName)}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
+					return `<div style="margin:2px 0">${indent}${arrow}<strong>${escapeHtml(truncateFunctionName(step.functionName))}</strong> (${escapeHtml(step.objectType)} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)</div>`;
 				})
 				.join("\n")}
     </div>
@@ -358,7 +358,7 @@ function renderTableBreakdown(result: AnalysisResult): string {
 		.map((t) => {
 			const topOp =
 				t.operationBreakdown.length > 0
-					? `${escapeHtml(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
+					? `${escapeHtml(truncateFunctionName(t.operationBreakdown[0].operation))} (${formatTime(t.operationBreakdown[0].selfTime)})`
 					: "\u2014";
 			return `<tr>
             <td>${escapeHtml(t.tableName)}</td>
@@ -463,7 +463,7 @@ function renderObjectBreakdown(result: AnalysisResult): string {
 				.map(
 					(m) =>
 						`<tr>
-              <td style="padding-left:24px;color:#505C6D">${escapeHtml(m.functionName)}</td>
+              <td style="padding-left:24px;color:#505C6D">${escapeHtml(truncateFunctionName(m.functionName))}</td>
               <td></td>
               <td></td>
               <td style="color:#505C6D">${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%)</td>

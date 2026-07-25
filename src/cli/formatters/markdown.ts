@@ -1,4 +1,5 @@
 import { formatTime } from "../../core/analyzer.js";
+import { truncateFunctionName } from "../../core/display-utils.js";
 import type { SectionRenderers } from "../../output/sections.js";
 import { SECTION_ORDER } from "../../output/sections.js";
 import type { AnalysisResult, ComparisonResult } from "../../output/types.js";
@@ -144,7 +145,7 @@ function renderHotspots(result: AnalysisResult): string {
 		const calledByStr =
 			h.calledBy.length > 0 ? h.calledBy.slice(0, 3).join(", ") : "-";
 		lines.push(
-			`| ${i + 1} | **${h.functionName}** | ${objectStr} | ${h.appName} | ${selfTimeStr}${gapStr} | ${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%) | ${h.hitCount} | ${calledByStr} |`,
+			`| ${i + 1} | **${truncateFunctionName(h.functionName)}** | ${objectStr} | ${h.appName} | ${selfTimeStr}${gapStr} | ${formatTime(h.totalTime)} (${h.totalTimePercent.toFixed(1)}%) | ${h.hitCount} | ${calledByStr} |`,
 		);
 	});
 
@@ -239,7 +240,7 @@ function renderCriticalPath(result: AnalysisResult): string {
 		const indent = "\u00A0\u00A0".repeat(step.depth);
 		const arrow = step.depth > 0 ? "\u2514 " : "";
 		lines.push(
-			`${indent}${arrow}**${step.functionName}** (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`,
+			`${indent}${arrow}**${truncateFunctionName(step.functionName)}** (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`,
 		);
 	}
 	return lines.join("\n");
@@ -308,7 +309,7 @@ function renderTableBreakdown(result: AnalysisResult): string {
 	for (const t of result.tableBreakdown) {
 		const topOp =
 			t.operationBreakdown.length > 0
-				? `${t.operationBreakdown[0].operation} (${formatTime(t.operationBreakdown[0].selfTime)})`
+				? `${truncateFunctionName(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
 				: "-";
 		lines.push(
 			`| ${t.tableName} | ${formatTime(t.totalSelfTime)} (${t.totalSelfTimePercent.toFixed(1)}%) | ${topOp} | ${t.callSiteCount} | ${t.hasSetLoadFields ? "Yes" : "No"} | ${t.hasFilters ? "Yes" : "No"} |`,
@@ -401,7 +402,7 @@ function renderObjectBreakdown(result: AnalysisResult): string {
 			lines.push("| --- | --- | --- | --- |");
 			for (const m of obj.methods) {
 				lines.push(
-					`| ${m.functionName} | ${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%) | ${formatTime(m.totalTime)} (${m.totalTimePercent.toFixed(1)}%) | ${m.hitCount} |`,
+					`| ${truncateFunctionName(m.functionName)} | ${formatTime(m.selfTime)} (${m.selfTimePercent.toFixed(1)}%) | ${formatTime(m.totalTime)} (${m.totalTimePercent.toFixed(1)}%) | ${m.hitCount} |`,
 				);
 			}
 			lines.push("");

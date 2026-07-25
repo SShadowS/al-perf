@@ -288,7 +288,7 @@ function renderCriticalPath(result: AnalysisResult): string {
 		const indent = "  ".repeat(step.depth + 1);
 		const arrow = step.depth > 0 ? "\u2514\u2500 " : "";
 		lines.push(
-			`${indent}${arrow}${chalk.white.bold(step.functionName)} (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`,
+			`${indent}${arrow}${chalk.white.bold(truncateFunctionName(step.functionName))} (${step.objectType} ${step.objectId}) \u2014 ${formatTime(step.totalTime)} (${step.totalTimePercent.toFixed(1)}%)`,
 		);
 	}
 	return lines.join("\n");
@@ -359,7 +359,7 @@ function renderTableBreakdown(result: AnalysisResult): string {
 	for (const t of result.tableBreakdown) {
 		const topOp =
 			t.operationBreakdown.length > 0
-				? `${t.operationBreakdown[0].operation} (${formatTime(t.operationBreakdown[0].selfTime)})`
+				? `${truncateFunctionName(t.operationBreakdown[0].operation)} (${formatTime(t.operationBreakdown[0].selfTime)})`
 				: "-";
 		tableBreakdownTable.push([
 			t.tableName,
@@ -470,7 +470,7 @@ function renderObjectBreakdown(result: AnalysisResult): string {
 		]);
 		for (const m of obj.methods) {
 			objTable.push([
-				chalk.gray(`  ${m.functionName}`),
+				chalk.gray(`  ${truncateFunctionName(m.functionName, 80)}`),
 				"",
 				"",
 				chalk.gray(
