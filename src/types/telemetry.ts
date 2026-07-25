@@ -6,6 +6,8 @@
 // We therefore accept exactly TELEMETRY_BATCH_SCHEMA_VERSION and ignore
 // unknown keys.
 
+import type { TelemetrySqlEvidence } from "./patterns.js";
+
 /** The telemetry-batch schemaVersion this consumer is pinned to. */
 export const TELEMETRY_BATCH_SCHEMA_VERSION = 1;
 
@@ -32,6 +34,12 @@ export interface TelemetrySignal {
 	 * `^[A-Za-z]+$` by the parser, same injection posture as signalId.
 	 */
 	clientType?: string;
+	/** Measured SQL statement count for this routine (RT0018, BC v22.0+). Absent = unknown, NOT zero. */
+	sqlExecutes?: number;
+	/** Measured rows read for this routine (RT0018, BC v22.0+). Absent = unknown, NOT zero. */
+	sqlRowsRead?: number;
+	/** Redacted statement evidence attached by the adapter (RT0005). */
+	sqlEvidence?: TelemetrySqlEvidence;
 }
 
 export interface TelemetryBatchDocument {
@@ -43,4 +51,16 @@ export interface TelemetryBatchDocument {
 	/** Optional adapter provenance, e.g. "appinsights-api". */
 	source?: string;
 	signals: TelemetrySignal[];
+	/**
+	 * Per-signal outcome for the pull that produced this batch. Absent on
+	 * producers that do not report it. Without this, "no evidence" cannot be
+	 * distinguished from "not queried" / "query failed" / "truncated".
+	 */
+	signalAvailability?: Array<{
+		signalId: string;
+		queried: boolean;
+		rows: number;
+		truncated?: boolean;
+		error?: string;
+	}>;
 }

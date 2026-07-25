@@ -14,7 +14,11 @@ import {
 } from "../lifecycle/fingerprint.js";
 import type { AnalysisResult } from "../output/types.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
-import type { DetectedPattern, PatternSeverity } from "../types/patterns.js";
+import type {
+	DetectedPattern,
+	PatternSeverity,
+	TelemetrySqlEvidence,
+} from "../types/patterns.js";
 import {
 	TELEMETRY_BATCH_SCHEMA_VERSION,
 	type TelemetrySignal,
@@ -154,6 +158,21 @@ function optionalNonNegativeNumber(
 	return v;
 }
 
+function optionalNonNegativeInteger(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): number | undefined {
+	const v = obj[field];
+	if (v === undefined) return undefined;
+	if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+		throw new Error(
+			`telemetry-batch ${context}: invalid field '${field}' (expected a non-negative integer)`,
+		);
+	}
+	return v;
+}
+
 /**
  * clientType enters severity-key composition (`${signalId}@${clientType}`,
  * config-file.ts D3) — same injection posture as signalId. Letters-only by
@@ -175,7 +194,45 @@ function optionalClientType(
 	return v;
 }
 
-function validateSignal(raw: unknown, index: number): TelemetrySignal {
+/**
+ * Fail-closed shape check. An unknown `provenance` is REJECTED rather than
+ * passed through: the discriminant is what every renderer narrows on, so an
+ * unrecognized value would render measured data under sampled labels.
+ */
+function optionalTelemetrySqlEvidence(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): TelemetrySqlEvidence | undefined {
+	const v = obj[field];
+	if (v === undefined) return undefined;
+	if (typeof v !== "object" || v === null || Array.isArray(v)) {
+		throw new Error(`telemetry-batch ${context}: invalid field '${field}'`);
+	}
+	const e = v as Record<string, unknown>;
+	if (e.provenance !== "measured-threshold-gated") {
+		throw new Error(
+			`telemetry-batch ${context}: invalid field '${field}.provenance' (expected "measured-threshold-gated")`,
+		);
+	}
+	if (!Array.isArray(e.statements)) {
+		throw new Error(
+			`telemetry-batch ${context}: invalid field '${field}.statements'`,
+		);
+	}
+	return v as TelemetrySqlEvidence;
+}
+
+/**
+ * Exported for direct unit testing (test/core/telemetry-contract.test.ts,
+ * Task 7): `parseTelemetryBatch`'s stub result does not yet surface
+ * `sqlExecutes`/`sqlRowsRead`/`sqlEvidence` anywhere observable — that wiring
+ * (evidence-string formatting into `DetectedPattern.evidence`) is a later
+ * task's job. Testing the validator directly is the only way to pin "these
+ * fields survive validation onto `TelemetrySignal`" without reaching ahead
+ * into that task's scope.
+ */
+export function validateSignal(raw: unknown, index: number): TelemetrySignal {
 	const context = `signal[${index}]`;
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
 		throw new Error(`telemetry-batch ${context}: not an object`);
@@ -193,6 +250,9 @@ function validateSignal(raw: unknown, index: number): TelemetrySignal {
 		maxDurationMs: requireNonNegativeNumber(obj, "maxDurationMs", context),
 		avgDurationMs: optionalNonNegativeNumber(obj, "avgDurationMs", context),
 		clientType: optionalClientType(obj, "clientType", context),
+		sqlExecutes: optionalNonNegativeInteger(obj, "sqlExecutes", context),
+		sqlRowsRead: optionalNonNegativeInteger(obj, "sqlRowsRead", context),
+		sqlEvidence: optionalTelemetrySqlEvidence(obj, "sqlEvidence", context),
 	};
 }
 

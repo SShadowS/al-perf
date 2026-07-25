@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	isTelemetryBatchDocument,
 	parseTelemetryBatch,
+	validateSignal,
 } from "../../src/core/telemetry-parser.js";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/lifecycle/config.js";
 import { TELEMETRY_BATCH_SCHEMA_VERSION } from "../../src/types/telemetry.js";
@@ -266,5 +267,122 @@ describe("clientType additive-change contract (Task 3)", () => {
 			"\t",
 		);
 		expect(normalized).toBe(PINNED_GOLDEN_SNAPSHOT);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SQL evidence wire contract (Task 7): sqlExecutes/sqlRowsRead/sqlEvidence on
+// TelemetrySignal, validated fail-closed by validateSignal.
+//
+// Deviation from the original task brief: the brief's Step 1 test asserted
+// the new fields reach `DetectedPattern.evidence` as formatted text
+// ("12 SQL statement(s)", "3400 row(s) read"). That formatting is a LATER
+// task's job (the parser's pattern builders) — parseTelemetryBatch's stub
+// result does not yet surface sqlExecutes/sqlRowsRead/sqlEvidence anywhere
+// observable. This suite instead asserts the fields survive validation onto
+// the parsed TelemetrySignal directly (validateSignal is exported for this),
+// plus the fail-closed rejection tests from the brief unchanged (those go
+// through the public parseTelemetryBatch entry point since a throw during
+// signal validation propagates as-is).
+// ---------------------------------------------------------------------------
+
+const baseSignal = {
+	signalId: "RT0018",
+	appId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+	objectType: "Codeunit",
+	objectId: 50100,
+	methodName: "ProcessLine",
+	count: 3,
+	maxDurationMs: 12_000,
+};
+
+function makeBatch(signals: unknown[]) {
+	return {
+		schemaVersion: 1,
+		payloadType: "telemetry-batch",
+		windowStart: "2026-07-11T00:00:00.000Z",
+		windowEnd: "2026-07-11T01:00:00.000Z",
+		signals,
+	};
+}
+
+describe("SQL evidence wire contract (Task 7)", () => {
+	test("schemaVersion stays 1 with the new fields present", () => {
+		expect(TELEMETRY_BATCH_SCHEMA_VERSION).toBe(1);
+	});
+
+	test("validateSignal carries sqlExecutes/sqlRowsRead through", () => {
+		const parsed = validateSignal(
+			{ ...baseSignal, sqlExecutes: 12, sqlRowsRead: 3400 },
+			0,
+		);
+		expect(parsed.sqlExecutes).toBe(12);
+		expect(parsed.sqlRowsRead).toBe(3400);
+	});
+
+	test("validateSignal carries sqlEvidence through", () => {
+		const evidence = {
+			statements: [],
+			totalMeasuredMs: 0,
+			totalOccurrences: 0,
+			provenance: "measured-threshold-gated" as const,
+			attribution: "telemetry-stack" as const,
+		};
+		const parsed = validateSignal({ ...baseSignal, sqlEvidence: evidence }, 0);
+		expect(parsed.sqlEvidence).toEqual(evidence);
+	});
+
+	test("a batch carrying the new fields still parses without throwing", () => {
+		const batch = makeBatch([
+			{ ...baseSignal, sqlExecutes: 12, sqlRowsRead: 3400 },
+		]);
+		expect(() =>
+			parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG),
+		).not.toThrow();
+	});
+
+	test("a batch carrying signalAvailability still parses without throwing", () => {
+		const batch = {
+			...makeBatch([baseSignal]),
+			signalAvailability: [{ signalId: "RT0018", queried: true, rows: 12 }],
+		};
+		expect(() =>
+			parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG),
+		).not.toThrow();
+	});
+
+	test("rejects a negative sqlExecutes fail-closed", () => {
+		const batch = makeBatch([{ ...baseSignal, sqlExecutes: -1 }]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/sqlExecutes/,
+		);
+	});
+
+	test("rejects a non-integer sqlRowsRead fail-closed", () => {
+		const batch = makeBatch([{ ...baseSignal, sqlRowsRead: 3.5 }]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/sqlRowsRead/,
+		);
+	});
+
+	test("rejects an unknown evidence provenance", () => {
+		const batch = makeBatch([
+			{ ...baseSignal, sqlEvidence: { provenance: "made-up", statements: [] } },
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/provenance/,
+		);
+	});
+
+	test("rejects sqlEvidence missing a statements array", () => {
+		const batch = makeBatch([
+			{
+				...baseSignal,
+				sqlEvidence: { provenance: "measured-threshold-gated" },
+			},
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/statements/,
+		);
 	});
 });
