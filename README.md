@@ -6,9 +6,26 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
 
-> Analyze Business Central `.alcpuprofile` files — find hotspots, detect anti-patterns, and track regressions.
+> Turn a Business Central performance profile into a list of things to fix.
 
-Works as a **CLI**, **web app**, **MCP server**, or **library**.
+al-perf reads `.alcpuprofile` captures and finds the anti-patterns you already know
+are expensive: CalcFields inside a loop, missing `SetLoadFields`, records modified
+one at a time, `FindSet` with no filter, `Commit` in a loop, filters no table key
+can serve. Point it at your AL source and it names the file, procedure, line, and
+table, reads your keys and CalcFormulas (a SUM FlowField scores worse than a
+lookup), and knows a temporary table never touches SQL so it stops raising false
+alarms.
+
+Findings carry the SQL behind them, keep a stable identity across runs, file
+themselves as GitHub or Azure DevOps issues, and close when the problem stops
+appearing. Or fail the build on a pull request that introduces an N+1.
+
+Works as a **CLI**, **web app**, **MCP server** (ask your AI assistant why posting
+got slow), or **library**.
+
+```bash
+bunx al-perf analyze profile.alcpuprofile --source ./src
+```
 
 ---
 
