@@ -174,6 +174,37 @@ export interface McpServerOptions {
 	historyDb?: string;
 }
 
+/**
+ * Drop the per-method lists nested inside the app and object breakdowns.
+ *
+ * Each breakdown row carries the FULL method list for that app or object, so a
+ * profile's methods are repeated once per app and again once per object: on a
+ * captured BC profile that is 378,000 characters of objectBreakdown and 80,000
+ * of appBreakdown, against 6,000 characters of the hotspots actually asked for.
+ * An MCP response is spent directly out of the calling agent's context window,
+ * so this is the difference between a usable tool and one that cannot be
+ * called twice.
+ *
+ * The breakdown ROWS stay — they are what analyze_profile advertises, and
+ * their totals are the useful part. Only the nested per-method arrays go; the
+ * top-level `hotspots` list already carries method detail, bounded by `top`.
+ */
+function withoutBreakdownMethods<T>(result: T): T {
+	const r = result as Record<string, unknown>;
+	const strip = (rows: unknown) =>
+		Array.isArray(rows)
+			? rows.map((row) => {
+					const { methods: _methods, ...rest } = row as Record<string, unknown>;
+					return rest;
+				})
+			: rows;
+	return {
+		...r,
+		...(r.appBreakdown ? { appBreakdown: strip(r.appBreakdown) } : {}),
+		...(r.objectBreakdown ? { objectBreakdown: strip(r.objectBreakdown) } : {}),
+	} as T;
+}
+
 export function createMcpServer(options?: McpServerOptions): McpServer {
 	const server = new McpServer({
 		name: "al-profiler",
@@ -320,10 +351,11 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 
 				// Build the output JSON: merge the trimmed fusion block (if any) into
 				// the result object without ever including unweightedFindings.
-				const outputJson =
+				const outputJson = withoutBreakdownMethods(
 					fusionBlock !== undefined
 						? { ...result, fusion: fusionBlock }
-						: result;
+						: result,
+				);
 
 				return {
 					content: [
@@ -572,9 +604,21 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
 					top,
 					includePatterns: false,
 				});
+				// What the tool advertises, and nothing else. Returning the whole
+				// AnalysisResult made the "quick, lighter" call the most expensive
+				// one in the server — 595,710 characters for `top: 6` against a
+				// captured profile, because the breakdowns carry every method.
+				// `patterns` stays, empty, because `includePatterns: false` is part
+				// of this tool's contract and a caller may check it is empty.
+				const summary = {
+					meta: result.meta,
+					summary: result.summary,
+					hotspots: result.hotspots,
+					patterns: result.patterns,
+				};
 				return {
 					content: [
-						{ type: "text" as const, text: JSON.stringify(result, null, 2) },
+						{ type: "text" as const, text: JSON.stringify(summary, null, 2) },
 					],
 				};
 			} catch (error) {
