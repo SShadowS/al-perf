@@ -801,3 +801,33 @@ describe("SQL nodes must not put raw statement text into finding text", () => {
 		expect(true).toBe(true);
 	});
 });
+
+describe("capture-kind parity — the same tree, sampled and instrumented", () => {
+	// The two capture kinds are structurally different: a SAMPLING profile
+	// carries SQL statement nodes and an IdleTime frame and derives selfTime
+	// from sample deltas, while an INSTRUMENTATION profile carries neither and
+	// derives selfTime from positionTicks. A detector verified on only one of
+	// them is verified on half the product.
+	test("recursive-call counts the chain identically on an instrumentation capture", async () => {
+		const parsed = await parseProfile(
+			`${FIXTURES}/recursion-plus-sibling-instr.alcpuprofile`,
+		);
+		expect(parsed.type).toBe("instrumentation");
+		const processed = processProfile(parsed);
+		const patterns = detectRecursion(processed);
+
+		expect(patterns).toHaveLength(1);
+		expect(patterns[0].description).toContain("2 times");
+
+		// selfTime comes from positionTicks here, not sample deltas — so this
+		// also pins that the impact sum is taken over the chain members under
+		// the instrumentation timing path.
+		const chainSelf = processed.allNodes
+			.filter((n) => [2, 3].includes(n.id))
+			.reduce((s, n) => s + n.selfTime, 0);
+		expect(patterns[0].impact).toBe(chainSelf);
+		const sibling = processed.nodeMap.get(6)!;
+		expect(sibling.selfTime).toBeGreaterThan(0);
+		expect(patterns[0].impact).not.toBe(chainSelf + sibling.selfTime);
+	});
+});

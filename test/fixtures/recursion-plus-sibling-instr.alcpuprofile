@@ -1,0 +1,200 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": {
+        "functionName": "OnRun",
+        "scriptId": "CodeUnit_50004",
+        "url": "al-preview://allang/Codeunit/50004/Codeunit_50004.dal",
+        "lineNumber": 10,
+        "columnNumber": 4
+      },
+      "hitCount": 1,
+      "children": [
+        2,
+        5
+      ],
+      "positionTicks": [
+        {
+          "line": 10,
+          "column": 4,
+          "ticks": 1,
+          "executionTime": 1000
+        }
+      ],
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "Mixed Caller Instr",
+        "objectId": 50004
+      },
+      "frameIdentifier": 1,
+      "startTime": 63791355211203262,
+      "endTime": 63791355211703262,
+      "isIncompleteMeasurement": false,
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 2,
+      "callFrame": {
+        "functionName": "Check",
+        "scriptId": "CodeUnit_50004",
+        "url": "al-preview://allang/Codeunit/50004/Codeunit_50004.dal",
+        "lineNumber": 20,
+        "columnNumber": 4
+      },
+      "hitCount": 1,
+      "children": [
+        3
+      ],
+      "positionTicks": [
+        {
+          "line": 20,
+          "column": 4,
+          "ticks": 1,
+          "executionTime": 2000
+        }
+      ],
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "Mixed Caller Instr",
+        "objectId": 50004
+      },
+      "frameIdentifier": 2,
+      "startTime": 63791355211203262,
+      "endTime": 63791355211703262,
+      "isIncompleteMeasurement": false,
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 3,
+      "callFrame": {
+        "functionName": "Check",
+        "scriptId": "CodeUnit_50004",
+        "url": "al-preview://allang/Codeunit/50004/Codeunit_50004.dal",
+        "lineNumber": 30,
+        "columnNumber": 4
+      },
+      "hitCount": 1,
+      "children": [],
+      "positionTicks": [
+        {
+          "line": 30,
+          "column": 4,
+          "ticks": 1,
+          "executionTime": 3000
+        }
+      ],
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "Mixed Caller Instr",
+        "objectId": 50004
+      },
+      "frameIdentifier": 2,
+      "startTime": 63791355211203262,
+      "endTime": 63791355211703262,
+      "isIncompleteMeasurement": false,
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 5,
+      "callFrame": {
+        "functionName": "Unrelated",
+        "scriptId": "CodeUnit_50004",
+        "url": "al-preview://allang/Codeunit/50004/Codeunit_50004.dal",
+        "lineNumber": 50,
+        "columnNumber": 4
+      },
+      "hitCount": 1,
+      "children": [
+        6
+      ],
+      "positionTicks": [
+        {
+          "line": 50,
+          "column": 4,
+          "ticks": 1,
+          "executionTime": 1500
+        }
+      ],
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "Mixed Caller Instr",
+        "objectId": 50004
+      },
+      "frameIdentifier": 5,
+      "startTime": 63791355211203262,
+      "endTime": 63791355211703262,
+      "isIncompleteMeasurement": false,
+      "isBuiltinCodeUnitCall": false
+    },
+    {
+      "id": 6,
+      "callFrame": {
+        "functionName": "Check",
+        "scriptId": "CodeUnit_50004",
+        "url": "al-preview://allang/Codeunit/50004/Codeunit_50004.dal",
+        "lineNumber": 60,
+        "columnNumber": 4
+      },
+      "hitCount": 1,
+      "children": [],
+      "positionTicks": [
+        {
+          "line": 60,
+          "column": 4,
+          "ticks": 1,
+          "executionTime": 9000
+        }
+      ],
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "Mixed Caller Instr",
+        "objectId": 50004
+      },
+      "frameIdentifier": 2,
+      "startTime": 63791355211203262,
+      "endTime": 63791355211703262,
+      "isIncompleteMeasurement": false,
+      "isBuiltinCodeUnitCall": false
+    }
+  ],
+  "startTime": 63791355211203262,
+  "endTime": 63791355211703262,
+  "samples": [
+    3,
+    6
+  ],
+  "timeDeltas": [
+    0,
+    100000
+  ],
+  "sampleExecutionTimes": [
+    3000,
+    9000
+  ]
+}

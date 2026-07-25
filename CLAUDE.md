@@ -94,7 +94,27 @@ AI findings are stored in `result.aiFindings[]` (typed `AIFinding[]`) and `resul
 4. **Source correlation** (optional, if `--source` provided): index AL files with tree-sitter-al, map hotspots to source, run anti-pattern queries → `SourceCorrelation[]`
 5. **Format output** (terminal/json/markdown) → stdout
 
-### Pattern Detection
+### Capture kinds — verify profile changes against BOTH
+
+`.alcpuprofile` comes in two structurally different kinds, and `detectProfileType`
+(`src/core/parser.ts`) picks them apart: `kind: 1` is **sampling**, while
+`sampleExecutionTimes` or per-node `positionTicks` mean **instrumentation**.
+They differ in ways that silently halve the coverage of any profile-side change:
+
+| | sampling | instrumentation |
+|---|---|---|
+| SQL statement nodes (`functionName` IS the SQL) | yes (181 in one capture) | none |
+| `IdleTime` frame | yes | none |
+| `selfTime` derived from | sample deltas | `positionTicks` |
+
+So a fix verified only on one kind is verified on half the product. Real captures
+to test against: `test/fixtures/batch-recorded/*.alcpuprofile` (sampling) and
+`U:/Git/bc-mdc-converter/fixtures/*.reference.alcpuprofile` (instrumentation);
+the minimal fixtures are `sampling-minimal` and `instrumentation-minimal`.
+Note the fixtures do NOT cover every real shape — see `isIdleNode`, where every
+fixture encoded `objectId: 0` and real sampling captures emit `-1`.
+
+### Pattern Detection### Pattern Detection
 
 Pattern detectors are composable functions with signature:
 ```typescript
