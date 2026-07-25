@@ -14,6 +14,11 @@ the same time. Measured end to end on a 573-file Business Central app:
 | warning | 389 | 335 |
 | info | 0 | 137 |
 
+A second theme runs through the rest: the tool could not be pointed at a large
+workspace at all, and several of its own outputs were unusable at real scale —
+a 595 KB "quick summary", a 1,028-character table cell, a crash dump in place
+of an error message.
+
 ### Heads-up before upgrading
 
 - **Source-correlated runs now report more critical findings, so a passing gate can start failing.** The 16 extra criticals above are real `modify-in-loop` / `insert-in-loop` / `record-op-in-loop` findings on code the indexer previously skipped — not a threshold change. If `gate --max-critical 0` runs in a pipeline, expect it to fail on code it used to pass, and budget a triage pass before upgrading. Profile-only gate verdicts (no `--source`) are unchanged.
@@ -34,6 +39,15 @@ the same time. Measured end to end on a 573-file Business Central app:
 - **`incomplete-setloadfields` drops to `warning` when the record's table is not in the index.** `Rec.SomeName` with no parentheses is a field read or a paren-less call to a table procedure, and nothing distinguishes them without the table's field list. Against a base-app or `.dependencies/` table the detector cannot support its own "will cause runtime errors" claim, so it no longer makes it.
 - **`nested-loops` requires the inner loop to touch the database.** A `for i := 1 to KeyRef.FieldCount` walking key fields through `FieldRef` is bounded by the key width and reaches no database. Nesting multiplies database cost only when the inner body does database work.
 
+### Fixed — scale and output
+
+- **A large workspace could not be indexed at all.** `parseALSource` returns a web-tree-sitter `Tree`, which holds WASM heap memory released only by an explicit `delete()`. Nothing ever called it, so every parsed file leaked its tree and the heap grew until it faulted — "Out of bounds memory access", then `Aborted()`, at roughly ten thousand files, which is inside the size of a real BC solution once dependencies are counted. A corpus that died at ~10,000 files now indexes 15,436 of them: 15,411 objects, 195,107 procedures. `buildSourceIndex` also had no per-file isolation, so one thrown parse cost every other result; failures are now collected per file with their reason and reported as `failedFiles` rather than being swallowed or fatal.
+- **The MCP server spent an agent's whole context on one call.** `get_hotspots` — documented "quick" and "lighter than analyze_profile" — returned 595,710 characters for `top: 6`, because every `appBreakdown` and `objectBreakdown` row carries the full method list for that app or object, repeated once per app and again per object. It now returns what it advertises (8.6 KB); `analyze_profile` keeps the breakdown rows and drops their nested method arrays.
+- **`--deep` billed about 20k tokens of method names per call.** The same nested method lists were 62% of the AI payload — 79,335 of 127,300 characters. The payload builder already stripped `tableBreakdown` as "noise without value"; this is the same thing, larger. Payloads roughly halve: 151k characters to 69k on a sampling capture.
+- **Bad input produced a crash dump instead of an error.** A truncated download or the wrong file answered with six lines of the parser's own source, a caret, and absolute paths into the install directory. Eight of eleven subcommands had no error handling at all, so this now lives at the entry point: `Error: <message>` on stderr, exit 1, and `AL_PERF_TRACE=1` for the stack when debugging the tool itself.
+- **SQL statement names broke every rendered table.** `isSqlStatement` required a space after the keyword, but BC emits statements it has already elided itself as `SELECT...WHERE (...)`. None of those were recognized, so no formatter truncated them and a 1,028-character statement went into a markdown table cell verbatim. Fixing the predicate also exposed five render sites that never truncated at all.
+- **Recursion double-counted a method's `totalTime`.** A node's `totalTime` already contains its descendants', but `aggregateByMethod` summed every node of a method, so a self-calling method was charged the same microseconds once per level: `PostItem` reported 254,702µs / 36% of a capture for a call that costs 127,351µs / 18%. This fed hotspots, the breakdowns, `explain_method` and `compareProfiles`. `drilldown_method` had the same bug plus a second one — it reported a summed total beside a single node's percentage, so its two headline numbers described different scopes and disagreed with `explain_method`.
+
 ### Fixed — the indexer could not see this code
 
 - **Argument-less calls written without parentheses were invisible.** Classic C/AL — `Customer.FindSet`, `SalesLine.Modify`, `until Customer.Next = 0` — parses as a member expression, not a call, and only calls were collected. One real app contains 336 of them (101 `Next`, 91 `FindSet`, 43 `Insert`, 36 `Get`, 25 `FindFirst`, 23 `Modify`, 12 `FindLast`, 5 `Delete`); whole procedures indexed with zero record operations, showing two nested record loops as pure syntax with no database access. Worse, they were misread as FIELD accesses: `RecRef.Modify` became a field named "modify", which produced `critical` findings demanding that "modify" be added to a `SetLoadFields` list.
@@ -50,6 +64,10 @@ the same time. Measured end to end on a 573-file Business Central app:
 - **`unfiltered-findset` missed three ways a record gets filtered** — `SetView`, `CopyFilters` (which filters the receiver) and `CopyFilter` (which filters the record owning its *second* argument, not the receiver). `SetCurrentKey` deliberately still counts as unfiltered: it picks the sort order and restricts nothing.
 - **`RecordRef` receivers were treated as records** by `unfiltered-findset` and `missing-setloadfields`. `FindSet`/`FindFirst`/`FindLast` match by method name and `RecordRef` has all three; its filters live on `FieldRef`, so "add SetRange" and "add SetLoadFields" are advice for a different API.
 - **`incomplete-setloadfields` reported table method calls as forgotten fields.** `Email.HasMoreDocuments` is `internal procedure HasMoreDocuments(): Boolean` — reported `critical`, claiming runtime errors, about a method call. Accessed names are now cross-checked against the table's fields when the table is known.
+
+- **`incomplete-setloadfields` flagged primary key fields.** BC always loads the primary key — `SetLoadFields` cannot exclude the fields that identify the record — so reporting one as forgotten claimed a runtime error over something that cannot happen. Only visible on a corpus with its tables in-tree: 86 of 193 findings there flagged nothing else, and the detector drops to 94 findings with `critical` going 182 to 83.
+- **`unindexed-filter` flagged FlowFilters and SystemId.** A FlowFilter is not a table column; it parameterises FlowField calculation and has no index by definition, so it cannot cause the scan being warned about. SystemId carries its own unique index. On that same corpus `"Date Filter"` was the single most-flagged field — 450 of 10,352 — with SystemId another 147; the detector drops to 9,077.
+- **The escape analysis counted metadata calls as escapes.** `FieldNo`, `FieldCaption`, `Mark` and friends return a field number, a caption or set a flag; none reads a field value, so none can starve a `SetLoadFields`. Seventeen findings on a second codebase move back from info to warning.
 
 ### Fixed — profile analysis
 
