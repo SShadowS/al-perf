@@ -553,3 +553,18 @@ describe("runSourceOnlyDetectors", () => {
 		expect(severities.size).toBeGreaterThan(1);
 	});
 });
+
+describe("unindexed-filter on a record parameter", () => {
+	test("resolves a parameter's table so the filter can be judged at all", async () => {
+		// detectUnindexedFilters needs variable.isRecord + tableName. With
+		// parameters unindexed, every filter on a parameter record was skipped
+		// silently — a recall hole, not a precision one.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const f = detectUnindexedFilters(index).find((p) =>
+			p.involvedMethods.some((m) => m.includes("FilterParameterRecord")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.title).toContain("Description");
+		expect(f!.title).toContain("Key Test Table");
+	});
+});

@@ -1169,3 +1169,26 @@ describe("source-match collision — codeunit and table sharing id 50999", () =>
 		expect(calc[0].involvedMethods[0]).not.toContain("Table");
 	});
 });
+
+describe("record parameters reach the detectors", () => {
+	it("does not report inserts into a temporary record PARAMETER", () => {
+		// The buffer's temp-ness is declared on the parameter. Before parameters
+		// were indexed, isTemporaryOp could not see it and every Insert into a
+		// caller-owned buffer read as a SQL INSERT per row.
+		const method = makeMethod({
+			functionName: "FillBuffer",
+			objectType: "Codeunit",
+			objectId: 50960,
+		});
+		expect(detectInsertInLoop([method], sourceIndex)).toHaveLength(0);
+	});
+
+	it("still reports inserts into a non-temporary record parameter", () => {
+		const method = makeMethod({
+			functionName: "InsertIntoRealParameterRecord",
+			objectType: "Codeunit",
+			objectId: 50960,
+		});
+		expect(detectInsertInLoop([method], sourceIndex)).toHaveLength(1);
+	});
+});

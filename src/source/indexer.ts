@@ -630,7 +630,7 @@ const EXTERNAL_HTTP_CALL_CASE_MAP: Record<string, ExternalCallInfo["type"]> = {
  * receiver's actual declared type rather than by method name alone.
  *
  * KNOWN LIMITATION: `variables` comes from `extractVariables(procedureNode)`,
- * which only reads a member's own `var_section` -- it never sees an
+ * which reads a member's own `parameter_list` and `var_section` -- it never sees an
  * object-level `var` section declared above the procedures (a normal way to
  * declare and reuse a global `HttpClient` across procedures in BC). For
  * `external-call-in-loop`, this declared-type gate IS the detector (unlike
@@ -775,15 +775,80 @@ function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
 /**
  * Extract variable declarations from a procedure/trigger node's var_section.
  *
- * KNOWN LIMITATION: reads only `procedureNode`'s own `var_section`, never an
+ * Reads a member's own `parameter_list` AND its own `var_section`.
+ *
+ * KNOWN LIMITATION: never an
  * object-level `var` section declared above the procedures/triggers (a
  * codeunit/page/report/table global). Callers relying on this for
  * declared-type resolution (e.g. `buildVariableTypeMap`, above) will not see
  * object-level global variables. See that function's doc comment for the
  * concrete impact on `external-call-in-loop`.
  */
+/**
+ * Build a `VariableInfo` from a node carrying an `identifier` and a
+ * `type_specification` — the shape a `variable_declaration` and a `parameter`
+ * share. Returns undefined when either part is missing.
+ */
+function variableFromTypedNode(node: SyntaxNode): VariableInfo | undefined {
+	const nameNode = node.namedChildren.find((c) => c.type === "identifier");
+	const typeSpecNode = node.namedChildren.find(
+		(c) => c.type === "type_specification",
+	);
+	if (!nameNode || !typeSpecNode) return undefined;
+
+	const recordTypeNode = typeSpecNode.namedChildren.find(
+		(c) => c.type === "record_type",
+	);
+	const isTemporary =
+		recordTypeNode?.namedChildren.some((c) => c.type === "temporary_keyword") ??
+		false;
+	const isRecord = recordTypeNode !== undefined;
+
+	let tableName: string | undefined;
+	if (recordTypeNode) {
+		const quotedId = recordTypeNode.namedChildren.find(
+			(c) => c.type === "quoted_identifier",
+		);
+		if (quotedId) {
+			tableName = stripQuotes(quotedId.text);
+		} else {
+			const id = recordTypeNode.namedChildren.find(
+				(c) => c.type === "identifier",
+			);
+			if (id) tableName = id.text;
+		}
+	}
+
+	return {
+		name: nameNode.text,
+		typeStr: typeSpecNode.text,
+		isRecord,
+		tableName,
+		isTemporary,
+		line: node.startPosition.row + 1,
+	};
+}
+
 function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 	const variables: VariableInfo[] = [];
+
+	// PARAMETERS count as declarations for every consumer of this list. A
+	// `temporary` buffer is routinely passed IN rather than declared locally
+	// (`procedure Fill(var TempBuf: Record "Sales Line" temporary)`), and with
+	// parameters unindexed `isTemporaryOp` could not see that — so each Insert
+	// into a caller-owned in-memory buffer read as a SQL INSERT per row. The
+	// same blindness stopped `unindexed-filter` and calcfields severity from
+	// resolving a parameter record's table at all, which is a recall hole
+	// rather than a precision one. A `parameter` node carries the same
+	// identifier + type_specification shape as a `variable_declaration`.
+	for (const child of procedureNode.namedChildren) {
+		if (child.type !== "parameter_list") continue;
+		for (const param of child.namedChildren) {
+			if (param.type !== "parameter") continue;
+			const info = variableFromTypedNode(param);
+			if (info) variables.push(info);
+		}
+	}
 
 	for (const child of procedureNode.namedChildren) {
 		if (child.type !== "var_section") continue;
@@ -795,52 +860,8 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 		const declContainer = varBody ?? child;
 		for (const varDecl of declContainer.namedChildren) {
 			if (varDecl.type !== "variable_declaration") continue;
-
-			const nameNode = varDecl.namedChildren.find(
-				(c) => c.type === "identifier",
-			);
-			const typeSpecNode = varDecl.namedChildren.find(
-				(c) => c.type === "type_specification",
-			);
-
-			if (!nameNode || !typeSpecNode) continue;
-
-			const name = nameNode.text;
-			const typeStr = typeSpecNode.text;
-
-			// Check if Record type
-			const recordTypeNode = typeSpecNode.namedChildren.find(
-				(c) => c.type === "record_type",
-			);
-			const isTemporary =
-				recordTypeNode?.namedChildren.some(
-					(c) => c.type === "temporary_keyword",
-				) ?? false;
-			const isRecord = recordTypeNode !== undefined;
-
-			let tableName: string | undefined;
-			if (isRecord && recordTypeNode) {
-				const quotedId = recordTypeNode.namedChildren.find(
-					(c) => c.type === "quoted_identifier",
-				);
-				if (quotedId) {
-					tableName = stripQuotes(quotedId.text);
-				} else {
-					const id = recordTypeNode.namedChildren.find(
-						(c) => c.type === "identifier",
-					);
-					if (id) tableName = id.text;
-				}
-			}
-
-			variables.push({
-				name,
-				typeStr,
-				isRecord,
-				tableName,
-				isTemporary,
-				line: varDecl.startPosition.row + 1,
-			});
+			const info = variableFromTypedNode(varDecl);
+			if (info) variables.push(info);
 		}
 	}
 

@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(32);
-		expect(index.objects.size).toBe(32);
+		expect(index.files.length).toBe(33);
+		expect(index.objects.size).toBe(33);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -482,5 +482,41 @@ describe("paren-less (classic C/AL) calls", () => {
 		const proc = result.procedures.find((p) => p.name === "ConvertSetups")!;
 		const modify = proc.features.recordOps.find((o) => o.type === "Modify")!;
 		expect(modify.insideLoop).toBe(true);
+	});
+});
+
+describe("record parameters", () => {
+	it("indexes parameters alongside var-section declarations", async () => {
+		// extractVariables read only the var_section, so every record PARAMETER
+		// was invisible: a `temporary` one could not be recognized as temporary,
+		// and a plain one's table could not be resolved for the detectors that
+		// need it (unindexed-filter, calcfields severity).
+		const result = (await indexALFile(
+			resolve(fixturesDir, "CodeUnitParams.al"),
+			fixturesDir,
+		))!;
+		const proc = result.procedures.find((p) => p.name === "FillBuffer")!;
+		const temp = proc.features.variables.find((v) => v.name === "TempBuffer")!;
+		expect(temp).toBeDefined();
+		expect(temp.isRecord).toBe(true);
+		expect(temp.isTemporary).toBe(true);
+		expect(temp.tableName).toBe("Sales Line");
+
+		const source = proc.features.variables.find(
+			(v) => v.name === "SourceLine",
+		)!;
+		expect(source.isRecord).toBe(true);
+		expect(source.isTemporary).toBe(false);
+	});
+
+	it("keeps var-section declarations when a procedure has both", async () => {
+		const result = (await indexALFile(
+			resolve(fixturesDir, "CodeUnit50100.al"),
+			fixturesDir,
+		))!;
+		const proc = result.procedures.find((p) => p.name === "ProcessRecords")!;
+		expect(
+			proc.features.variables.find((v) => v.name === "SalesLine"),
+		).toBeDefined();
 	});
 });
