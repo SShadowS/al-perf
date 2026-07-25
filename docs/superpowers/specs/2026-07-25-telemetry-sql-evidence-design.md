@@ -491,8 +491,8 @@ dimension Gate 0 finds missing on a given tenant.
 
 The layer shipped on 2026-07-25 (65 commits, merged to local master at `45978c4`).
 Three things were deliberately deferred, with rulings, and none blocked use.
-**All three were closed later the same day**; the original rulings are kept below
-with their resolutions.
+**All of them were closed later the same day**; the original rulings are kept
+below with their resolutions, including the one residual deliberately left open.
 
 1. ~~**`signalAvailability` is not persisted, so `lifecycle digest` cannot render
    it.**~~ **CLOSED.** §9 says the array "stays on the batch for the CLI, JSON and
@@ -528,10 +528,16 @@ with their resolutions.
    `^[A-Za-z]+$` rejects, costing the whole window on one bad row~~ **CLOSED** —
    `safeClientType` drops just the field at both normalizers, so the row's timing
    and finding data survive and only the client-type dimension is lost (still not
-   observed on measured data; all five production values are letters-only). Still
-   open: the non-split statement tests use the split-mode column fixture, which is
-   the same shape-fidelity assumption that produced the NaN defect during
-   implementation.
+   observed on measured data; all five production values are letters-only).
+   ~~The non-split statement tests use the split-mode column fixture, the same
+   shape-fidelity assumption that produced the NaN defect during
+   implementation.~~ **CLOSED** — the statement fixture now parses its column
+   list out of `buildStatementKqlQuery`'s own `| project` line per mode, and
+   builds each row by name before ordering it against those columns, so a
+   fixture can no longer describe a response the query cannot emit. Pinned by a
+   test asserting the non-split column set carries no `aadTenantId`/
+   `environmentName`, verified to fail when the derivation is forced back to
+   the split set.
 
 ## 14. Risks
 

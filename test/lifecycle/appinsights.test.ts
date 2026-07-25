@@ -1464,54 +1464,120 @@ describe("pullTelemetrySplit — round-trip through parseTelemetryBatch (behavio
 // Fix Round 1: these column names/order MUST match buildStatementKqlQuery's
 // own `| project` line exactly — a fixture inventing a different column set
 // (e.g. one the query cannot actually emit) is what let the NaN bug pass a
-// green suite the first time. Pinned by the "projects exactly the columns"
-// tests above.
-const STATEMENT_COLUMNS = [
-	{ name: "extensionId", type: "string" },
-	{ name: "alObjectType", type: "string" },
-	{ name: "alObjectId", type: "long" },
-	{ name: "alStackTrace", type: "string" },
-	{ name: "sqlStatement", type: "string" },
-	{ name: "clientType", type: "string" },
-	{ name: "aadTenantId", type: "string" },
-	{ name: "environmentName", type: "string" },
-	{ name: "occurrences", type: "long" },
-	{ name: "measuredTotalMs", type: "real" },
-	{ name: "thresholdMs", type: "real" },
-];
+// green suite the first time.
+//
+// So they are not hand-listed at all: they are PARSED OUT of the query the
+// production code builds, per mode. A hand-written copy drifted once already
+// — every statement test used the split-mode column set, including the
+// non-split ones, which the query never projects aadTenantId/environmentName
+// for. That was harmless only because makeCellReader looks columns up by
+// name and ignores extras; it was still a fixture describing a response
+// Azure could not send.
+const STATEMENT_COLUMN_TYPES: Record<string, string> = {
+	alObjectId: "long",
+	occurrences: "long",
+	measuredTotalMs: "real",
+	thresholdMs: "real",
+};
 
-function statementTableResponse(rows: unknown[][]) {
+function statementColumns(
+	split: boolean,
+): Array<{ name: string; type: string }> {
+	const projectLine = buildStatementKqlQuery("2026-01-01T00:00:00.000Z", split)
+		.split("\n")
+		.find((l) => l.trim().startsWith("| project"));
+	if (!projectLine) throw new Error("statement query has no | project line");
+	return projectLine
+		.trim()
+		.replace(/^\| project /, "")
+		.split(",")
+		.map((name) => name.trim())
+		.map((name) => ({ name, type: STATEMENT_COLUMN_TYPES[name] ?? "string" }));
+}
+
+describe("statement fixture shape fidelity", () => {
+	it("non-split fixture columns carry no split-only dimensions", () => {
+		// The exact drift this derivation removes: every statement test used to
+		// share the SPLIT column list, so the non-split ones described a
+		// response carrying aadTenantId/environmentName that the non-split
+		// query never projects. Harmless only because makeCellReader looks up
+		// by name and ignores extras.
+		const names = statementColumns(false).map((c) => c.name);
+		expect(names).not.toContain("aadTenantId");
+		expect(names).not.toContain("environmentName");
+		expect(names).toContain("sqlStatement");
+		expect(names).toContain("measuredTotalMs");
+	});
+
+	it("split fixture columns carry them, in the query's own order", () => {
+		const names = statementColumns(true).map((c) => c.name);
+		expect(names).toContain("aadTenantId");
+		expect(names).toContain("environmentName");
+		// Position matters: rows are emitted positionally against these.
+		expect(names.indexOf("aadTenantId")).toBeGreaterThan(
+			names.indexOf("clientType"),
+		);
+		expect(names.indexOf("occurrences")).toBeGreaterThan(
+			names.indexOf("environmentName"),
+		);
+	});
+
+	it("a row's values line up with the columns it will be read against", () => {
+		for (const split of [false, true]) {
+			const cols = statementColumns(split);
+			const row = makeStatementRow(
+				{ aadTenantId: "t", sqlStatement: "SELECT 1" },
+				split,
+			);
+			expect(row).toHaveLength(cols.length);
+			expect(row[cols.findIndex((c) => c.name === "sqlStatement")]).toBe(
+				"SELECT 1",
+			);
+		}
+	});
+});
+
+function statementTableResponse(rows: unknown[][], split: boolean) {
 	return {
-		tables: [{ name: "PrimaryTable", columns: STATEMENT_COLUMNS, rows }],
+		tables: [{ name: "PrimaryTable", columns: statementColumns(split), rows }],
 	};
 }
 
-function makeStatementRow(opts: {
-	appId?: string;
-	objectId?: number;
-	stackTrace?: string;
-	sqlStatement: string;
-	clientType?: string;
-	occurrences?: number;
-	measuredTotalMs?: number;
-	thresholdMs?: number;
-	aadTenantId: string;
-	environmentName?: string;
-}): unknown[] {
-	return [
-		opts.appId ?? "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		"Codeunit",
-		opts.objectId ?? 50100,
-		opts.stackTrace ??
+function makeStatementRow(
+	opts: {
+		appId?: string;
+		objectId?: number;
+		stackTrace?: string;
+		sqlStatement: string;
+		clientType?: string;
+		occurrences?: number;
+		measuredTotalMs?: number;
+		thresholdMs?: number;
+		aadTenantId: string;
+		environmentName?: string;
+	},
+	split: boolean,
+): unknown[] {
+	// Values keyed by NAME, then emitted in whatever order the query itself
+	// projects for this mode — so a reordered or dropped column in
+	// buildStatementKqlQuery reshapes the fixture instead of silently
+	// misaligning it.
+	const byName: Record<string, unknown> = {
+		extensionId: opts.appId ?? "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		alObjectType: "Codeunit",
+		alObjectId: opts.objectId ?? 50100,
+		alStackTrace:
+			opts.stackTrace ??
 			'AL CallStack: "Sales Post"(Codeunit 50100).ProcessLine line 1',
-		opts.sqlStatement,
-		opts.clientType ?? "",
-		opts.aadTenantId,
-		opts.environmentName ?? "PROD",
-		opts.occurrences ?? 1,
-		opts.measuredTotalMs ?? 1000,
-		opts.thresholdMs ?? 750,
-	];
+		sqlStatement: opts.sqlStatement,
+		clientType: opts.clientType ?? "",
+		aadTenantId: opts.aadTenantId,
+		environmentName: opts.environmentName ?? "PROD",
+		occurrences: opts.occurrences ?? 1,
+		measuredTotalMs: opts.measuredTotalMs ?? 1000,
+		thresholdMs: opts.thresholdMs ?? 750,
+	};
+	return statementColumns(split).map((c) => byName[c.name]);
 }
 
 describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", () => {
@@ -1530,17 +1596,26 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 			const decoded = decodeURIComponent(url);
 			if (decoded.includes("top-nested")) {
 				return okResponse(
-					statementTableResponse([
-						makeStatementRow({
-							aadTenantId: TENANT_X,
-							sqlStatement: 'SELECT "No_" FROM dbo."CRONUS$Sales Header"',
-						}),
-						makeStatementRow({
-							aadTenantId: TENANT_Y,
-							sqlStatement:
-								'SELECT "Entry No_" FROM dbo."CRONUS$Item Ledger Entry"',
-						}),
-					]),
+					statementTableResponse(
+						[
+							makeStatementRow(
+								{
+									aadTenantId: TENANT_X,
+									sqlStatement: 'SELECT "No_" FROM dbo."CRONUS$Sales Header"',
+								},
+								true,
+							),
+							makeStatementRow(
+								{
+									aadTenantId: TENANT_Y,
+									sqlStatement:
+										'SELECT "Entry No_" FROM dbo."CRONUS$Item Ledger Entry"',
+								},
+								true,
+							),
+						],
+						true,
+					),
 				);
 			}
 			return okResponse(
@@ -1604,7 +1679,7 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 		const fetchImpl = (async (url: string) => {
 			const decoded = decodeURIComponent(url);
 			if (decoded.includes("top-nested")) {
-				return okResponse(statementTableResponse([]));
+				return okResponse(statementTableResponse([], true));
 			}
 			return okResponse(
 				splitPrimaryTableResponse([
@@ -1654,13 +1729,19 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 			const decoded = decodeURIComponent(url);
 			if (decoded.includes("top-nested")) {
 				return okResponse(
-					statementTableResponse([
-						makeStatementRow({
-							clientType: "Background",
-							aadTenantId: "",
-							sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
-						}),
-					]),
+					statementTableResponse(
+						[
+							makeStatementRow(
+								{
+									clientType: "Background",
+									aadTenantId: "",
+									sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+								},
+								false,
+							),
+						],
+						false,
+					),
 				);
 			}
 			// The aggregate RT0005 query: one signal, but under a DIFFERENT
@@ -1704,12 +1785,15 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 					tables: [
 						{
 							name: "PrimaryTable",
-							columns: STATEMENT_COLUMNS,
+							columns: statementColumns(false),
 							rows: [
-								makeStatementRow({
-									aadTenantId: "",
-									sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
-								}),
+								makeStatementRow(
+									{
+										aadTenantId: "",
+										sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+									},
+									false,
+								),
 							],
 						},
 					],
@@ -1741,7 +1825,7 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 		const fetchImpl = (async (url: string) => {
 			const decoded = decodeURIComponent(url);
 			if (decoded.includes("top-nested")) {
-				return okResponse(statementTableResponse([]));
+				return okResponse(statementTableResponse([], false));
 			}
 			return okResponse(primaryTableResponse([]));
 		}) as typeof fetch;
@@ -1771,25 +1855,37 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 			const decoded = decodeURIComponent(url);
 			if (decoded.includes("top-nested")) {
 				return okResponse(
-					statementTableResponse([
-						makeStatementRow({
-							aadTenantId: TENANT_X,
-							environmentName: "PROD",
-							sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
-						}),
-						// TENANT_Y has statement rows but no signal rows at all --
-						// no group is ever formed for it in groupsByKey.
-						makeStatementRow({
-							aadTenantId: TENANT_Y,
-							environmentName: "PROD",
-							sqlStatement: 'SELECT "b" FROM dbo."CRONUS$T2"',
-						}),
-						makeStatementRow({
-							aadTenantId: TENANT_Y,
-							environmentName: "PROD",
-							sqlStatement: 'SELECT "c" FROM dbo."CRONUS$T3"',
-						}),
-					]),
+					statementTableResponse(
+						[
+							makeStatementRow(
+								{
+									aadTenantId: TENANT_X,
+									environmentName: "PROD",
+									sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+								},
+								true,
+							),
+							// TENANT_Y has statement rows but no signal rows at all --
+							// no group is ever formed for it in groupsByKey.
+							makeStatementRow(
+								{
+									aadTenantId: TENANT_Y,
+									environmentName: "PROD",
+									sqlStatement: 'SELECT "b" FROM dbo."CRONUS$T2"',
+								},
+								true,
+							),
+							makeStatementRow(
+								{
+									aadTenantId: TENANT_Y,
+									environmentName: "PROD",
+									sqlStatement: 'SELECT "c" FROM dbo."CRONUS$T3"',
+								},
+								true,
+							),
+						],
+						true,
+					),
 				);
 			}
 			return okResponse(
@@ -1827,15 +1923,21 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 			const decoded = decodeURIComponent(url);
 			if (decoded.includes("top-nested")) {
 				return okResponse(
-					statementTableResponse([
-						makeStatementRow({
-							aadTenantId: TENANT_X,
-							// Absent -> null, differs from the signal row's "PROD" below,
-							// so the two land in DIFFERENT split groups.
-							environmentName: "",
-							sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
-						}),
-					]),
+					statementTableResponse(
+						[
+							makeStatementRow(
+								{
+									aadTenantId: TENANT_X,
+									// Absent -> null, differs from the signal row's "PROD" below,
+									// so the two land in DIFFERENT split groups.
+									environmentName: "",
+									sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+								},
+								true,
+							),
+						],
+						true,
+					),
 				);
 			}
 			return okResponse(
