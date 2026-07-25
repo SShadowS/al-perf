@@ -377,7 +377,17 @@ produces no group — which the digest reports as "not observed this window", ne
 Rendering rule: a finding renders "no slow statement crossed the threshold" **only** when availability
 shows the signal was queried, returned without error, and was not truncated. Otherwise the rendering
 names the actual reason. Availability reaches an issue the same way evidence does (§8); the structured
-array stays on the batch for the CLI, JSON and the digest.
+array stays on the batch for the CLI and JSON.
+
+**Not wired to the digest (final review, F3).** `digest.ts`'s renderer accepts a `signalAvailability`
+option and formats it into the same wording as §8, but nothing currently supplies that option with real
+data: `signalAvailability` is not persisted anywhere — absent from the lifecycle store's schema, not
+passed at the `lifecycle digest` CLI command's `buildDigest` call site
+(`src/cli/commands/lifecycle.ts`), and dropped from `metrics.json` on the web ingest path
+(`web/handlers/ingest.ts`). So today, per-window availability is visible in `lifecycle pull-telemetry`'s
+own output and in a finding's evidence text, but not in `lifecycle digest`. Persisting
+`signalAvailability` so the digest can surface it too is a tracked follow-up, deliberately not attempted
+here — see `docs/telemetry-recipe.md`'s "Window completeness" section, which carries the matching note.
 
 **Idempotency note.** `profileId` for split pulls is a content hash over `[tenant, stream, batch]`
 (`src/cli/commands/lifecycle.ts:659-661`), so adding `signalAvailability` changes it. A re-pull of the

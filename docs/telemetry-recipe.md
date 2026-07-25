@@ -728,9 +728,9 @@ Two different failures read very differently:
   same as losing the underlying finding; letting it suppress the absence
   pass would needlessly delay resolving problems that are actually fixed.
 
-`lifecycle digest` and a finding's issue body (§8) both surface whichever
-signals failed (by id, not by pull-wide row counts — see below), each kind
-of failure in its own sentence:
+A finding's persisted evidence text (§8) surfaces whichever signals failed
+(by id, not by pull-wide row counts — see below), each kind of failure in
+its own sentence:
 
 ```
 > Signals unavailable this window: RT0005 — absence not counted for them.
@@ -746,3 +746,15 @@ so those two integers are pull-wide, not tenant-scoped), and the enrichment
 line never implies findings went unobserved — only the "Signals
 unavailable" line, driven by a failed RT0018/RT0005 signal query, carries
 that implication.
+
+**`lifecycle digest` does not render this today.** `digest.ts`'s renderer
+supports the same two-sentence wording (plus a third for `truncated`), but
+`signalAvailability` is not currently persisted anywhere: it's absent from
+the lifecycle store's schema, the `lifecycle digest` CLI command doesn't
+pass it to `buildDigest`, and the web ingest path drops it before writing
+`metrics.json`. So as of this writing, per-window signal availability is
+visible in `lifecycle pull-telemetry`'s own output and in a finding's
+evidence text (the block above) — but **not** in `lifecycle digest`, even
+though nothing in the digest renderer itself is broken. Persisting
+`signalAvailability` so the digest can surface it too is a tracked
+follow-up, not implemented here.
