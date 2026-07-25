@@ -261,4 +261,14 @@ describe("redactSqlForSink", () => {
 		expect(withGuid?.table).toBe("Sample Table");
 		expect(withGuid?.table).not.toContain("CRONUS");
 	});
+
+	test("C3: fails CLOSED on a 3-part identifier whose 3rd segment isn't a GUID", () => {
+		// "ACME$HOLDING$Sales Header" has no GUID anywhere in it -- parts[1]
+		// ("HOLDING") is just as likely a second company-name fragment as a
+		// real table, so this must drop the whole statement rather than guess.
+		const out = redactSqlForSink(
+			'SELECT "No_" FROM dbo."ACME$HOLDING$Sales Header"',
+		);
+		expect(out).toBeNull();
+	});
 });

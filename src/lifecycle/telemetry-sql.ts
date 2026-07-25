@@ -234,7 +234,14 @@ function logicalIdentifier(raw: string): string | null {
 	const parts = raw.split("$");
 	if (parts.length === 1) return parts[0];
 	if (parts.length === 2) return GUID_RE.test(parts[1]) ? parts[0] : parts[1];
-	if (parts.length === 3) return parts[1];
+	// Company$Table$guid: parts[1] is the table only when parts[2] really is
+	// the extension GUID it claims to be. An unrecognized 3rd segment means
+	// this isn't that shape at all — parts[1] could just as easily be a
+	// second company-name fragment (e.g. "ACME$HOLDING$Sales Header" has no
+	// GUID anywhere in it) — so guessing wrong here would print a company
+	// fragment as if it were the table name. Mirrors parseSqlTable's own
+	// 3-part rule (src/core/sql-node.ts), which already GUID-checks parts[2].
+	if (parts.length === 3) return GUID_RE.test(parts[2]) ? parts[1] : null;
 	return null;
 }
 
