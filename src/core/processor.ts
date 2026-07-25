@@ -2,10 +2,26 @@ import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import type { ParsedProfile, RawProfileNode } from "../types/profile.js";
 import { normalizeObjectType } from "./object-types.js";
 
+/**
+ * The platform's idle frame — time the session spent doing nothing, which is
+ * not work and must not appear as a hotspot, a breakdown row, or a regression.
+ *
+ * `objectId <= 0`, not `=== 0`: every fixture in this repo encodes 0, and the
+ * guard was written against them, but a captured BC profile emits the same
+ * frame with objectId -1. So on REAL data idle was never excluded — it flowed
+ * through aggregateByMethod into the hotspots, the app/object breakdowns and
+ * compareProfiles, where it surfaced as a "regression" of 2599 -> 3910
+ * microseconds of doing nothing. The whole suite stayed green because no
+ * fixture had ever seen the shape real captures use.
+ *
+ * The id bound is still checked rather than matching on the name alone: a
+ * partner's own procedure called `IdleTime` lives in a user object (id well
+ * above zero) and must still be analyzed.
+ */
 export function isIdleNode(node: ProcessedNode): boolean {
 	return (
 		node.callFrame.functionName === "IdleTime" &&
-		node.applicationDefinition.objectId === 0
+		node.applicationDefinition.objectId <= 0
 	);
 }
 

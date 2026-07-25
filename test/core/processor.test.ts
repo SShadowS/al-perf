@@ -300,3 +300,29 @@ describe("countSampleAppearances", () => {
 		expect(result.size).toBe(0);
 	});
 });
+
+describe("isIdleNode — real capture shapes", () => {
+	function idleNodeWith(objectId: number) {
+		return {
+			callFrame: { functionName: "IdleTime" },
+			applicationDefinition: { objectType: "System", objectName: "", objectId },
+		} as unknown as Parameters<typeof isIdleNode>[0];
+	}
+
+	test("recognizes the IdleTime frame a real BC capture emits (objectId -1)", () => {
+		// Every fixture in this repo encodes objectId 0, and the guard was
+		// written against them. A captured BC profile emits the same frame with
+		// objectId -1, so idle was NOT excluded on real data: it flowed into
+		// aggregateByMethod and therefore into hotspots, the app/object
+		// breakdowns, and compareProfiles — where it surfaced as a "regression"
+		// of 2599 -> 3910 microseconds of doing nothing.
+		expect(isIdleNode(idleNodeWith(-1))).toBe(true);
+		expect(isIdleNode(idleNodeWith(0))).toBe(true);
+	});
+
+	test("does not swallow a user method that happens to be called IdleTime", () => {
+		// The objectId guard exists so a partner's own procedure named IdleTime
+		// is still analyzed. Platform frames carry 0 or -1; user objects do not.
+		expect(isIdleNode(idleNodeWith(50100))).toBe(false);
+	});
+});
