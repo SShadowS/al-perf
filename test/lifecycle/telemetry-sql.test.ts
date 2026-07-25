@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	parseAlStackFrame,
+	redactSqlForSink,
 	telemetryRoutineKey,
 } from "../../src/lifecycle/telemetry-sql.js";
 
@@ -101,5 +102,110 @@ describe("telemetryRoutineKey", () => {
 		const routine1 = telemetryRoutineKey("abc", "x|customtype", 80, "OnRun");
 		const routine2 = telemetryRoutineKey("abc|x", "customtype", 80, "OnRun");
 		expect(routine1).not.toBe(routine2);
+	});
+});
+
+describe("redactSqlForSink", () => {
+	test("strips the company prefix and keeps the logical table", () => {
+		const out = redactSqlForSink(
+			'SELECT "No_" FROM dbo."CRONUS Danmark A_S$Sales Header" WHERE "No_"=@0',
+		);
+		expect(out?.table).toBe("Sales Header");
+		expect(out?.text).not.toContain("CRONUS");
+	});
+
+	test("strips the database name from a 3-part reference", () => {
+		const out = redactSqlForSink(
+			'SELECT "No_" FROM "SQLDATABASE".dbo."CRONUS$Sales Header"',
+		);
+		expect(out?.text).not.toContain("SQLDATABASE");
+		expect(out?.text).not.toContain("CRONUS");
+	});
+
+	test("strips the company from EVERY reference, not just the first", () => {
+		const out = redactSqlForSink(
+			'SELECT a."No_" FROM dbo."CRONUS$Sales Header" a JOIN dbo."CRONUS$Sales Line" b ON a."No_"=b."Document No_"',
+		);
+		expect(out?.text).not.toContain("CRONUS");
+		expect(out?.text).toContain("Sales Line");
+	});
+
+	test("blanks string, unicode and hex literals", () => {
+		const out = redactSqlForSink(
+			'SELECT * FROM dbo."CRONUS$Cust" WHERE "Name"=\'Acme Ltd\' AND "X"=N\'Ünïcode\' AND "B"=0xDEADBEEF',
+		);
+		expect(out?.text).not.toContain("Acme");
+		expect(out?.text).not.toContain("nïcode");
+		expect(out?.text).not.toContain("DEADBEEF");
+	});
+
+	test("collapses a long column list and reports the count", () => {
+		const cols = Array.from({ length: 47 }, (_, i) => `"F${i}"`).join(",");
+		const out = redactSqlForSink(`SELECT ${cols} FROM dbo."CRONUS$Sales Line"`);
+		expect(out?.columnCount).toBe(47);
+		expect(out?.text).toContain("+42 more");
+	});
+
+	test("strips comments", () => {
+		const out = redactSqlForSink(
+			'SELECT "No_" /* customer ACME wants this */ FROM dbo."CRONUS$Cust"',
+		);
+		expect(out?.text).not.toContain("ACME");
+	});
+
+	test("drops the trailing partial of a truncated statement and flags it", () => {
+		const out = redactSqlForSink(
+			'SELECT * FROM dbo."CRONUS$Cust" WHERE "Name"=\'Acme Lt',
+		);
+		expect(out?.truncated).toBe(true);
+		expect(out?.text).not.toContain("Acme");
+	});
+
+	test("strips the company from an aliased FROM while keeping alias-qualified columns", () => {
+		// The shape Gate 0 found in real RT0005 rows: the company-prefixed
+		// physical name is in the FROM clause, and the projection references a
+		// numeric table alias.
+		const out = redactSqlForSink(
+			'SELECT TOP (1) "50102"."timestamp","50102"."Store No_" FROM dbo."CRONUS$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED)',
+		);
+		expect(out?.text).not.toContain("CRONUS");
+		expect(out?.table).toBe("Sample Table");
+		expect(out?.extensionAppId).toBe("aa11bb22-cc33-dd44-ee55-ff6677889900");
+	});
+
+	test("keeps a system table's bracket name", () => {
+		const out = redactSqlForSink(
+			"SELECT [Metadata] FROM dbo.[Application Object Metadata]",
+		);
+		expect(out?.table).toBe("Application Object Metadata");
+	});
+
+	test("fails CLOSED on input the tokenizer cannot parse", () => {
+		expect(
+			redactSqlForSink('SELECT "unterminated identifier FROM x'),
+		).toBeNull();
+	});
+
+	test("does not miscount a truncation flag when an apostrophe is inside a comment", () => {
+		// Regression: a naive quote-parity truncation guess (counting raw `'`
+		// characters) sees the odd apostrophe count from "customer's" and
+		// wrongly flags this as truncated, then chops the string at that
+		// apostrophe -- losing the real FROM clause. A tokenizer-based check
+		// skips over the comment entirely and gets this right.
+		const out = redactSqlForSink(
+			'SELECT "No_" /* it\'s a customer\'s note */ FROM dbo."CRONUS$Cust"',
+		);
+		expect(out?.truncated).toBe(false);
+		expect(out?.table).toBe("Cust");
+		expect(out?.text).not.toContain("CRONUS");
+	});
+
+	test("resolves a 2-part Table$guid (DataPerCompany=false) to the table, not the guid", () => {
+		const out = redactSqlForSink(
+			'SELECT "No_" FROM dbo."Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900"',
+		);
+		expect(out?.table).toBe("Sample Table");
+		expect(out?.text).toContain("Sample Table");
+		expect(out?.text).not.toContain("aa11bb22");
 	});
 });
