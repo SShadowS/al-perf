@@ -143,6 +143,12 @@ export interface ProcedureFeatures {
 	externalCallsInLoops: ExternalCallInfo[];
 	variables: VariableInfo[];
 	fieldAccesses: FieldAccessInfo[];
+	/**
+	 * Record variables whose contents leave this member: passed whole as a call
+	 * argument, or the receiver of a non-field-neutral method. Fields this
+	 * member never names may be read from them elsewhere.
+	 */
+	escapedRecordVariables: string[];
 	nestingDepth: number;
 }
 

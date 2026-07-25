@@ -167,4 +167,46 @@ codeunit 50700 "Field Access Test"
         if RecRef.FindFirst() then
             RecRef.Close();
     end;
+
+    procedure FindThenPassRecordOn()
+    var
+        SalesLine: Record "Sales Line";
+    begin
+        // The record is handed WHOLE to another procedure, which may read any
+        // field on it. Narrowing the load here would starve that callee, so
+        // "add SetLoadFields()" is not advice that can be followed blind.
+        if SalesLine.FindSet() then
+            repeat
+                HandleLine(SalesLine);
+            until SalesLine.Next() = 0;
+    end;
+
+    procedure FindThenCallTableMethod()
+    var
+        SalesLine: Record "Sales Line";
+    begin
+        // A custom table method reads whatever fields IT needs, none of which
+        // are visible here.
+        if SalesLine.FindSet() then
+            repeat
+                SalesLine.ComputeTotal();
+            until SalesLine.Next() = 0;
+    end;
+
+    procedure FindThenReadOwnFieldsOnly()
+    var
+        SalesLine: Record "Sales Line";
+    begin
+        // Nothing escapes: every field read is right here, so SetLoadFields is
+        // straightforwardly correct advice.
+        if SalesLine.FindSet() then
+            repeat
+                Message('%1 %2', SalesLine."Document No.", SalesLine.Amount);
+            until SalesLine.Next() = 0;
+    end;
+
+    local procedure HandleLine(var Line: Record "Sales Line")
+    begin
+        Message('%1', Line.Amount);
+    end;
 }

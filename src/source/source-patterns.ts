@@ -695,16 +695,25 @@ export function detectMissingSetLoadFields(
 				);
 				if (!isCovered) {
 					const recVar = op.recordVariable ? ` on ${op.recordVariable}` : "";
+					// SetLoadFields is only safe advice when every field read is
+					// visible in this member. If the record is handed to a callee,
+					// or a table method is called on it, fields nobody here names
+					// may be read from it — and narrowing the load starves exactly
+					// those reads. The finding stands (the opportunity may be real)
+					// but stops reading as a fix that can be applied blind.
+					const escapes =
+						match.features.escapedRecordVariables.includes(recVarLower);
 					patterns.push({
 						id: "missing-setloadfields",
-						severity: "warning",
+						severity: escapes ? "info" : "warning",
 						title: `${op.type} without SetLoadFields in ${method.functionName}`,
 						description: `${op.type}()${recVar} at line ${op.line} in ${match.file} has no preceding SetLoadFields(). This loads all fields from the database when only a subset may be needed.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
 						evidence: `${op.type}() at line ${op.line} without SetLoadFields for ${op.recordVariable ?? "unknown variable"}`,
-						suggestion:
-							"Add SetLoadFields() before record retrieval to load only the fields you need, reducing I/O.",
+						suggestion: escapes
+							? `Check what reads ${op.recordVariable ?? "this record"} elsewhere before adding SetLoadFields() — it is passed on, or has a table method called on it, so fields not named in this member may be read from it. Narrowing the load without covering those is worse than leaving it alone.`
+							: "Add SetLoadFields() before record retrieval to load only the fields you need, reducing I/O.",
 					});
 				}
 			}

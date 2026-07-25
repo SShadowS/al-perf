@@ -739,6 +739,71 @@ function promoteImplicitLoopItems<T extends ImplicitLoopAware>(
 /**
  * Collect field access nodes: Rec.Field or Rec."Field Name" (member_expression not in call).
  */
+/**
+ * Built-in record methods that read no business fields of their own -- filter,
+ * navigation and identity operations. Anything else invoked ON a record can
+ * read fields this member never mentions: a custom table method by definition,
+ * and built-ins like `TransferFields`/`Validate`/`TestField` in practice.
+ */
+const FIELD_NEUTRAL_RECORD_METHODS = new Set([
+	...RECORD_OPS,
+	"init",
+	"setcurrentkey",
+	"setrecfilter",
+	"getfilter",
+	"getfilters",
+	"setascending",
+	"changecompany",
+	"recordid",
+	"number",
+	"open",
+	"close",
+]);
+
+/**
+ * Record variables whose contents leave this member's analysis: passed WHOLE
+ * as a call argument, or used as the receiver of a method that is not a
+ * field-neutral built-in.
+ *
+ * `missing-setloadfields` needs this because its advice is only safe when
+ * every field read is visible right here. Handing the record to a callee, or
+ * calling a table method on it, means fields this member never names may be
+ * read from it -- and narrowing the load would starve exactly those reads.
+ * 218 of Document Output's 387 find-receivers are in one of these two shapes.
+ */
+function collectEscapedRecordVariables(node: SyntaxNode): string[] {
+	const escaped = new Set<string>();
+
+	function walk(n: SyntaxNode) {
+		if (n.type === "call_expression") {
+			const funcNode = n.childForFieldName("function") ?? n.namedChildren[0];
+			if (funcNode?.type === "member_expression") {
+				const objNode =
+					funcNode.childForFieldName("object") ?? funcNode.namedChildren[0];
+				const propNode =
+					funcNode.childForFieldName("member") ?? funcNode.namedChildren[1];
+				const method = propNode ? stripQuotes(propNode.text).toLowerCase() : "";
+				if (objNode && method && !FIELD_NEUTRAL_RECORD_METHODS.has(method)) {
+					escaped.add(objNode.text.toLowerCase());
+				}
+			}
+			const argList = n.namedChildren.find((c) => c.type === "argument_list");
+			for (const arg of argList?.namedChildren ?? []) {
+				// A BARE identifier argument is the record itself being handed on.
+				// `Rec."Field"` (a member_expression) passes one field's value, not
+				// the record, and does not escape it.
+				if (arg.type === "identifier" || arg.type === "quoted_identifier") {
+					escaped.add(stripQuotes(arg.text).toLowerCase());
+				}
+			}
+		}
+		for (const child of n.namedChildren) walk(child);
+	}
+
+	walk(node);
+	return [...escaped];
+}
+
 function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
 	const accesses: FieldAccessInfo[] = [];
 
@@ -959,6 +1024,7 @@ function extractFeatures(
 			externalCallsInLoops: [],
 			variables: [],
 			fieldAccesses: [],
+			escapedRecordVariables: [],
 			nestingDepth: 0,
 		};
 	}
@@ -1052,6 +1118,8 @@ function extractFeatures(
 	// Collect field accesses
 	const fieldAccesses = collectFieldAccesses(codeBlock);
 
+	const escapedRecordVariables = collectEscapedRecordVariables(codeBlock);
+
 	// Compute nesting depth
 	const nestingDepth = computeNestingDepth(codeBlock);
 
@@ -1063,6 +1131,7 @@ function extractFeatures(
 		externalCallsInLoops,
 		variables: [],
 		fieldAccesses,
+		escapedRecordVariables,
 		nestingDepth,
 	};
 }

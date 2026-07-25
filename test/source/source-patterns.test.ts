@@ -1231,3 +1231,36 @@ describe("object-level globals reach the detectors", () => {
 		).toHaveLength(1);
 	});
 });
+
+describe("missing-setloadfields — records that escape the member", () => {
+	function f(functionName: string) {
+		const method = makeMethod({
+			functionName,
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		return detectMissingSetLoadFields([method], sourceIndex)[0];
+	}
+
+	it("downgrades when the record is passed on to another procedure", () => {
+		// 144 of Document Output's find-receivers are handed whole to a callee
+		// that can read any field. SetLoadFields there would starve the callee,
+		// so the finding must not read as a straightforward fix.
+		const p = f("FindThenPassRecordOn");
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("info");
+		expect(p.suggestion).toMatch(/passed|callee|escapes/i);
+	});
+
+	it("downgrades when a table method is called on the record", () => {
+		const p = f("FindThenCallTableMethod");
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("info");
+	});
+
+	it("keeps warning when every field read is in the same member", () => {
+		const p = f("FindThenReadOwnFieldsOnly");
+		expect(p).toBeDefined();
+		expect(p.severity).toBe("warning");
+	});
+});
