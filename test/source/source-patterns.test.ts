@@ -1316,3 +1316,31 @@ describe("escape analysis — metadata calls are not escapes", () => {
 		expect(p.severity).toBe("warning");
 	});
 });
+
+describe("incomplete-setloadfields — primary key fields are always loaded", () => {
+	it("does not flag a primary-key field as forgotten", () => {
+		// BC always loads the primary key: SetLoadFields cannot exclude the
+		// fields that identify the record. 86 of 193 findings on a 15,436-file
+		// corpus were exactly this — rated critical, claiming runtime errors,
+		// about `"No."` and `"Document Type"`.
+		const method = makeMethod({
+			functionName: "SetLoadFieldsThenReadPrimaryKey",
+			objectType: "Codeunit",
+			objectId: 50600,
+		});
+		expect(detectIncompleteSetLoadFields([method], sourceIndex)).toHaveLength(
+			0,
+		);
+	});
+
+	it("still flags a genuinely missing non-key field", () => {
+		const method = makeMethod({
+			functionName: "SetLoadFieldsMissingRealField",
+			objectType: "Codeunit",
+			objectId: 50600,
+		});
+		const p = detectIncompleteSetLoadFields([method], sourceIndex);
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+	});
+});

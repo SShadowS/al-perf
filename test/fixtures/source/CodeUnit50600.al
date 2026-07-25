@@ -83,4 +83,19 @@ codeunit 50600 "Filter Test"
                 Message('%1', KeyTest.Description);
             until KeyTest.Next() = 0;
     end;
+
+    procedure SetLoadFieldsThenReadPrimaryKey()
+    var
+        KeyTest: Record "Key Test Table";
+    begin
+        // "No." is Key Test Table's PRIMARY key. BC always loads primary key
+        // fields — SetLoadFields cannot exclude them, because they identify the
+        // record. Reporting one as a forgotten field is a critical finding
+        // about something that cannot happen.
+        KeyTest.SetLoadFields(Description);
+        if KeyTest.FindSet() then
+            repeat
+                Message('%1', KeyTest."No.");
+            until KeyTest.Next() = 0;
+    end;
 }

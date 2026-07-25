@@ -777,6 +777,17 @@ export function detectIncompleteSetLoadFields(
 				const knownFields = table
 					? new Set(table.fields.map((f) => f.name.toLowerCase()))
 					: undefined;
+				// BC ALWAYS loads the primary key — SetLoadFields cannot exclude
+				// the fields that identify the record, and SystemId rides along
+				// with them. Reading one back is not a forgotten field, so
+				// reporting it as a critical runtime-error risk describes
+				// something that cannot happen. 86 of 193 findings on a
+				// 15,436-file corpus were exactly this: `"No."`,
+				// `"Document Type"`.
+				const alwaysLoaded = new Set<string>(["systemid"]);
+				for (const f of table?.keys?.[0]?.fields ?? []) {
+					alwaysLoaded.add(f.toLowerCase());
+				}
 
 				// Resolve coverage PER ACCESS: what did this variable's field set
 				// actually look like at the moment THIS access ran? That is the LAST
@@ -793,6 +804,7 @@ export function detectIncompleteSetLoadFields(
 
 					const fieldLower = access.fieldName.toLowerCase();
 					if (governingOp.fields.has(fieldLower)) continue;
+					if (alwaysLoaded.has(fieldLower)) continue;
 					// Not a field of this table => a paren-less table method call,
 					// not a forgotten field. Only skip when the table is KNOWN.
 					if (knownFields && !knownFields.has(fieldLower)) continue;
