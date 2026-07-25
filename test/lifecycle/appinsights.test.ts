@@ -224,16 +224,14 @@ describe("buildStatementKqlQuery — value columns and clientType (Fix Round 1)"
 		);
 		// extensionId, alObjectType, alObjectId, alStackTrace, clientType,
 		// occurrences, measuredTotalMs, thresholdMs = 8 pass-through levels.
-		expect(kql.match(/top-nested of \w+ by Ignore\d+ = max\(1\)/g)).toHaveLength(
-			8,
-		);
+		expect(
+			kql.match(/top-nested of \w+ by Ignore\d+ = max\(1\)/g),
+		).toHaveLength(8);
 		expect(kql).toContain(
 			"top-nested 5 of sqlStatement by max(measuredTotalMs)",
 		);
 		// sqlStatement is the ONLY level capped with a number.
-		expect(kql.match(/top-nested \d+ of/g)).toEqual([
-			"top-nested 5 of",
-		]);
+		expect(kql.match(/top-nested \d+ of/g)).toEqual(["top-nested 5 of"]);
 	});
 
 	it("split: also carries aadTenantId/environmentName through the project and as two more pass-through levels", () => {
@@ -241,9 +239,9 @@ describe("buildStatementKqlQuery — value columns and clientType (Fix Round 1)"
 		expect(kql).toContain(
 			"| project extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, aadTenantId, environmentName, occurrences, measuredTotalMs, thresholdMs",
 		);
-		expect(kql.match(/top-nested of \w+ by Ignore\d+ = max\(1\)/g)).toHaveLength(
-			10,
-		);
+		expect(
+			kql.match(/top-nested of \w+ by Ignore\d+ = max\(1\)/g),
+		).toHaveLength(10);
 		expect(kql).toContain(
 			"summarize occurrences = count(), measuredTotalMs = sum(ms), thresholdMs = min(thresholdMs) by extensionId, alObjectType, alObjectId, alStackTrace, sqlStatement, clientType, aadTenantId, environmentName",
 		);
@@ -256,10 +254,11 @@ describe("buildStatementKqlQuery — value columns and clientType (Fix Round 1)"
 	});
 
 	it("--client-types filters the statement query, same shape as the aggregate query's own filter", () => {
-		const withFilter = buildStatementKqlQuery("2026-07-25T00:00:00.000Z", false, [
-			"Background",
-			"WebClient",
-		]);
+		const withFilter = buildStatementKqlQuery(
+			"2026-07-25T00:00:00.000Z",
+			false,
+			["Background", "WebClient"],
+		);
 		expect(withFilter).toContain(
 			'| where clientType in ("Background", "WebClient")',
 		);
@@ -1638,8 +1637,123 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 				queried: true,
 				rows: 0,
 				truncated: false,
+				unmatchedRows: 0,
 			},
 		]);
+	});
+
+	// -----------------------------------------------------------------------
+	// Fix Round 2: N1 (unmatchedRows reaches the availability entry) and the
+	// partial-query-failure truncation signal. Both exercised via non-split
+	// pullTelemetry — simpler to construct, same code paths as split mode.
+	// -----------------------------------------------------------------------
+
+	it("unmatchedRows on the statement-query availability entry reflects a clientType mismatch, not silence", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(
+					statementTableResponse([
+						makeStatementRow({
+							clientType: "Background",
+							aadTenantId: "",
+							sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+						}),
+					]),
+				);
+			}
+			// The aggregate RT0005 query: one signal, but under a DIFFERENT
+			// clientType than the statement row above.
+			const row = [
+				"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				"My ISV App",
+				"Codeunit",
+				50100,
+				"Sales Post",
+				"ProcessLine",
+				1,
+				1000,
+				1000,
+				"",
+				"WebClient",
+			];
+			return okResponse(primaryTableResponse([row]));
+		}) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0005"] },
+			fetchImpl,
+		);
+
+		// Strict clientType matching is unchanged: no evidence attaches.
+		expect(batch.signals[0]?.sqlEvidence).toBeUndefined();
+		// But the mismatch is now OBSERVABLE, rather than looking identical to
+		// a genuinely clean "no slow SQL" result.
+		const avail = batch.signalAvailability?.find(
+			(a) => a.signalId === "RT0005 statements",
+		);
+		expect(avail?.unmatchedRows).toBe(1);
+	});
+
+	it("sets truncated from a partial-query-failure marker in the JSON body, even with a small row count", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse({
+					tables: [
+						{
+							name: "PrimaryTable",
+							columns: STATEMENT_COLUMNS,
+							rows: [
+								makeStatementRow({
+									aadTenantId: "",
+									sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+								}),
+							],
+						},
+					],
+					// The App Insights REST API's actual truncation signal: HTTP 200
+					// with an `error` property alongside `tables` — not a row count
+					// anywhere near APPINSIGHTS_QUERY_ROW_CAP.
+					error: {
+						code: "PartialError",
+						message: "The results might be incomplete.",
+					},
+				});
+			}
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0005"] },
+			fetchImpl,
+		);
+
+		const avail = batch.signalAvailability?.find(
+			(a) => a.signalId === "RT0005 statements",
+		);
+		expect(avail?.rows).toBe(1); // far below the row-cap constant
+		expect(avail?.truncated).toBe(true);
+	});
+
+	it("truncated stays false for a small, complete response carrying no partial-failure marker", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(statementTableResponse([]));
+			}
+			return okResponse(primaryTableResponse([]));
+		}) as typeof fetch;
+
+		const batch = await pullTelemetry(
+			{ appId: APP_ID, signals: ["RT0005"] },
+			fetchImpl,
+		);
+
+		const avail = batch.signalAvailability?.find(
+			(a) => a.signalId === "RT0005 statements",
+		);
+		expect(avail?.truncated).toBe(false);
 	});
 });
 

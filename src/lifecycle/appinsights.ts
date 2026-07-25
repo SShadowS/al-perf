@@ -770,12 +770,33 @@ function resolvePullContext(opts: PullTelemetryOptions): PullContext {
 }
 
 /**
+ * True when the raw JSON response body carries a partial-query-failure
+ * marker (Fix Round 2) — the App Insights REST API's ACTUAL truncation
+ * signal for `/v1/apps/{id}/query`: a genuinely truncated response arrives
+ * as HTTP 200 with an `error` property alongside `tables`, not as a row
+ * count landing at any particular cap (with `top-nested 5` per routine and
+ * ~604 statement rows/day measured live, APPINSIGHTS_QUERY_ROW_CAP alone
+ * would never fire on a real response). Detected defensively — any
+ * non-empty `error` object is treated as a marker, since the exact
+ * error/innererror code for a truncation-specific partial failure isn't
+ * independently live-verified (same caveat as the row-cap constant below).
+ */
+function hasPartialFailureMarker(json: unknown): boolean {
+	if (typeof json !== "object" || json === null) return false;
+	const err = (json as { error?: unknown }).error;
+	return typeof err === "object" && err !== null;
+}
+
+/**
  * Fetch + classify HTTP errors for one already-built KQL string — shared by
  * fetchSignalTable and fetchStatementTable (Task 9) so the URL construction,
  * network-error wrapping and HTTP classification exist exactly once. `label`
  * is spliced into any thrown error message only — a real signalId for the
  * per-signal queries, "RT0005 statements" for the statement query, so the two
- * never collide in an operator-facing message.
+ * never collide in an operator-facing message. Returns the parsed JSON
+ * alongside the extracted table (Fix Round 2) so a caller that cares about
+ * truncation (fetchStatementTable) can inspect it for the partial-failure
+ * marker above — fetchSignalTable's callers don't need it and just discard it.
  */
 async function runKqlQuery(
 	appId: string,
@@ -783,7 +804,7 @@ async function runKqlQuery(
 	kql: string,
 	label: string,
 	fetchImpl: typeof fetch,
-): Promise<AppInsightsTable> {
+): Promise<{ json: unknown; table: AppInsightsTable }> {
 	const url = `${APPINSIGHTS_API_BASE}/v1/apps/${encodeURIComponent(appId)}/query?query=${encodeURIComponent(kql)}`;
 
 	let res: Response;
@@ -798,7 +819,7 @@ async function runKqlQuery(
 		throw new Error(httpErrorMessage(res.status, res.statusText, label));
 	}
 	const json = await res.json();
-	return selectPrimaryTable(json, label);
+	return { json, table: selectPrimaryTable(json, label) };
 }
 
 /** Build the per-signal URL/KQL, fetch, and classify HTTP errors — identical for both modes. */
@@ -812,7 +833,8 @@ async function fetchSignalTable(
 	fetchImpl: typeof fetch,
 ): Promise<AppInsightsTable> {
 	const kql = buildKqlQuery(signalId, sinceIso, clientTypes, split);
-	return runKqlQuery(appId, apiKey, kql, signalId, fetchImpl);
+	const { table } = await runKqlQuery(appId, apiKey, kql, signalId, fetchImpl);
+	return table;
 }
 
 /**
@@ -824,7 +846,9 @@ async function fetchSignalTable(
  * query's own filter (Fix Round 1) — otherwise evidence measured in an
  * unfiltered session could attach to a `--client-types`-filtered finding.
  * STATEMENT_QUERY_LABEL keeps its error messages distinguishable from the
- * aggregate RT0005 query's.
+ * aggregate RT0005 query's. Returns `partialFailure` (Fix Round 2) so the
+ * caller can fold it into the `"RT0005 statements"` availability entry's
+ * `truncated` flag alongside the row-cap constant.
  */
 async function fetchStatementTable(
 	appId: string,
@@ -833,9 +857,16 @@ async function fetchStatementTable(
 	split: boolean,
 	clientTypes: readonly string[] | undefined,
 	fetchImpl: typeof fetch,
-): Promise<AppInsightsTable> {
+): Promise<{ table: AppInsightsTable; partialFailure: boolean }> {
 	const kql = buildStatementKqlQuery(sinceIso, split, clientTypes);
-	return runKqlQuery(appId, apiKey, kql, STATEMENT_QUERY_LABEL, fetchImpl);
+	const { json, table } = await runKqlQuery(
+		appId,
+		apiKey,
+		kql,
+		STATEMENT_QUERY_LABEL,
+		fetchImpl,
+	);
+	return { table, partialFailure: hasPartialFailureMarker(json) };
 }
 
 // ---------------------------------------------------------------------------
@@ -911,7 +942,7 @@ export async function pullTelemetry(
 	// slow SQL", which would render every RT0005 finding as falsely clean.
 	if (hasSignalId(signalIds, "RT0005")) {
 		try {
-			const table = await fetchStatementTable(
+			const { table, partialFailure } = await fetchStatementTable(
 				opts.appId,
 				apiKey,
 				sinceIso,
@@ -925,15 +956,27 @@ export async function pullTelemetry(
 					`pull-telemetry: skipped ${skipped} RT0005 statement row(s) with empty identity fields after normalization`,
 				);
 			}
-			attachEvidenceToSignals(
+			// Fix Round 2: strict clientType matching is intentionally correct
+			// (SQL measured in one client session must not annotate another's
+			// finding), but a systematic mismatch silently drops ALL evidence
+			// for a routine while looking identical to a genuine "no slow SQL"
+			// result — surface the count rather than let it stay invisible.
+			const unmatchedRows = attachEvidenceToSignals(
 				allSignals,
 				rows.map((r) => r.row),
 			);
+			if (unmatchedRows > 0) {
+				console.error(
+					`pull-telemetry: ${unmatchedRows} RT0005 statement row(s) matched no signal (routine/clientType mismatch) — SQL evidence coverage may be incomplete`,
+				);
+			}
 			availability.push({
 				signalId: STATEMENT_QUERY_LABEL,
 				queried: true,
 				rows: rows.length,
-				truncated: table.rows.length >= APPINSIGHTS_QUERY_ROW_CAP,
+				truncated:
+					partialFailure || table.rows.length >= APPINSIGHTS_QUERY_ROW_CAP,
+				unmatchedRows,
 			});
 		} catch (err) {
 			availability.push({
@@ -974,7 +1017,10 @@ interface SplitGroupAccumulator {
  * onto two subtly different key computations, which two independently
  * hand-written `JSON.stringify([...])` call sites would risk.
  */
-function splitGroupKey(aadTenantId: string, environmentName: string | null): string {
+function splitGroupKey(
+	aadTenantId: string,
+	environmentName: string | null,
+): string {
 	return JSON.stringify([aadTenantId, environmentName]);
 }
 
@@ -1077,7 +1123,7 @@ export async function pullTelemetrySplit(
 	// entry (see the non-split path's comment for why).
 	if (hasSignalId(signalIds, "RT0005")) {
 		try {
-			const table = await fetchStatementTable(
+			const { table, partialFailure } = await fetchStatementTable(
 				opts.appId,
 				apiKey,
 				sinceIso,
@@ -1098,15 +1144,27 @@ export async function pullTelemetrySplit(
 				list.push(r.row);
 				statementsByGroupKey.set(key, list);
 			}
+			// Fix Round 2: summed across every group this pull touched — see the
+			// non-split path's comment for why this count matters.
+			let unmatchedRows = 0;
 			for (const [key, acc] of groupsByKey) {
 				const statementRows = statementsByGroupKey.get(key);
-				if (statementRows) attachEvidenceToSignals(acc.signals, statementRows);
+				if (statementRows) {
+					unmatchedRows += attachEvidenceToSignals(acc.signals, statementRows);
+				}
+			}
+			if (unmatchedRows > 0) {
+				console.error(
+					`pull-telemetry: ${unmatchedRows} RT0005 statement row(s) matched no signal (routine/clientType mismatch) — SQL evidence coverage may be incomplete`,
+				);
 			}
 			availability.push({
 				signalId: STATEMENT_QUERY_LABEL,
 				queried: true,
 				rows: rows.length,
-				truncated: table.rows.length >= APPINSIGHTS_QUERY_ROW_CAP,
+				truncated:
+					partialFailure || table.rows.length >= APPINSIGHTS_QUERY_ROW_CAP,
+				unmatchedRows,
 			});
 		} catch (err) {
 			availability.push({
