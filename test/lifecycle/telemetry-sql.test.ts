@@ -290,6 +290,33 @@ describe("redactSqlForSink", () => {
 		expect(out).toBeNull();
 	});
 
+	test("fails CLOSED on a fully bare multi-part qualifier, which carries a database name", () => {
+		// The leftover scan only sinks a bare run that carries "$". A bare
+		// qualifier with no "$" anywhere -- `mydb.dbo."Table"` -- passes it and
+		// echoes the DATABASE name straight through. One bare segment before a
+		// quoted name is the ordinary `dbo."T"` schema form and must survive;
+		// two or more means the leading one is a database or linked server.
+		//
+		// In FIRST table position this already fails closed, via the
+		// parseSqlTable cross-check. The hole is every LATER reference -- a
+		// join or a subquery -- which no cross-check looks at.
+		expect(
+			redactSqlForSink(
+				'SELECT "No_" FROM dbo."CRONUS$Sales Header" JOIN mydb.dbo."Cust" ON 1=1',
+			),
+		).toBeNull();
+		expect(
+			redactSqlForSink(
+				'SELECT "No_" FROM "CRONUS$Sales Header" WHERE "x" IN (SELECT "y" FROM srv.mydb.dbo."Cust")',
+			),
+		).toBeNull();
+
+		// The ordinary two-part form still redacts.
+		const ok = redactSqlForSink('SELECT "No_" FROM dbo."CRONUS$Sales Header"');
+		expect(ok).not.toBeNull();
+		expect(ok!.table).toBe("Sales Header");
+	});
+
 	test("C4: fails CLOSED on a bare (unquoted) $-prefixed identifier", () => {
 		expect(
 			redactSqlForSink("SELECT * FROM dbo.CRONUS$Sales_Header WHERE No_=@0"),

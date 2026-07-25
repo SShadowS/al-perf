@@ -769,6 +769,15 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	// statement closed rather than emit it.
 	if (/[^\s.,()]*\$[^\s.,()]*/.test(out)) return null;
 
+	// Same blind spot, other spelling: a bare qualifier carrying NO "$" at all
+	// slips past the scan above and echoes verbatim. `dbo."T"` is the ordinary
+	// schema form and must survive, but a SECOND bare segment in front of it
+	// (`mydb.dbo."T"`, `srv.mydb.dbo."T"`) is a database or linked-server name
+	// -- customer identity by any other name. In FIRST table position the
+	// parseSqlTable cross-check already sinks these; nothing looks at a join's
+	// or a subquery's reference, so fail the whole statement closed here.
+	if (/\b[A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*\s*\.\s*["[]/.test(out)) return null;
+
 	// Fix Round 4: a dropped qualifier's own trailing joiner is now suppressed
 	// PRECISELY, inside the loop above (suppressOtherUntilIdx / nextChainHop's
 	// suppressThrough), stopping short of any bare schema word it leads to.
