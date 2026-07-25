@@ -1192,3 +1192,42 @@ describe("record parameters reach the detectors", () => {
 		expect(detectInsertInLoop([method], sourceIndex)).toHaveLength(1);
 	});
 });
+
+describe("object-level globals reach the detectors", () => {
+	function m(functionName: string) {
+		return makeMethod({
+			functionName,
+			objectType: "Codeunit",
+			objectId: 50970,
+		});
+	}
+
+	it("does not report inserts into an object-level TEMPORARY record", () => {
+		expect(
+			detectInsertInLoop([m("FillGlobalTempBuffer")], sourceIndex),
+		).toHaveLength(0);
+	});
+
+	it("still reports inserts into an object-level non-temporary record", () => {
+		expect(
+			detectInsertInLoop([m("InsertIntoGlobalRealRecord")], sourceIndex),
+		).toHaveLength(1);
+	});
+
+	it("does not report Insert() on an object-level List of [Text]", () => {
+		// isKnownNonRecordOp failed OPEN on any unresolved receiver, and every
+		// object-level global was unresolved — so a List's Insert() in a loop
+		// read as a SQL INSERT. Document Output has 1923 non-Record globals.
+		expect(
+			detectInsertInLoop([m("InsertIntoGlobalList")], sourceIndex),
+		).toHaveLength(0);
+	});
+
+	it("lets a member-local declaration shadow an object-level global of the same name", () => {
+		// The global `SalesLine` is a Codeunit; the local one is a real Record.
+		// Resolution must prefer the local, or the finding disappears.
+		expect(
+			detectInsertInLoop([m("LocalShadowsGlobal")], sourceIndex),
+		).toHaveLength(1);
+	});
+});

@@ -852,20 +852,29 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 
 	for (const child of procedureNode.namedChildren) {
 		if (child.type !== "var_section") continue;
-
-		// tree-sitter-al v3: variable declarations are nested under a `var_body`
-		// node (body field) rather than being direct children of var_section.
-		// Fall back to var_section itself for older grammars / empty sections.
-		const varBody = child.namedChildren.find((c) => c.type === "var_body");
-		const declContainer = varBody ?? child;
-		for (const varDecl of declContainer.namedChildren) {
-			if (varDecl.type !== "variable_declaration") continue;
-			const info = variableFromTypedNode(varDecl);
-			if (info) variables.push(info);
-		}
+		variables.push(...variablesFromVarSection(child));
 	}
 
 	return variables;
+}
+
+/**
+ * Every `variable_declaration` in one `var_section`, member-level or
+ * object-level -- both are the same node type.
+ */
+function variablesFromVarSection(section: SyntaxNode): VariableInfo[] {
+	// tree-sitter-al v3: variable declarations are nested under a `var_body`
+	// node (body field) rather than being direct children of var_section.
+	// Fall back to var_section itself for older grammars / empty sections.
+	const varBody = section.namedChildren.find((c) => c.type === "var_body");
+	const declContainer = varBody ?? section;
+	const out: VariableInfo[] = [];
+	for (const varDecl of declContainer.namedChildren) {
+		if (varDecl.type !== "variable_declaration") continue;
+		const info = variableFromTypedNode(varDecl);
+		if (info) out.push(info);
+	}
+	return out;
 }
 
 /**
@@ -1332,6 +1341,24 @@ export async function indexALFile(
 	const procedures: ProcedureInfo[] = [];
 	const triggers: TriggerInfo[] = [];
 
+	// Object-level `var` section: a codeunit/table/page can declare records and
+	// non-record helpers above its members and reuse them everywhere. Extracted
+	// once and appended to every member's own list, so declared-type resolution
+	// stops failing open on them -- Document Output alone has 111 global records
+	// (33 of them temporary) and 1923 non-record globals, each of which could
+	// otherwise be mistaken for a record whose method names happen to collide.
+	// APPENDED, never prepended: consumers resolve with `.find()`, so a member's
+	// own parameter or local declaration must come first and shadow a global of
+	// the same name.
+	const objectGlobals: VariableInfo[] = [];
+	for (const child of declNode.namedChildren) {
+		if (child.type !== "declaration_body") continue;
+		for (const section of child.namedChildren) {
+			if (section.type !== "var_section") continue;
+			objectGlobals.push(...variablesFromVarSection(section));
+		}
+	}
+
 	// Walk children of the declaration node to find procedures and triggers.
 	// `dataitemName` is the nearest enclosing Report dataitem / XMLport
 	// tableelement instance name, threaded down so triggers nested inside one
@@ -1347,7 +1374,7 @@ export async function indexALFile(
 				// Variables must be extracted BEFORE extractFeatures — it needs
 				// them (via context.variables) to resolve a receiver variable's
 				// declared type for external-call detection (e.g. HttpClient).
-				const variables = extractVariables(child);
+				const variables = [...extractVariables(child), ...objectGlobals];
 				const features = extractFeatures(codeBlock, {
 					objectType,
 					dataitemName,
@@ -1372,7 +1399,7 @@ export async function indexALFile(
 			} else if (child.type === "trigger_declaration") {
 				const name = extractTriggerName(child);
 				const codeBlock = findCodeBlock(child);
-				const variables = extractVariables(child);
+				const variables = [...extractVariables(child), ...objectGlobals];
 				const features = extractFeatures(codeBlock, {
 					objectType,
 					triggerName: name,

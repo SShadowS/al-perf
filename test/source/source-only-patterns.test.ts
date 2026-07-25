@@ -407,29 +407,27 @@ describe("external-call-in-loop", () => {
 		expect(f!.evidence).toContain("Page.OnAfterGetRecord");
 	});
 
-	test("does not flag an object-level global HttpClient (known extractVariables limitation)", async () => {
-		// KNOWN LIMITATION, pinned deliberately, NOT a spec violation: unlike
-		// the record detectors, where a globals gap only degrades a temp/table
-		// refinement, here the declared-type gate IS the detector. extractVariables()
-		// only reads a member's own var_section and never sees an object-level
-		// `var` section, so buildVariableTypeMap() never learns GlobalClient's
-		// type here and the type gate fails closed -- even though declaring an
-		// HttpClient as an object-level global and reusing it across
-		// procedures is normal BC code. This is a real gap, deferred to a
-		// future task (see indexer.ts buildVariableTypeMap/extractVariables
-		// doc comments and CLAUDE.md). If extractVariables is ever extended to
-		// see object-level globals, this test MUST fail loudly and be updated
-		// -- it must never silently keep passing while the underlying
-		// behavior changes underneath it.
-		const index = await buildSourceIndex("test/fixtures/source");
-		const patterns = detectExternalCallInLoop(index);
-		expect(
-			patterns.find((p) =>
+	test("flags an object-level global HttpClient in a loop", () => {
+		// This was a KNOWN LIMITATION, pinned by a negative test: extractVariables
+		// read only a member's own var_section, so an HttpClient declared as an
+		// object-level global and reused across procedures -- normal BC code --
+		// never resolved, and unlike the record detectors (where a globals gap
+		// only degraded a temp/table refinement) the declared-type gate IS this
+		// detector, so it failed closed and the call was invisible.
+		//
+		// Object-level globals are now indexed, so the call is detected. The old
+		// test demanded `toBeUndefined()` and failed loudly when the behavior
+		// changed underneath it, exactly as it was written to.
+		return buildSourceIndex("test/fixtures/source").then((index) => {
+			const f = detectExternalCallInLoop(index).find((p) =>
 				p.involvedMethods.some((m) =>
 					m.includes("ObjectLevelGlobalHttpClientInLoop"),
 				),
-			),
-		).toBeUndefined();
+			);
+			expect(f).toBeDefined();
+			expect(f!.id).toBe("external-call-in-loop");
+			expect(f!.title).toContain("HttpClient.Send()");
+		});
 	});
 
 	test("does not match Object.prototype keys via the 'in' operator (prototype-chain false positive)", async () => {
