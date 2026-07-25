@@ -2,17 +2,27 @@
  * appinsights.test.ts — the App Insights REST puller (telemetry-ingest plan,
  * Task 5): request pinning (URL/headers, key never leaked), missing-env-var
  * fail-closed with zero fetch calls, row normalization across both duration
- * wire shapes (plain ms number vs .NET timespan string) with a stack-trace
- * methodName fallback, HTTP error classification (permanent vs retryable —
- * v1 does not retry), and a pull -> parseTelemetryBatch round-trip proving
- * fingerprints mint cleanly off pulled data.
+ * wire shapes (plain ms number vs .NET timespan string) with an AL-frame
+ * methodName fallback (`parseAlStackFrame`, Task 8), HTTP error
+ * classification (permanent vs retryable — v1 does not retry), and a
+ * pull -> parseTelemetryBatch round-trip proving fingerprints mint cleanly
+ * off pulled data.
+ *
+ * Task 8 (telemetry-sql-evidence plan) additionally covers: the duration
+ * extraction fix (`executionTime` timespan, not the absent
+ * `executionTimeInMs` alias — Gate 0 measured it non-null on 0/17,045 RT0018
+ * rows and 6/15,957 RT0005 rows), RT0005 grouping by `stackTrace` instead of
+ * collapsing every statement under one object with `any()`, and RT0018's new
+ * `sqlExecutes`/`sqlRowsRead` aggregates.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { parseTelemetryBatch } from "../../src/core/telemetry-parser.js";
 import {
+	buildKqlQuery,
 	DEFAULT_API_KEY_ENV,
 	listTenants,
+	normalizeTable,
 	parseTimespanMs,
 	pullTelemetry,
 	pullTelemetrySplit,
@@ -71,7 +81,83 @@ describe("parseTimespanMs", () => {
 	});
 });
 
-describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan Task 2, behavior 1: captured BEFORE the split-mode refactor, must stay byte-identical after)", () => {
+describe("buildKqlQuery — duration fix (Task 8, Gate 0)", () => {
+	it("derives ms from the executionTime timespan, not the absent executionTimeInMs alias", () => {
+		for (const signalId of ["RT0005", "RT0018"]) {
+			const kql = buildKqlQuery(
+				signalId,
+				"2026-07-25T00:00:00.000Z",
+				undefined,
+				false,
+			);
+			expect(kql).toContain("totimespan(customDimensions.executionTime)");
+			expect(kql).not.toContain("executionTimeInMs");
+		}
+	});
+});
+
+describe("buildKqlQuery — RT0005 stack grouping / RT0018 SQL counters (Task 8)", () => {
+	it("RT0005 groups by alStackTrace instead of collapsing with any()", () => {
+		const kql = buildKqlQuery(
+			"RT0005",
+			"2026-07-25T00:00:00.000Z",
+			undefined,
+			false,
+		);
+		expect(kql).not.toContain("stackTrace = any(stackTrace)");
+		expect(kql).toContain(
+			"by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType",
+		);
+	});
+
+	it("RT0018 keeps its existing grouping and gains SQL counters", () => {
+		const kql = buildKqlQuery(
+			"RT0018",
+			"2026-07-25T00:00:00.000Z",
+			undefined,
+			false,
+		);
+		expect(kql).toContain("stackTrace = any(stackTrace)");
+		expect(kql).toContain(
+			"sqlExecutes = sum(toint(customDimensions.sqlExecutes))",
+		);
+		expect(kql).toContain(
+			"sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
+		);
+	});
+});
+
+describe("normalizeTable — RT0005 header-only stack no longer becomes the method name (Task 8)", () => {
+	it("a header-only stack (no AL CallStack: marker) yields no frame, so the row is skipped rather than emitted with a header string as its method", () => {
+		const table = {
+			columns: [
+				{ name: "appId" },
+				{ name: "objectType" },
+				{ name: "objectId" },
+				{ name: "methodName" },
+				{ name: "stackTrace" },
+				{ name: "count" },
+				{ name: "maxDurationMs" },
+			],
+			rows: [
+				[
+					"app",
+					"CodeUnit",
+					80,
+					"",
+					"AppObjectType: CodeUnit\r\nAppObjectId: 80",
+					1,
+					900,
+				],
+			],
+		};
+		const { signals, skipped } = normalizeTable(table, "RT0005");
+		expect(signals).toHaveLength(0);
+		expect(skipped).toBe(1);
+	});
+});
+
+describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan Task 2, behavior 1: captured BEFORE the split-mode refactor, must stay byte-identical after; RT0005/RT0018 shapes diverged and re-baselined under Task 8 — see expectedKql)", () => {
 	const FIXED_NOW = new Date("2026-01-01T12:00:00.000Z");
 
 	beforeEach(() => {
@@ -81,7 +167,12 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 		delete process.env[DEFAULT_API_KEY_ENV];
 	});
 
+	// RT0005 and RT0018 diverge here (Task 8): RT0005 groups by stackTrace and
+	// has no SQL-counter aggregates; RT0018 keeps the any()-carried stackTrace
+	// and gains sqlExecutes/sqlRowsRead. Both share the Gate-0 duration fix
+	// (executionTime timespan, not the absent executionTimeInMs alias).
 	function expectedKql(signalId: string): string {
+		const isSqlSignal = signalId === "RT0005";
 		return [
 			"traces",
 			"| where timestamp > datetime(2026-01-01T08:00:00.000Z)",
@@ -94,9 +185,13 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 			"         methodName = tostring(customDimensions.alMethod),",
 			"         stackTrace = tostring(customDimensions.alStackTrace),",
 			"         clientType = tostring(customDimensions.clientType),",
-			"         ms = todouble(customDimensions.executionTimeInMs)",
-			"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace)",
-			"    by appId, appName, objectType, objectId, objectName, methodName, clientType",
+			"         ms = toreal(totimespan(customDimensions.executionTime)) / 10000",
+			isSqlSignal
+				? "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)"
+				: "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace), sqlExecutes = sum(toint(customDimensions.sqlExecutes)), sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
+			isSqlSignal
+				? "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType"
+				: "    by appId, appName, objectType, objectId, objectName, methodName, clientType",
 		].join("\n");
 	}
 
@@ -277,7 +372,7 @@ describe("pullTelemetry — row normalization", () => {
 		delete process.env[DEFAULT_API_KEY_ENV];
 	});
 
-	it("normalizes numeric-ms rows and timespan-string rows to the same shape, with stack-trace methodName fallback; round-trips through parseTelemetryBatch", async () => {
+	it("normalizes numeric-ms rows and timespan-string rows to the same shape, with AL-frame methodName fallback; round-trips through parseTelemetryBatch", async () => {
 		const numericRow = [
 			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			"My ISV App",
@@ -296,11 +391,11 @@ describe("pullTelemetry — row normalization", () => {
 			"Codeunit",
 			50200,
 			"Sales Post",
-			"", // alMethod empty -> fall back to stack trace first line
+			"", // alMethod empty -> fall back to parseAlStackFrame on the AL CallStack
 			1,
 			"00:00:12.345",
 			"00:00:09.500",
-			"Codeunit 50200 ProcessLine2\nCodeunit 1 Caller",
+			'AL CallStack:\n"Sales Post"(Codeunit 50200).ProcessLine2 line 10 - My ISV App by Contoso',
 		];
 
 		let call = 0;
@@ -326,7 +421,7 @@ describe("pullTelemetry — row normalization", () => {
 		expect(s1.methodName).toBe("ProcessLine");
 		expect(s2.maxDurationMs).toBe(12345);
 		expect(s2.avgDurationMs).toBe(9500);
-		expect(s2.methodName).toBe("Codeunit 50200 ProcessLine2");
+		expect(s2.methodName).toBe("ProcessLine2");
 
 		const parsed = parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG);
 		expect(parsed.signalCount).toBe(2);

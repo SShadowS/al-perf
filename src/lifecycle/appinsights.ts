@@ -25,6 +25,7 @@ import {
 	type TelemetryBatchDocument,
 	type TelemetrySignal,
 } from "../types/telemetry.js";
+import { parseAlStackFrame } from "./telemetry-sql.js";
 
 /** Default env var holding the App Insights API key (CLI default, overridable via --api-key-env). */
 export const DEFAULT_API_KEY_ENV = "APPINSIGHTS_API_KEY";
@@ -158,10 +159,30 @@ export function parseTimespanMs(value: string): number {
  * Build the per-signal KQL query. Aggregation happens server-side so the
  * batch arrives pre-aggregated (one row per appId/object/method/clientType,
  * or per appId/object/method/clientType/aadTenantId/environmentName in split
- * mode). `ms` stays a double from `executionTimeInMs` when present;
- * `stackTrace` is carried through (via `any()`, not grouped on) so the TS
- * normalizer — never KQL — can fall back to its first line when `alMethod`
- * is empty.
+ * mode) — except RT0005, which additionally groups by `stackTrace` (see
+ * below).
+ *
+ * `ms` is derived from `customDimensions.executionTime`, a .NET timespan
+ * string ("00:11:06.3140000"; ticks/10000 = ms) — NOT the `executionTimeInMs`
+ * alias the pre-fix query read. Gate 0 measured that alias non-null on 0 of
+ * 17,045 RT0018 rows and 6 of 15,957 RT0005 rows against real telemetry, so
+ * `max(ms)`/`avg(ms)` came back null and `asDurationMs` threw on every real
+ * pull — the shipped puller could not work against real telemetry until this
+ * was fixed.
+ *
+ * RT0005 carries no `alMethod` (Gate 0), so grouping by `methodName` alone
+ * collapsed every statement under one object into a single row with one
+ * arbitrary `stackTrace` (the old `any()`). RT0005 groups by `stackTrace`
+ * directly instead — `buildSignalFromRow` derives `methodName` from the AL
+ * frame in that exact stack via `parseAlStackFrame`, so each (routine, stack)
+ * pair arrives as its own row (Gate 0: 841 distinct stacks across 15,987
+ * RT0005 rows, ~19 rows/stack — fragmentation is not a per-row-dust risk).
+ * Every other signal keeps the pre-existing shape: grouped by `methodName`,
+ * `stackTrace` carried through via `any()` (not grouped on) so the TS
+ * normalizer can still fall back to it when `alMethod` is empty. Non-RT0005
+ * signals also aggregate `sqlExecutes`/`sqlRowsRead` (RT0018, BC v22.0+;
+ * absent on older rows — `sum(toint(...))` over an absent column yields
+ * null, which `asOptionalCount` treats as unknown, never 0).
  *
  * `clientType` (D5) always rides the extend + summarize by-key, independent
  * of `--client-types` — it's carried through to every emitted signal so the
@@ -175,12 +196,13 @@ export function parseTimespanMs(value: string): number {
  * puller groups rows on. `split` defaults to false/omitted so existing
  * callers produce the exact pre-Task-2 string (pinned by a snapshot test).
  */
-function buildKqlQuery(
+export function buildKqlQuery(
 	signalId: string,
 	sinceIso: string,
 	clientTypes?: readonly string[],
 	split = false,
 ): string {
+	const isSqlSignal = signalId === "RT0005";
 	const lines = [
 		"traces",
 		`| where timestamp > datetime(${sinceIso})`,
@@ -193,9 +215,13 @@ function buildKqlQuery(
 		"         methodName = tostring(customDimensions.alMethod),",
 		"         stackTrace = tostring(customDimensions.alStackTrace),",
 		"         clientType = tostring(customDimensions.clientType),",
+		// executionTime is a .NET timespan ("00:11:06.3140000"); ticks/10000 = ms.
+		// The executionTimeInMs alias is absent on effectively every real row
+		// (Gate 0: 0/17,045 RT0018, 6/15,957 RT0005), which is why the shipped
+		// query returned nulls and asDurationMs threw.
 		split
-			? "         ms = todouble(customDimensions.executionTimeInMs),"
-			: "         ms = todouble(customDimensions.executionTimeInMs)",
+			? "         ms = toreal(totimespan(customDimensions.executionTime)) / 10000,"
+			: "         ms = toreal(totimespan(customDimensions.executionTime)) / 10000",
 	];
 	if (split) {
 		lines.push(
@@ -208,10 +234,16 @@ function buildKqlQuery(
 		lines.push(`| where clientType in (${list})`);
 	}
 	lines.push(
-		"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace)",
-		split
-			? "    by appId, appName, objectType, objectId, objectName, methodName, clientType, aadTenantId, environmentName"
-			: "    by appId, appName, objectType, objectId, objectName, methodName, clientType",
+		isSqlSignal
+			? "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)"
+			: "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace), sqlExecutes = sum(toint(customDimensions.sqlExecutes)), sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
+		isSqlSignal
+			? split
+				? "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType, aadTenantId, environmentName"
+				: "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType"
+			: split
+				? "    by appId, appName, objectType, objectId, objectName, methodName, clientType, aadTenantId, environmentName"
+				: "    by appId, appName, objectType, objectId, objectName, methodName, clientType",
 	);
 	return lines.join("\n");
 }
@@ -261,6 +293,11 @@ function asDurationMs(v: unknown, context: string): number {
 	throw new Error(`pull-telemetry: unexpected duration value for ${context}`);
 }
 
+/** null/undefined => unknown (BC < v22.0 does not emit these), never 0. */
+function asOptionalCount(v: unknown): number | undefined {
+	return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
 interface NormalizedRows {
 	signals: TelemetrySignal[];
 	skipped: number;
@@ -278,8 +315,8 @@ function makeCellReader(table: AppInsightsTable): CellReader {
 
 /**
  * Row -> TelemetrySignal, or null when the row's identity fields end up
- * empty (methodName after the stack-trace fallback, appId, objectType) —
- * such rows are SKIPPED by the caller rather than emitted, since the parser
+ * empty (methodName after the AL-frame fallback, appId, objectType) — such
+ * rows are SKIPPED by the caller rather than emitted, since the parser
  * (telemetry-parser.ts) fail-closed rejects empty identity strings and a
  * single malformed row must not fail the whole pull. Shared by both the
  * non-split and split-mode normalizers — the signal shape itself never
@@ -292,10 +329,13 @@ function buildSignalFromRow(
 ): TelemetrySignal | null {
 	const rawMethodName = asDisplayString(cell(row, "methodName"));
 	const stackTrace = asDisplayString(cell(row, "stackTrace"));
+	// RT0005 carries no alMethod, so the method comes from the AL frame. The
+	// pre-fix fallback took stack line 0, which is the `AppObjectType:` header
+	// — a non-method string that then became the finding's routine identity.
 	const methodName =
 		rawMethodName.trim() !== ""
 			? rawMethodName
-			: (stackTrace.split(/\r?\n/)[0] ?? "").trim();
+			: (parseAlStackFrame(stackTrace) ?? "");
 
 	const appId = asDisplayString(cell(row, "appId"));
 	const objectType = asDisplayString(cell(row, "objectType"));
@@ -327,10 +367,12 @@ function buildSignalFromRow(
 			avgRaw === undefined || avgRaw === null
 				? undefined
 				: asDurationMs(avgRaw, `${signalId} avgDurationMs`),
+		sqlExecutes: asOptionalCount(cell(row, "sqlExecutes")),
+		sqlRowsRead: asOptionalCount(cell(row, "sqlRowsRead")),
 	};
 }
 
-function normalizeTable(
+export function normalizeTable(
 	table: AppInsightsTable,
 	signalId: string,
 ): NormalizedRows {
