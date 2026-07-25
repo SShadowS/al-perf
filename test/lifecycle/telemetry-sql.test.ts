@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { parseAlStackFrame } from "../../src/lifecycle/telemetry-sql.js";
+import {
+	parseAlStackFrame,
+	telemetryRoutineKey,
+} from "../../src/lifecycle/telemetry-sql.js";
 
 describe("parseAlStackFrame", () => {
 	test("extracts the method from the first AL CallStack frame", () => {
@@ -58,5 +61,31 @@ describe("parseAlStackFrame", () => {
 		const stack =
 			'AppObjectType: Report\r\nAppObjectId: 840\r\nAL CallStack:\r\n"Report Handler"(CodeUnit 50500).ProcessReport line 30 - Sample Extension';
 		expect(parseAlStackFrame(stack)).toBe("ProcessReport");
+	});
+});
+
+describe("telemetryRoutineKey", () => {
+	test("is stable across object-type casing and trigger spelling", () => {
+		const a = telemetryRoutineKey("ABC", "CodeUnit", 80, "OnRun");
+		const b = telemetryRoutineKey("abc", "codeunit", 80, "onrun");
+		expect(a).toBe(b);
+	});
+
+	test("distinguishes different routines on the same object", () => {
+		expect(telemetryRoutineKey("abc", "CodeUnit", 80, "PostLines")).not.toBe(
+			telemetryRoutineKey("abc", "CodeUnit", 80, "PostHeader"),
+		);
+	});
+
+	test("distinguishes different objects", () => {
+		expect(telemetryRoutineKey("abc", "CodeUnit", 80, "OnRun")).not.toBe(
+			telemetryRoutineKey("abc", "CodeUnit", 81, "OnRun"),
+		);
+	});
+
+	test("does NOT include the signal id — RT0005 evidence must reach RT0018 findings", () => {
+		// Same routine, different signals => same key by construction: the key
+		// takes no signalId parameter at all.
+		expect(telemetryRoutineKey.length).toBe(4);
 	});
 });

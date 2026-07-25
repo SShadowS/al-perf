@@ -28,3 +28,37 @@ export function parseAlStackFrame(stack: string): string | null {
 	const match = AL_FRAME_RE.exec(frameText);
 	return match ? match[1] : null;
 }
+
+// ---------------------------------------------------------------------------
+// telemetryRoutineKey
+// ---------------------------------------------------------------------------
+
+import {
+	canonicalObjectType,
+	normalizeAppGuid,
+	normalizeTriggerName,
+} from "../semantic/identity.js";
+
+/**
+ * The join key evidence attaches on. Uses the SAME normalizers as
+ * `computeTelemetryFingerprint` (fingerprint.ts) so the key and the identity
+ * can never disagree on casing or trigger spelling.
+ *
+ * `signalId` is DELIBERATELY omitted: finding identity includes it, so a key
+ * that carried it could only ever reach RT0005 findings — and the whole point
+ * is that RT0005 statements must also annotate the RT0018 finding for the same
+ * routine.
+ */
+export function telemetryRoutineKey(
+	appId: string,
+	objectType: string,
+	objectId: number,
+	methodName: string,
+): string {
+	return [
+		normalizeAppGuid(appId),
+		canonicalObjectType(objectType),
+		String(objectId),
+		normalizeTriggerName(methodName).toLowerCase(),
+	].join("|");
+}
