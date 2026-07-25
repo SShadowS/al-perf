@@ -852,9 +852,7 @@ describe("redactSqlForSink", () => {
 				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SQLDATABASE".dbo."CRONUS$B" ON "x"="y"',
 			);
 			expect(out?.text).not.toContain("SQLDATABASE");
-			expect(out?.text).toBe(
-				'SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"',
-			);
+			expect(out?.text).toBe('SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"');
 		});
 
 		test("R3-2: a 3-part qualifier in a comma-separated FROM list", () => {
@@ -890,9 +888,7 @@ describe("redactSqlForSink", () => {
 				'SELECT "a" FROM dbo."CRONUS$T" WHERE "SQLDATABASE"."dbo"."CRONUS$U"."No_"=@0',
 			);
 			expect(out?.text).not.toContain("SQLDATABASE");
-			expect(out?.text).toBe(
-				'SELECT "a" FROM dbo."T" WHERE "U"."No_"=@0',
-			);
+			expect(out?.text).toBe('SELECT "a" FROM dbo."T" WHERE "U"."No_"=@0');
 		});
 
 		test("R3-6: a 3-part qualifier in an INSERT...SELECT source FROM", () => {
@@ -953,6 +949,157 @@ describe("redactSqlForSink", () => {
 			expect(redactSqlForSink(quotedAliasJoin)?.text).toBe(
 				'SELECT "a"."No_" FROM dbo."Sales Header" "a" JOIN dbo."Sales Line" "b" ON "a"."No_"="b"."Document No_"',
 			);
+		});
+	});
+
+	describe("Fix Round 4", () => {
+		test("CRITICAL: db..table (empty schema slot) drops the database name in a JOIN target", () => {
+			// `database..table` is valid T-SQL -- an empty schema slot means
+			// "use the default schema". chainSegmentsAfter's joiner
+			// regexes recognized "." and ".word." but not "..", so the walk
+			// returned 0 and "SQLDATABASE" was kept as if it were an alias;
+			// the pre-existing `/\.{2,}/g` collapse (now removed, see below)
+			// then made the leak look like an innocuous 2-part name.
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SQLDATABASE".."CRONUS$B" ON "x"="y"',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe(
+				'SELECT "a" FROM dbo."A" JOIN "B" ON "x"="y"',
+			);
+		});
+
+		test("CRITICAL: db..table in first-table-ref position -- the RULE drops it, though the statement still fails closed", () => {
+			// Same shape as above, but as the statement's OWN (only) table
+			// reference. chainSegmentsAfter now correctly identifies
+			// "SQLDATABASE" as a qualifier here too (proven by parseSqlTable
+			// disagreeing with a DIFFERENT value than before the fix -- see
+			// below) -- but the overall statement still returns null,
+			// because parseSqlTable (src/core/sql-node.ts, out of scope)
+			// has its OWN, separate inability to parse "db..table": its
+			// QUALIFIER regex can't consume a bare ".." hop at all, so it
+			// captures raw garbage (a literal embedded '"' character) for
+			// this exact shape regardless of anything in THIS file. The C5
+			// cross-check (tableRefLogical vs. that garbage) still fires,
+			// but now on a DIFFERENT, correctly-understood disagreement
+			// ("B" vs the garbage capture) rather than the pre-fix one
+			// ("SQLDATABASE" vs the same garbage) -- the rule, not the
+			// cross-check, is what now recognizes the qualifier; the
+			// cross-check is what still, separately, declines to guess at
+			// parseSqlTable's own unrelated limitation.
+			const out = redactSqlForSink('SELECT "a" FROM "SQLDATABASE".."CRONUS$B"');
+			expect(out).toBeNull();
+		});
+
+		test("MINOR: a newline-formatted qualifier chain keeps the separator between kept segments", () => {
+			// Before the fix: the post-hoc stray-dot cleanup regex couldn't
+			// tell "residue from a dropped qualifier" apart from "a real
+			// separator between two KEPT idents that happens to have
+			// whitespace before it" (newly possible once Round 3 started
+			// keeping intermediate segments like "dbo") -- and stripped the
+			// real separator between "dbo" and "T" too, producing
+			// `FROM "dbo" "T"` (reads as table + alias, ambiguous). Fixed by
+			// suppressing a DROPPED ident's own joiner precisely, inside the
+			// loop, rather than guessing post-hoc.
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM "SQLDATABASE"\n."dbo"\n."CRONUS$T"',
+			);
+			expect(out?.table).toBe("T");
+			// The exact whitespace formatting isn't the point -- the
+			// separator dot between "dbo" and "T" must survive, so this
+			// can't be misread as two unrelated quoted names.
+			expect(out?.text).toContain('"dbo"');
+			expect(out?.text).toMatch(/"dbo"\s*\.\s*"T"/);
+			expect(out?.text).not.toContain('"dbo" "T"'); // the exact pre-fix (broken) reading
+		});
+
+		test("MINOR: a space-surrounded qualifier chain (bare and quoted dbo) redacts cleanly", () => {
+			// The pre-existing half of this bug -- spaces around dots, not
+			// just newlines -- pinned for both the bare-word and
+			// quoted-ident "dbo" spellings.
+			const bareWord = redactSqlForSink(
+				'SELECT "No_" FROM "SQLDATABASE" . dbo . "CRONUS$T"',
+			);
+			expect(bareWord?.table).toBe("T");
+			expect(bareWord?.text).not.toContain("SQLDATABASE");
+			expect(bareWord?.text).toMatch(/dbo\s*\.\s*"T"/);
+
+			const quotedDbo = redactSqlForSink(
+				'SELECT "No_" FROM "SQLDATABASE" . "dbo"."CRONUS$T"',
+			);
+			expect(quotedDbo?.table).toBe("T");
+			expect(quotedDbo?.text).not.toContain("SQLDATABASE");
+			expect(quotedDbo?.text).toBe('SELECT "No_" FROM "dbo"."T"');
+		});
+
+		test("MINOR: a dropped BARE-WORD alias pair no longer leaves a dangling prefix", () => {
+			// Round 2's pair logic (expectingPairedColumn) only covers a
+			// QUOTED alias-prefix, because it keys off chainSegmentsAfter,
+			// which only ever starts a walk FROM an ident token -- a bare
+			// (unquoted) alias like `a` in `a."c1"` has no ident to key off
+			// of. Before this fix, the column half of the pair could be
+			// dropped past MAX_NAMED_COLUMNS while the bare alias prefix
+			// (already emitted as plain "other" characters before the
+			// drop-decision is even reached) survived, dangling with
+			// nothing after it. This is the brief's own test-3 spelling.
+			const cols = ["c1", "c2", "c3", "c4", "c5", "c6"]
+				.map((c) => `a."${c}"`)
+				.join(",");
+			const out = redactSqlForSink(
+				`SELECT ${cols} FROM dbo."CRONUS$T" a`,
+			);
+			expect(out?.columnCount).toBe(6);
+			expect(out?.text).toContain('a."c5"');
+			expect(out?.text).toContain("…+1 more");
+			expect(out?.text).not.toContain("c6");
+			// The exact pre-fix (broken) reading: a dangling "a." with
+			// nothing after it before the marker.
+			expect(out?.text).not.toMatch(/a\.\s*…/);
+		});
+
+		test("re-verify: the canonical RT0005 fixture and the quoted-alias JOIN still round-trip unchanged", () => {
+			const canonical =
+				'SELECT  TOP (1) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."COMPANY$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)';
+			expect(redactSqlForSink(canonical)?.text).toBe(
+				'SELECT TOP (?) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."Sample Table" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)',
+			);
+			const quotedAliasJoin =
+				'SELECT "a"."No_" FROM dbo."CRONUS$Sales Header" "a" JOIN dbo."CRONUS$Sales Line" "b" ON "a"."No_"="b"."Document No_"';
+			expect(redactSqlForSink(quotedAliasJoin)?.text).toBe(
+				'SELECT "a"."No_" FROM dbo."Sales Header" "a" JOIN dbo."Sales Line" "b" ON "a"."No_"="b"."Document No_"',
+			);
+		});
+
+		test("re-verify: the seven Round 3 repros still redact cleanly", () => {
+			const repros: [string, string][] = [
+				[
+					'SELECT "a" FROM dbo."CRONUS$A" JOIN "SQLDATABASE".dbo."CRONUS$B" ON "x"="y"',
+					'SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"',
+				],
+				[
+					'SELECT "a" FROM dbo."CRONUS$A", "SQLDATABASE".dbo."CRONUS$B"',
+					'SELECT "a" FROM dbo."A", dbo."B"',
+				],
+				[
+					'SELECT "SQLDATABASE"."dbo"."CRONUS$T"."No_" FROM dbo."CRONUS$T"',
+					'SELECT "T"."No_" FROM dbo."T"',
+				],
+				[
+					'SELECT "a" FROM dbo."CRONUS$T" WHERE "SQLDATABASE"."dbo"."CRONUS$U"."No_"=@0',
+					'SELECT "a" FROM dbo."T" WHERE "U"."No_"=@0',
+				],
+				[
+					'INSERT INTO dbo."CRONUS$T" ("a") SELECT "b" FROM "SQLDATABASE".dbo."CRONUS$U"',
+					'INSERT INTO dbo."T" ("a") SELECT "b" FROM dbo."U"',
+				],
+				[
+					'UPDATE dbo."CRONUS$T" SET "a"=1 FROM "SQLDATABASE".dbo."CRONUS$U"',
+					'UPDATE dbo."T" SET "a"=? FROM dbo."U"',
+				],
+			];
+			for (const [sql, expected] of repros) {
+				expect(redactSqlForSink(sql)?.text).toBe(expected);
+			}
 		});
 	});
 });

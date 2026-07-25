@@ -249,11 +249,79 @@ function tokenize(sql: string): TokenizeResult | null {
 	return { tokens, truncated: false, consumed: sql.length };
 }
 
+/** One hop of a qualifier/alias dot-chain — see `nextChainHop`'s doc comment. */
+interface ChainHop {
+	/** Token index of the ident this hop leads to. */
+	nextIdentIndex: number;
+	/** Segments this hop contributes toward `chainSegmentsAfter`'s count:
+	 * 1 for a bare-dot hop (just the next ident), 2 for a dot-word-dot or
+	 * empty-schema-slot ("..") hop (the word/empty-slot AND the ident past
+	 * it). */
+	segments: 1 | 2;
+	/** Token index (EXCLUSIVE) up to which a DROPPED ident's own trailing
+	 * joiner should be suppressed by the caller. For a bare-dot or "..' hop
+	 * this is the whole joiner (nothing worth keeping). For a dot-word-dot
+	 * hop it stops right after the FIRST dot — the bare schema word and the
+	 * SECOND dot survive regardless of whether the ident before them is
+	 * dropped, since the word was never "owned" by that ident (Fix Round 4:
+	 * suppressing the whole joiner here previously ate a legitimate `dbo`).
+	 */
+	suppressThrough: number;
+}
+
+/**
+ * Finds the single hop from the ident at `tokens[i]` to whatever ident (if
+ * any) a recognized dot-chain joiner leads to next. Returns `null` if
+ * nothing recognizable follows (chain ends at `tokens[i]`).
+ *
+ * The three recognized joiner shapes: a bare dot (next segment is ITSELF
+ * quoted/bracketed, arriving as its own `ident` token), a dot-word-dot
+ * (next segment is a bare, unquoted word such as `dbo`), or a dot-dot (Fix
+ * Round 4: `database..table` is valid T-SQL — an EMPTY schema slot meaning
+ * "use the default schema"). Mirrors the QUALIFIER regex in
+ * src/core/sql-node.ts, which strips ANY quoted/bracketed segment ahead of
+ * the final table name — not just the literal `dbo` spelling.
+ *
+ * Coupling the caller must preserve: this only ever recognizes a joiner made
+ * of dots, whitespace and AT MOST one bare word between idents (the empty-
+ * schema-slot case has zero words, not an unbounded number). The "other"-
+ * token loop below suppresses a dropped qualifier's joiner (via
+ * `suppressThrough`) BEFORE clause-boundary keyword detection runs on that
+ * same character; that ordering is only safe because this grammar can never
+ * itself contain FROM/WHERE/SET/VALUES-shaped text for the boundary
+ * detector to miss. Widening what this function accepts between segments
+ * would need that assumption re-checked.
+ */
+function nextChainHop(tokens: Token[], i: number): ChainHop | null {
+	let j = i + 1;
+	let joiner = "";
+	let firstDotIdx = -1;
+	for (; j < tokens.length; j++) {
+		const tok = tokens[j];
+		if (tok.kind !== "other") break;
+		if (firstDotIdx === -1 && tok.value === ".") firstDotIdx = j;
+		joiner += tok.value;
+	}
+	const next = tokens[j];
+	if (next?.kind !== "ident") return null;
+	if (/^\s*\.\s*$/.test(joiner)) {
+		return { nextIdentIndex: j, segments: 1, suppressThrough: j };
+	}
+	if (/^\s*\.\s*[A-Za-z_]\w*\s*\.\s*$/.test(joiner)) {
+		return { nextIdentIndex: j, segments: 2, suppressThrough: firstDotIdx + 1 };
+	}
+	if (/^\s*\.\s*\.\s*$/.test(joiner)) {
+		return { nextIdentIndex: j, segments: 2, suppressThrough: j };
+	}
+	return null; // joiner isn't one of the three recognized shapes -- chain ends here
+}
+
 /**
  * Counts how many further dot-separated segments — bare schema words
  * counted individually, plus quoted/bracketed idents — follow the ident at
- * `tokens[i]`, walking the WHOLE chain transitively (repeatedly hopping to
- * the next segment) rather than stopping after one hop.
+ * `tokens[i]`, walking the WHOLE chain transitively via `nextChainHop`
+ * (repeatedly hopping to the next segment) rather than stopping after one
+ * hop.
  *
  * Fix Round 3 (position → shape): a database/server qualifier and a table
  * ALIAS qualifying a column are indistinguishable by joiner shape alone —
@@ -280,50 +348,66 @@ function tokenize(sql: string): TokenizeResult | null {
  * of any chain, however long, are the alias.column/table.column shape kept
  * intact" behavior falls out of this rule automatically, without any
  * special-casing for table-reference vs. projection/WHERE position.
- *
- * The joiner between two idents can be a bare dot (when the next segment —
- * e.g. `dbo` — is ITSELF quoted/bracketed and so arrives as its own `ident`
- * token, contributing 1 to the count) or a dot-word-dot (when the next
- * segment is a bare, unquoted word such as `dbo`, contributing 2: the word
- * itself AND the ident past it). Mirrors the QUALIFIER regex in
- * src/core/sql-node.ts, which strips ANY quoted/bracketed segment ahead of
- * the final table name — not just the literal `dbo` spelling.
- *
- * Coupling the caller must preserve: this only ever recognizes a joiner made
- * of dots, whitespace and at most one bare word between idents — the SAME
- * restrictive grammar as the pre-Round-3 single-hop version, just applied
- * repeatedly. The "other"-token loop below suppresses a dropped alias
- * pair's joiner BEFORE clause-boundary keyword detection runs on that same
- * character; that ordering is only safe because this grammar can never
- * itself contain FROM/WHERE/SET/VALUES-shaped text for the boundary
- * detector to miss. Widening what this function accepts between segments
- * would need that assumption re-checked.
  */
 function chainSegmentsAfter(tokens: Token[], i: number): number {
 	let count = 0;
 	let cursor = i;
 	for (;;) {
-		let j = cursor + 1;
-		let joiner = "";
-		for (; j < tokens.length; j++) {
-			const tok = tokens[j];
-			if (tok.kind !== "other") break;
-			joiner += tok.value;
-		}
-		const next = tokens[j];
-		if (next?.kind !== "ident") return count;
-		if (/^\s*\.\s*$/.test(joiner)) {
-			count += 1; // bare-dot hop straight to the next ident
-			cursor = j;
-			continue;
-		}
-		if (/^\s*\.\s*[A-Za-z_]\w*\s*\.\s*$/.test(joiner)) {
-			count += 2; // the bare word AND the ident it leads to
-			cursor = j;
-			continue;
-		}
-		return count; // joiner isn't one of the two recognized shapes -- chain ends here
+		const hop = nextChainHop(tokens, cursor);
+		if (!hop) return count;
+		count += hop.segments;
+		cursor = hop.nextIdentIndex;
 	}
+}
+
+/** True when `tokens[i]` is a letter/underscore "other" char that starts a
+ * NEW bare-word run — i.e. the char right before it (if any) isn't itself
+ * part of a word. Used only to gate `bareAliasHop` so it scans a given run
+ * once, from its start, rather than redundantly re-testing every character
+ * inside it. */
+function isWordStart(tokens: Token[], i: number): boolean {
+	const tok = tokens[i];
+	if (tok.kind !== "other" || !/[A-Za-z_]/.test(tok.value)) return false;
+	if (i === 0) return true;
+	const prev = tokens[i - 1];
+	return !(prev.kind === "other" && /[A-Za-z0-9_]/.test(prev.value));
+}
+
+/**
+ * Fix Round 4 (minor): a BARE (unquoted) table alias immediately qualifying
+ * a column, e.g. the `a` in `a."c1"`, is never an `ident` token at all — it
+ * has no delimiter, so it's just raw "other" characters, invisible to
+ * `chainSegmentsAfter`/`nextChainHop` (which only ever start a walk FROM an
+ * ident). Round 2's alias.column pair-counting (`expectingPairedColumn`)
+ * only covers a QUOTED alias-prefix for exactly this reason: it has nothing
+ * to key off of for a bare one. Left unfixed, a bare alias whose column gets
+ * dropped past MAX_NAMED_COLUMNS leaves the alias itself dangling with
+ * nothing after it (`a."c5",a. …+1 more FROM …`) — the SAME class of bug
+ * Round 2 fixed for quoted aliases, just on the other spelling (this is the
+ * brief's own test-3 shape).
+ *
+ * Detects whether the "other"-token run starting at `tokens[i]` (which MUST
+ * be a word-start, see `isWordStart`) is EXACTLY a bare word followed by a
+ * single dot, leading directly to an ident — i.e. a bare-alias qualifier —
+ * and if so returns that ident's token index. The caller doesn't need to
+ * suppress anything itself: it just remembers where in the output this run
+ * started (`out.length`, right before emitting it) and, if the ident this
+ * hop leads to later turns out to be dropped for exceeding
+ * MAX_NAMED_COLUMNS, slices the alias text back out retroactively — cheaper
+ * than deferring/buffering every "other" token on the chance it turns out
+ * to matter.
+ */
+function bareAliasHop(tokens: Token[], i: number): { identIndex: number } | null {
+	if (!isWordStart(tokens, i)) return null;
+	let j = i;
+	let run = "";
+	while (j < tokens.length && tokens[j].kind === "other") {
+		run += (tokens[j] as Extract<Token, { kind: "other" }>).value;
+		j++;
+	}
+	const next = tokens[j];
+	if (next?.kind !== "ident") return null;
+	return /^[A-Za-z_]\w*\s*\.\s*$/.test(run) ? { identIndex: j } : null;
 }
 
 /**
@@ -423,6 +507,26 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	// artifact even though both idents either side of it are gone.
 	let expectingPairedColumn = false;
 	let pairedColumnDropped = false;
+	// Fix Round 4: token index (EXCLUSIVE) up to which "other" tokens should
+	// be suppressed, set whenever an ident is dropped as a qualifier — its
+	// own trailing joiner (see nextChainHop's `suppressThrough`) must vanish
+	// alongside it. A prior version of this fix patched the FINISHED string
+	// instead (a post-hoc regex guessing at which stray dots were qualifier
+	// residue); once Round 3 started keeping intermediate chain segments,
+	// that regex could no longer tell "residue from a drop" apart from "a
+	// real separator between two KEPT idents that happens to have
+	// whitespace before it" and started eating real separators too.
+	// Suppressing the dropped ident's OWN joiner here, precisely, removes
+	// the ambiguity at the source — nothing is ever left over to guess about.
+	let suppressOtherUntilIdx = -1;
+	// Fix Round 4 (minor): out.length right before a candidate BARE alias
+	// run (see bareAliasHop) started being emitted, valid until the ident it
+	// leads to is resolved — used to retroactively remove that run if the
+	// ident it qualifies turns out to be dropped past MAX_NAMED_COLUMNS (a
+	// bare alias, unlike a quoted one, is invisible to the ident-based pair
+	// tracking above, so it can't be held back the same way; rolling it back
+	// after the fact is cheaper than deferring every "other" token).
+	let bareAliasRollback: number | null = null;
 	// [start, end) spans of `out` occupied by a KEPT identifier's own emitted
 	// text (quotes/brackets included) — the numeric-blanking pass below must
 	// never touch a digit inside one of these, or an ordinary retained column
@@ -436,6 +540,12 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			continue;
 		}
 		if (t.kind === "ident") {
+			// Consume any bare-alias rollback point set by the "other"-token
+			// branch below, immediately — captured fresh per ident so it can
+			// never leak into some LATER, unrelated ident that just happens
+			// not to overflow.
+			const myBareAliasRollback = bareAliasRollback;
+			bareAliasRollback = null;
 			// Resolve any pending pair verdict from the PREVIOUS ident first,
 			// unconditionally — structurally, the ident right after an
 			// alias-prefix's joiner IS its paired column
@@ -461,6 +571,13 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			// coupling this grammar must preserve.
 			const followingSegments = chainSegmentsAfter(tokens, idx);
 			if (followingSegments >= 2) {
+				// This ident's own hop determines exactly how much of ITS
+				// trailing joiner to suppress (stopping short of a bare
+				// schema word, which survives regardless — see
+				// nextChainHop's doc comment). followingSegments >= 2
+				// guarantees a hop exists here.
+				const hop = nextChainHop(tokens, idx);
+				if (hop) suppressOtherUntilIdx = hop.suppressThrough;
 				continue; // drop the qualifier segment
 			}
 			const logical = logicalIdentifier(t.value);
@@ -500,7 +617,14 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 					expectingPairedColumn = true;
 					pairedColumnDropped = overLimit;
 				}
-				if (overLimit) continue;
+				if (overLimit) {
+					// A BARE alias immediately qualifying this (now-dropped)
+					// column is invisible to the pair-tracking above (see
+					// bareAliasHop's doc comment) — roll it back too, or it's
+					// left dangling with nothing after it.
+					if (myBareAliasRollback !== null) out = out.slice(0, myBareAliasRollback);
+					continue;
+				}
 			}
 			// A kept identifier can still carry a literal delimiter char (from
 			// a "]]"/`""`-escaped physical name whose logical segment wasn't
@@ -523,6 +647,15 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		// "."), never part of either ident's value — suppress it too, or a
 		// lone "." survives with nothing meaningful on either side of it.
 		if (expectingPairedColumn && pairedColumnDropped) continue;
+		// A dropped QUALIFIER's own trailing joiner (Fix Round 4) — see
+		// suppressOtherUntilIdx's doc comment above.
+		if (idx < suppressOtherUntilIdx) continue;
+		// Mark a candidate BARE alias run (Fix Round 4, minor) so the ident
+		// it leads to can roll it back if that ident is dropped past
+		// MAX_NAMED_COLUMNS — see bareAliasHop's doc comment. The run's own
+		// characters still get appended normally below either way; this
+		// only records WHERE they started.
+		if (bareAliasHop(tokens, idx)) bareAliasRollback = out.length;
 		out += t.value;
 		if (
 			operation === "UPDATE" &&
@@ -600,23 +733,19 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	// statement closed rather than emit it.
 	if (/[^\s.,()]*\$[^\s.,()]*/.test(out)) return null;
 
-	// A dropped qualifier ident leaves a stray "." (or a run of them, for a
-	// chain of several dropped idents) before whatever follows it — a bare
-	// schema word like "dbo", or directly the final quoted/bracketed table
-	// name. Collapse the run to one dot, then drop that one dot too unless a
-	// bare word needs it as a separator before the table name. Since Fix
-	// Round 3 (chainSegmentsAfter is shape-based, not tied to the
-	// FROM/INTO/UPDATE/MERGE table-reference window), a dropped qualifier
-	// chain can start right after "," (a comma-separated FROM item) or "("
-	// (a parenthesized WHERE predicate, e.g. `WHERE ("SQLDATABASE"."dbo"."T"...`)
-	// with no whitespace in between — genuinely reachable now, not just
-	// defense in depth.
-	out = out.replace(/\.{2,}/g, ".");
-	out = out.replace(
-		/(^|[\s,(])\.(?:([A-Za-z_]\w*)\.)?(?=["[])/gi,
-		(_m, pre: string, word: string | undefined) =>
-			pre + (word ? `${word}.` : ""),
-	);
+	// Fix Round 4: a dropped qualifier's own trailing joiner is now suppressed
+	// PRECISELY, inside the loop above (suppressOtherUntilIdx / nextChainHop's
+	// suppressThrough), stopping short of any bare schema word it leads to.
+	// Earlier rounds patched this with a post-hoc regex here instead
+	// (collapse runs of 2+ dots, then strip a whitespace/comma/paren-preceded
+	// dot ahead of a quote/bracket) — but once Round 3 started KEEPING
+	// intermediate chain segments (e.g. "dbo" in a 3-part reference), that
+	// regex could no longer tell "residue from a drop" apart from "a
+	// legitimate separator between two KEPT idents that happens to have
+	// whitespace before it" (e.g. a newline- or space-formatted qualifier
+	// chain) — and silently ate the real separator too. Suppressing the
+	// dropped ident's OWN joiner at the source removes the ambiguity
+	// entirely: nothing is ever left over here for a regex to guess about.
 
 	if (namedColumns > MAX_NAMED_COLUMNS) {
 		columnCount = namedColumns;
