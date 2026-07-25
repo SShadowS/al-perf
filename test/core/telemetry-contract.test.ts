@@ -108,6 +108,15 @@ describe("library API surface", () => {
 // anywhere in the parser (2026-07-12, pre-Task-3 commit). analyzedAt is the
 // only non-deterministic field in the output and is normalized to "<PINNED>"
 // before comparison — everything else must match byte-for-byte.
+//
+// Re-baselined for Task 10 (telemetry-sql-evidence plan): meta now always
+// carries `incompleteInvocations` (0 here — the fixture has no
+// signalAvailability, so nothing failed). Deliberately unconditional per the
+// brief's meta block (§9/§10 gating) — see telemetry-parser.ts's
+// parseTelemetryBatch. Neither fixture signal carries SQL fields, so the two
+// patterns below are otherwise untouched: no sqlEvidence/sqlRank, no evidence
+// text appended, confirming the evidence-string wiring is scoped to
+// SQL-bearing signals only.
 // ---------------------------------------------------------------------------
 
 function pinnedFixtureBatch() {
@@ -152,6 +161,7 @@ const PINNED_GOLDEN_SNAPSHOT = `{
 			"idleSelfTime": 0,
 			"totalNodes": 0,
 			"maxDepth": 0,
+			"incompleteInvocations": 0,
 			"sourceAvailable": false,
 			"confidenceScore": 0,
 			"confidenceFactors": {
