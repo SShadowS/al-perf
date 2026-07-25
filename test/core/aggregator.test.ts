@@ -392,3 +392,54 @@ describe("aggregateByMethod: R3-8 appId carried from declaringApplication.appId"
 		expect(doWork!.appId).toBeUndefined();
 	});
 });
+
+describe("aggregateByMethod — recursion must not double-count totalTime", () => {
+	const FIX = `${import.meta.dir}/../fixtures`;
+
+	function outermostTotals(profile: ProcessedProfile) {
+		const key = (n: ProcessedNode) =>
+			`${n.callFrame.functionName}_${n.applicationDefinition.objectType}_${n.applicationDefinition.objectId}`;
+		const totals = new Map<string, number>();
+		for (const n of profile.allNodes) {
+			const k = key(n);
+			let nested = false;
+			for (let a = n.parent; a; a = a.parent) {
+				if (key(a) === k) {
+					nested = true;
+					break;
+				}
+			}
+			if (!nested) totals.set(k, (totals.get(k) ?? 0) + n.totalTime);
+		}
+		return totals;
+	}
+
+	test("a self-calling method's totalTime counts the outermost call only", async () => {
+		// recursive-profile: ProcessRecursive nests three deep, and each node's
+		// totalTime already contains its children's. Summing every node charged
+		// the same microseconds once per level.
+		const processed = processProfile(
+			await parseProfile(`${FIX}/recursive-profile.alcpuprofile`),
+		);
+		const truth = outermostTotals(processed);
+		for (const m of aggregateByMethod(processed)) {
+			const k = `${m.functionName}_${m.objectType}_${m.objectId}`;
+			expect(m.totalTime).toBeLessThanOrEqual((truth.get(k) ?? 0) + 1);
+		}
+	});
+
+	test("selfTime still sums across every call site", async () => {
+		// Only totalTime nests. Self time is disjoint per node, so a method
+		// called from three places must still report all three.
+		const processed = processProfile(
+			await parseProfile(`${FIX}/recursive-profile.alcpuprofile`),
+		);
+		const rec = aggregateByMethod(processed).find(
+			(m) => m.functionName === "ProcessRecursive",
+		)!;
+		const nodeSelf = processed.allNodes
+			.filter((n) => n.callFrame.functionName === "ProcessRecursive")
+			.reduce((s, n) => s + n.selfTime, 0);
+		expect(rec.selfTime).toBe(nodeSelf);
+	});
+});

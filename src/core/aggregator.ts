@@ -3,9 +3,24 @@ import type {
 	MethodBreakdown,
 	ObjectBreakdown,
 } from "../types/aggregated.js";
-import type { ProcessedProfile } from "../types/processed.js";
+import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import { formatMethodRef } from "./patterns.js";
 import { isIdleNode } from "./processor.js";
+
+/**
+ * Whether `node` sits inside another node of the same method — i.e. it is a
+ * recursive re-entry whose totalTime is already counted by an ancestor.
+ * `key` must be the same `functionName_objectType_objectId` the caller groups by.
+ */
+function hasSameMethodAncestor(node: ProcessedNode, key: string): boolean {
+	for (let a = node.parent; a; a = a.parent) {
+		const { objectType, objectId } = a.applicationDefinition;
+		if (`${a.callFrame.functionName}_${objectType}_${objectId}` === key) {
+			return true;
+		}
+	}
+	return false;
+}
 
 export function aggregateByApp(profile: ProcessedProfile): AppBreakdown[] {
 	const map = new Map<string, AppBreakdown>();
@@ -91,7 +106,16 @@ export function aggregateByMethod(
 		}
 
 		entry.selfTime += node.selfTime;
-		entry.totalTime += node.totalTime;
+		// A node's totalTime ALREADY contains its descendants', so a method that
+		// calls itself must count only its OUTERMOST occurrences — otherwise the
+		// same microseconds are charged once per level of recursion. Real
+		// captures: `PostItem` reported 254,702µs (36% of the profile) for a
+		// call that actually costs 127,351µs (18%), because the inner node's
+		// time was added to the outer node's, which already included it.
+		// selfTime and hitCount are disjoint per node and still sum.
+		if (!hasSameMethodAncestor(node, key)) {
+			entry.totalTime += node.totalTime;
+		}
 		entry.hitCount += node.hitCount;
 
 		if (node.isBuiltinCodeUnitCall) {
