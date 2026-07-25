@@ -324,7 +324,16 @@ survives the database round-trip.
 - The structured `sqlEvidence` object stays in memory for the formatters, JSON and MCP, and is
   **documented as not persisted**: historical trends and sinks see the string form only.
 - `redactSqlForSink` runs before the string is built, and the string is assembled only from
-  already-redacted text. There is no path from raw statement text to `evidence`.
+  already-redacted text — for the **adapter path** (`appinsights.ts` pulling from App Insights and
+  building `sqlEvidence` itself). There is no path from raw statement text to `evidence` there.
+  **Correction (final review, F4):** this is not true of the **ingest path**. A producer posting a
+  telemetry batch directly (`/api/ingest`, or any third-party producer) can supply `sqlEvidence`
+  on the wire; the parser validates its *shape* field-by-field (every statement field checked, F4
+  fix) but does not re-run `redactSqlForSink` or otherwise verify the *content* is actually redacted
+  — wire-supplied evidence is trusted as producer-redacted, the same trust posture the wire contract
+  already extends to every other field. Severity is contained: `/api/ingest` binds its bearer token
+  to one tenant, so a producer can only inject unredacted text into its own findings, never another
+  tenant's.
 
 Three statements rather than five because an issue body is read by a human; the full set still drives
 the totals. Two consequences, stated rather than discovered:

@@ -384,15 +384,125 @@ describe("SQL evidence wire contract (Task 7)", () => {
 		);
 	});
 
+	// attribution is present and valid here so this test isolates the ONE
+	// field under test (statements) — F4 fix (final review) added its own
+	// attribution check, covered separately below.
 	test("rejects sqlEvidence missing a statements array", () => {
 		const batch = makeBatch([
 			{
 				...baseSignal,
-				sqlEvidence: { provenance: "measured-threshold-gated" },
+				sqlEvidence: {
+					provenance: "measured-threshold-gated",
+					attribution: "telemetry-stack",
+				},
 			},
 		]);
 		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
 			/statements/,
+		);
+	});
+
+	// F4 fix (final review): optionalTelemetrySqlEvidence used to trust every
+	// statement field verbatim once `provenance` and `Array.isArray(statements)`
+	// passed — a wire-supplied statement missing `text` threw a TypeError deep
+	// in the renderer instead of failing closed here, at the parse boundary.
+	test("rejects an unknown evidence attribution", () => {
+		const batch = makeBatch([
+			{
+				...baseSignal,
+				sqlEvidence: {
+					provenance: "measured-threshold-gated",
+					attribution: "made-up",
+					statements: [],
+				},
+			},
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/attribution/,
+		);
+	});
+
+	test("rejects a statement missing text, fail-closed instead of throwing deep in the renderer", () => {
+		const batch = makeBatch([
+			{
+				...baseSignal,
+				sqlEvidence: {
+					provenance: "measured-threshold-gated",
+					attribution: "telemetry-stack",
+					totalMeasuredMs: 100,
+					totalOccurrences: 1,
+					statements: [
+						{
+							operation: "SELECT",
+							table: "Sales Line",
+							extensionAppId: null,
+							occurrences: 1,
+							measuredTotalMs: 100,
+							truncated: false,
+							// text deliberately omitted
+						},
+					],
+				},
+			},
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/statements\[0\].*text/,
+		);
+	});
+
+	test("rejects a statement with a non-numeric measuredTotalMs, fail-closed instead of rendering 'undefinedms'", () => {
+		const batch = makeBatch([
+			{
+				...baseSignal,
+				sqlEvidence: {
+					provenance: "measured-threshold-gated",
+					attribution: "telemetry-stack",
+					totalMeasuredMs: 100,
+					totalOccurrences: 1,
+					statements: [
+						{
+							text: "SELECT * FROM [Sales Line]",
+							operation: "SELECT",
+							table: "Sales Line",
+							extensionAppId: null,
+							occurrences: 1,
+							measuredTotalMs: "not-a-number",
+							truncated: false,
+						},
+					],
+				},
+			},
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/statements\[0\].*measuredTotalMs/,
+		);
+	});
+
+	test("rejects a statement with an unknown operation", () => {
+		const batch = makeBatch([
+			{
+				...baseSignal,
+				sqlEvidence: {
+					provenance: "measured-threshold-gated",
+					attribution: "telemetry-stack",
+					totalMeasuredMs: 100,
+					totalOccurrences: 1,
+					statements: [
+						{
+							text: "SELECT * FROM [Sales Line]",
+							operation: "UPSERT",
+							table: "Sales Line",
+							extensionAppId: null,
+							occurrences: 1,
+							measuredTotalMs: 100,
+							truncated: false,
+						},
+					],
+				},
+			},
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/statements\[0\].*operation/,
 		);
 	});
 });

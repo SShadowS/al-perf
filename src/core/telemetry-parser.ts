@@ -240,10 +240,107 @@ function optionalClientType(
 	return v;
 }
 
+const SQL_OPERATIONS = new Set([
+	"SELECT",
+	"COUNT",
+	"INSERT",
+	"UPDATE",
+	"DELETE",
+	"OTHER",
+]);
+
+function requireSqlOperation(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): TelemetrySqlStatementEvidence["operation"] {
+	const v = obj[field];
+	if (typeof v !== "string" || !SQL_OPERATIONS.has(v)) {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}' (expected one of SELECT, COUNT, INSERT, UPDATE, DELETE, OTHER)`,
+		);
+	}
+	return v as TelemetrySqlStatementEvidence["operation"];
+}
+
+/** `table`/`extensionAppId` are required but nullable — a statement the redactor couldn't attribute a table/app to carries `null`, not a missing field. */
+function requireStringOrNull(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): string | null {
+	const v = obj[field];
+	if (v === null) return null;
+	if (typeof v !== "string") {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}' (expected a string or null)`,
+		);
+	}
+	return v;
+}
+
 /**
- * Fail-closed shape check. An unknown `provenance` is REJECTED rather than
- * passed through: the discriminant is what every renderer narrows on, so an
- * unrecognized value would render measured data under sampled labels.
+ * Fail-closed shape check for ONE statement (F4 fix, final review). Before
+ * this, only `provenance` and `Array.isArray(statements)` were checked and
+ * every statement field was trusted verbatim — a wire-supplied statement
+ * missing `text` threw an unhandled TypeError deep in
+ * `renderEvidenceSqlBlock` (`s.text.length`) instead of this module's own
+ * fail-closed error, and a non-numeric `measuredTotalMs` rendered
+ * `undefinedms xundefined` into the persisted evidence string. Every field
+ * now goes through the same `require*`/`optional*` helpers `validateSignal`
+ * uses, so a malformed statement fails here, at the parse boundary, with a
+ * message naming the field — never downstream in a renderer.
+ */
+function validateTelemetrySqlStatementEvidence(
+	raw: unknown,
+	index: number,
+	context: string,
+): TelemetrySqlStatementEvidence {
+	const stmtContext = `${context}.statements[${index}]`;
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		throw new Error(`telemetry-batch ${stmtContext}: not an object`);
+	}
+	const obj = raw as Record<string, unknown>;
+	return {
+		text: requireString(obj, "text", stmtContext),
+		operation: requireSqlOperation(obj, "operation", stmtContext),
+		table: requireStringOrNull(obj, "table", stmtContext),
+		extensionAppId: requireStringOrNull(obj, "extensionAppId", stmtContext),
+		occurrences: requireNonNegativeInteger(obj, "occurrences", stmtContext),
+		measuredTotalMs: requireNonNegativeNumber(
+			obj,
+			"measuredTotalMs",
+			stmtContext,
+		),
+		truncated: requireBoolean(obj, "truncated", stmtContext),
+	};
+}
+
+function optionalSqlThreshold(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): { minMs: number; maxMs: number } | undefined {
+	const v = obj[field];
+	if (v === undefined) return undefined;
+	if (typeof v !== "object" || v === null || Array.isArray(v)) {
+		throw new Error(`telemetry-batch ${context}: invalid field '${field}'`);
+	}
+	const t = v as Record<string, unknown>;
+	const thresholdContext = `${context}.${field}`;
+	return {
+		minMs: requireNonNegativeNumber(t, "minMs", thresholdContext),
+		maxMs: requireNonNegativeNumber(t, "maxMs", thresholdContext),
+	};
+}
+
+/**
+ * Fail-closed shape check. An unknown `provenance` (or `attribution`, which
+ * is a constant per §5 of the design) is REJECTED rather than passed
+ * through: the discriminant is what every renderer narrows on, so an
+ * unrecognized value would render measured data under sampled labels. Every
+ * statement is validated field-by-field (F4 fix, final review) — see
+ * validateTelemetrySqlStatementEvidence.
  */
 function optionalTelemetrySqlEvidence(
 	obj: Record<string, unknown>,
@@ -261,12 +358,36 @@ function optionalTelemetrySqlEvidence(
 			`telemetry-batch ${context}: invalid field '${field}.provenance' (expected "measured-threshold-gated")`,
 		);
 	}
+	if (e.attribution !== "telemetry-stack") {
+		throw new Error(
+			`telemetry-batch ${context}: invalid field '${field}.attribution' (expected "telemetry-stack")`,
+		);
+	}
 	if (!Array.isArray(e.statements)) {
 		throw new Error(
 			`telemetry-batch ${context}: invalid field '${field}.statements'`,
 		);
 	}
-	return v as TelemetrySqlEvidence;
+	const evidenceContext = `${context}.${field}`;
+	const statements = e.statements.map((s, i) =>
+		validateTelemetrySqlStatementEvidence(s, i, evidenceContext),
+	);
+	return {
+		statements,
+		totalMeasuredMs: requireNonNegativeNumber(
+			e,
+			"totalMeasuredMs",
+			evidenceContext,
+		),
+		totalOccurrences: requireNonNegativeInteger(
+			e,
+			"totalOccurrences",
+			evidenceContext,
+		),
+		provenance: "measured-threshold-gated",
+		attribution: "telemetry-stack",
+		threshold: optionalSqlThreshold(e, "threshold", evidenceContext),
+	};
 }
 
 /**
