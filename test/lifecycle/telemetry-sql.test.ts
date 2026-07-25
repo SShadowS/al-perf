@@ -834,4 +834,125 @@ describe("redactSqlForSink", () => {
 			expect(redactSqlForSink("EXEC sp_who")).toBeNull();
 		});
 	});
+
+	describe("Fix Round 3", () => {
+		// NB1's fix (Round 2) gated the database-qualifier drop to the
+		// table-reference-parsing window (right after FROM/INTO/UPDATE/
+		// MERGE, before tableRefLogical latches on the statement's FIRST
+		// table). That window structurally can't see a JOIN target, a
+		// comma-separated FROM item, a MERGE USING clause, or a qualified
+		// column in a projection/WHERE -- every one of these leaked the
+		// database name verbatim. Fixed by chainSegmentsAfter: shape, not
+		// position, decides whether an ident is a qualifier (2+ further
+		// chain segments) or the alias/table half of a kept pair (exactly
+		// 1). All seven repros below leaked "SQLDATABASE" before this round.
+
+		test("R3-1: a 3-part qualifier in a JOIN target", () => {
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SQLDATABASE".dbo."CRONUS$B" ON "x"="y"',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe(
+				'SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"',
+			);
+		});
+
+		test("R3-2: a 3-part qualifier in a comma-separated FROM list", () => {
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$A", "SQLDATABASE".dbo."CRONUS$B"',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe('SELECT "a" FROM dbo."A", dbo."B"');
+		});
+
+		test("R3-3: a 3-part qualifier in a MERGE USING clause", () => {
+			const out = redactSqlForSink(
+				'MERGE INTO dbo."CRONUS$Cust" AS t USING "SQLDATABASE".dbo."CRONUS$Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe(
+				'MERGE INTO dbo."Cust" AS t USING dbo."Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
+			);
+		});
+
+		test("R3-4: a 4-part fully-qualified column in a SELECT projection reduces to table.column", () => {
+			// The two shapes the corpus structurally cannot see under the
+			// old position gate: a qualified COLUMN position (this test)...
+			const out = redactSqlForSink(
+				'SELECT "SQLDATABASE"."dbo"."CRONUS$T"."No_" FROM dbo."CRONUS$T"',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe('SELECT "T"."No_" FROM dbo."T"');
+		});
+
+		test("R3-5: a 4-part fully-qualified column in a WHERE predicate reduces to table.column", () => {
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$T" WHERE "SQLDATABASE"."dbo"."CRONUS$U"."No_"=@0',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe(
+				'SELECT "a" FROM dbo."T" WHERE "U"."No_"=@0',
+			);
+		});
+
+		test("R3-6: a 3-part qualifier in an INSERT...SELECT source FROM", () => {
+			const out = redactSqlForSink(
+				'INSERT INTO dbo."CRONUS$T" ("a") SELECT "b" FROM "SQLDATABASE".dbo."CRONUS$U"',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe(
+				'INSERT INTO dbo."T" ("a") SELECT "b" FROM dbo."U"',
+			);
+		});
+
+		test("R3-7: a 3-part qualifier in an UPDATE...FROM clause", () => {
+			// ...and a JOIN target (R3-1) -- this test uses BOTH a JOIN-like
+			// second table reference AND stands in for the "not FROM/INTO/
+			// UPDATE/MERGE-adjacent" position class generally (T-SQL's
+			// UPDATE...FROM syntax): the qualifier sits after a bare "FROM"
+			// that is NOT the statement's own table-reference keyword (that
+			// was already consumed by "UPDATE dbo.\"T\"").
+			const out = redactSqlForSink(
+				'UPDATE dbo."CRONUS$T" SET "a"=1 FROM "SQLDATABASE".dbo."CRONUS$U"',
+			);
+			expect(out?.text).not.toContain("SQLDATABASE");
+			expect(out?.text).toBe('UPDATE dbo."T" SET "a"=? FROM dbo."U"');
+		});
+
+		test("R3: tableRefLogical still resolves to the chain's FINAL segment, not an intermediate one", () => {
+			// Regression on the fix itself, found while implementing it: a
+			// 3-part ALL-QUOTED chain used as the statement's OWN table
+			// reference (not a JOIN/later one) now keeps "dbo" too (it has
+			// exactly 1 following segment, same shape as any kept alias) --
+			// but "dbo" is an INTERMEDIATE segment, not the table, and must
+			// not be captured as tableRefLogical or it disagrees with
+			// parseSqlTable's own "Sales Header" resolution and fails the
+			// C5 cross-check on a false mismatch (this was a real, if
+			// short-lived, regression during Round 3 development -- caught
+			// by the pre-existing C1 test before it ever reached commit).
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM "SQLDATABASE"."dbo"."CRONUS$Sales Header"',
+			);
+			expect(out).not.toBeNull();
+			expect(out?.table).toBe("Sales Header");
+			expect(out?.text).toBe('SELECT "No_" FROM "dbo"."Sales Header"');
+		});
+
+		test("R3: the canonical RT0005 fixture and the quoted-alias JOIN still round-trip unchanged", () => {
+			// Re-verification per the dispatch: these are also covered by
+			// their own exact-text-match tests under "Fix Round 2" above
+			// (still green), pinned here again explicitly alongside the
+			// seven new leak repros as the requested re-check.
+			const canonical =
+				'SELECT  TOP (1) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."COMPANY$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)';
+			expect(redactSqlForSink(canonical)?.text).toBe(
+				'SELECT TOP (?) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."Sample Table" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)',
+			);
+			const quotedAliasJoin =
+				'SELECT "a"."No_" FROM dbo."CRONUS$Sales Header" "a" JOIN dbo."CRONUS$Sales Line" "b" ON "a"."No_"="b"."Document No_"';
+			expect(redactSqlForSink(quotedAliasJoin)?.text).toBe(
+				'SELECT "a"."No_" FROM dbo."Sales Header" "a" JOIN dbo."Sales Line" "b" ON "a"."No_"="b"."Document No_"',
+			);
+		});
+	});
 });

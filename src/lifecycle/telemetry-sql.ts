@@ -250,41 +250,80 @@ function tokenize(sql: string): TokenizeResult | null {
 }
 
 /**
- * True when the ident at `tokens[i]` LOOKS like a leading qualifier segment
- * in a multi-part `"DB"."dbo"."Table"` / `"DB".dbo."Table"` reference —
- * recognized by peeking past the joiner for a following identifier.
- * Database/server names carry no `$`, so `logicalIdentifier` alone would
- * pass one through unredacted (it has nothing to split on); this closes
- * that gap.
+ * Counts how many further dot-separated segments — bare schema words
+ * counted individually, plus quoted/bracketed idents — follow the ident at
+ * `tokens[i]`, walking the WHOLE chain transitively (repeatedly hopping to
+ * the next segment) rather than stopping after one hop.
+ *
+ * Fix Round 3 (position → shape): a database/server qualifier and a table
+ * ALIAS qualifying a column are indistinguishable by joiner shape alone —
+ * `"50102"."Store No_"` and `"SQLDATABASE"."dbo"."CRONUS$T"` both start with
+ * ident-dot-ident. Round 2 (NB1) told them apart by POSITION (only the
+ * table-reference-parsing window, right after FROM/INTO/UPDATE/MERGE, could
+ * drop a qualifier) — but that only ever sees the statement's FIRST table
+ * reference: a JOIN target, a comma-separated FROM item, a MERGE USING
+ * clause, or a qualified column in a projection/WHERE all sit OUTSIDE that
+ * window and leaked the database name straight through (Fix Round 3, seven
+ * repros). Enumerating every keyword that can precede a table reference
+ * (JOIN, USING, APPLY, ...) is a list that will always be one keyword
+ * behind BC's own T-SQL generator.
+ *
+ * Shape alone DOES disambiguate, once the WHOLE chain (not just the next
+ * hop) is considered: the caller treats `tokens[i]` as a qualifier to drop
+ * only when 2+ segments still lead to the chain's real destination.
+ * `"50102"."Store No_"` — "50102" has exactly 1 segment following it (the
+ * column) → an alias, kept. `"SQLDATABASE"."dbo"."CRONUS$T"` — "SQLDATABASE"
+ * has 2 (`dbo`, `CRONUS$T`) → dropped; "dbo" then has only 1 (`CRONUS$T`) →
+ * kept. A 4-part fully-qualified COLUMN reference reduces the same way:
+ * `"SQLDATABASE"."dbo"."CRONUS$T"."No_"` drops the first two (each still has
+ * 2+ segments ahead) and keeps the last two as `"T"."No_"` — the "last two
+ * of any chain, however long, are the alias.column/table.column shape kept
+ * intact" behavior falls out of this rule automatically, without any
+ * special-casing for table-reference vs. projection/WHERE position.
  *
  * The joiner between two idents can be a bare dot (when the next segment —
  * e.g. `dbo` — is ITSELF quoted/bracketed and so arrives as its own `ident`
- * token) or a dot-word-dot (when the next segment is a bare, unquoted word
- * such as `dbo` or an arbitrary schema name). Mirrors the QUALIFIER regex in
+ * token, contributing 1 to the count) or a dot-word-dot (when the next
+ * segment is a bare, unquoted word such as `dbo`, contributing 2: the word
+ * itself AND the ident past it). Mirrors the QUALIFIER regex in
  * src/core/sql-node.ts, which strips ANY quoted/bracketed segment ahead of
- * the final table name — not just the literal `dbo` spelling — so a
- * server/database ident is dropped regardless of how the segment after it is
- * quoted or spelled.
+ * the final table name — not just the literal `dbo` spelling.
  *
- * The joiner shape alone is NOT enough to call: `"50102"."Store No_"` (a
- * table alias qualifying a column) has the exact same ident-dot-ident shape
- * as a real qualifier chain (NB1). The caller MUST additionally restrict
- * calls to this function to the table-reference-parsing window
- * (`expectTableRef && tableRefLogical === null`) — position, not shape, is
- * what disambiguates a qualifier from an alias.
+ * Coupling the caller must preserve: this only ever recognizes a joiner made
+ * of dots, whitespace and at most one bare word between idents — the SAME
+ * restrictive grammar as the pre-Round-3 single-hop version, just applied
+ * repeatedly. The "other"-token loop below suppresses a dropped alias
+ * pair's joiner BEFORE clause-boundary keyword detection runs on that same
+ * character; that ordering is only safe because this grammar can never
+ * itself contain FROM/WHERE/SET/VALUES-shaped text for the boundary
+ * detector to miss. Widening what this function accepts between segments
+ * would need that assumption re-checked.
  */
-function isDatabaseQualifier(tokens: Token[], i: number): boolean {
-	let j = i + 1;
-	let joiner = "";
-	for (; j < tokens.length; j++) {
-		const tok = tokens[j];
-		if (tok.kind !== "other") break;
-		joiner += tok.value;
+function chainSegmentsAfter(tokens: Token[], i: number): number {
+	let count = 0;
+	let cursor = i;
+	for (;;) {
+		let j = cursor + 1;
+		let joiner = "";
+		for (; j < tokens.length; j++) {
+			const tok = tokens[j];
+			if (tok.kind !== "other") break;
+			joiner += tok.value;
+		}
+		const next = tokens[j];
+		if (next?.kind !== "ident") return count;
+		if (/^\s*\.\s*$/.test(joiner)) {
+			count += 1; // bare-dot hop straight to the next ident
+			cursor = j;
+			continue;
+		}
+		if (/^\s*\.\s*[A-Za-z_]\w*\s*\.\s*$/.test(joiner)) {
+			count += 2; // the bare word AND the ident it leads to
+			cursor = j;
+			continue;
+		}
+		return count; // joiner isn't one of the two recognized shapes -- chain ends here
 	}
-	const next = tokens[j];
-	return (
-		next?.kind === "ident" && /^\s*\.\s*(?:[A-Za-z_]\w*\s*\.\s*)?$/.test(joiner)
-	);
 }
 
 /**
@@ -398,39 +437,47 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		}
 		if (t.kind === "ident") {
 			// Resolve any pending pair verdict from the PREVIOUS ident first,
-			// unconditionally — structurally, the ident right after a
-			// qualifier-prefix's joiner IS its paired column
-			// (isDatabaseQualifier's own lookahead guarantees this), so this
-			// can never collide with the table-ref-qualifier-drop path below
-			// (that path never sets expectingPairedColumn in the first
-			// place). `isPairedColumnHalf` marks this ident as already
-			// accounted for by its prefix, so the counting block further
-			// down must skip it — otherwise a KEPT pair's second half would
-			// increment namedColumns all over again.
+			// unconditionally — structurally, the ident right after an
+			// alias-prefix's joiner IS its paired column
+			// (chainSegmentsAfter's own lookahead guarantees this).
+			// `isPairedColumnHalf` marks this ident as already accounted for
+			// by its prefix, so the counting block further down must skip
+			// it — otherwise a KEPT pair's second half would increment
+			// namedColumns all over again.
 			let isPairedColumnHalf = false;
 			if (expectingPairedColumn) {
 				expectingPairedColumn = false;
 				isPairedColumnHalf = true;
 				if (pairedColumnDropped) continue; // drop the column half of a pair whose alias prefix didn't survive MAX_NAMED_COLUMNS
 			}
-			// Ident-dot-ident: either a database/server qualifier ahead of
-			// the statement's own table reference ("DB"."dbo"."Table") or a
-			// table ALIAS qualifying a column elsewhere ("50102"."Store
-			// No_") — the joiner shape alone can't tell them apart, only
-			// POSITION can (NB1). Compute the shape once; the two uses below
-			// (drop vs. don't-double-count) apply it differently.
-			const isQualifierPrefix = isDatabaseQualifier(tokens, idx);
-			// Only a LEADING segment of the table reference itself (right
-			// after FROM/INTO/UPDATE/MERGE, before the real table name is
-			// captured) gets DROPPED as a database/server qualifier.
-			if (expectTableRef && tableRefLogical === null && isQualifierPrefix) {
-				continue; // drop the bare database name
+			// Fix Round 3 (NB1's own follow-up): 2+ further segments in the
+			// SAME dot-chain means this ident is a stripped-away qualifier
+			// (database/server name), no matter WHERE in the statement it
+			// sits — a JOIN target, a comma-separated FROM item, a MERGE
+			// USING clause, a fully-qualified column. Exactly 1 further
+			// segment means this ident is the FIRST half of an alias.column
+			// pair, kept (with its pair) below. See chainSegmentsAfter's own
+			// doc comment for the full reasoning and the boundary-detection
+			// coupling this grammar must preserve.
+			const followingSegments = chainSegmentsAfter(tokens, idx);
+			if (followingSegments >= 2) {
+				continue; // drop the qualifier segment
 			}
 			const logical = logicalIdentifier(t.value);
 			if (logical === null) return null; // unrecognized shape -> fail closed
-			const isTableRefIdent = expectTableRef && tableRefLogical === null;
+			// The table reference must resolve to the chain's FINAL segment
+			// (followingSegments === 0), not merely "the first ident this
+			// loop didn't drop" — a 3+ part chain like
+			// "SQLDATABASE"."dbo"."CRONUS$T" now KEEPS "dbo" too
+			// (followingSegments === 1, same alias.column shape as any
+			// other pair), but "dbo" is an intermediate segment, not the
+			// table. Capturing it as tableRefLogical would compare it
+			// against parseSqlTable's own "T" and fail the C5 cross-check
+			// on a false disagreement.
+			const isTableRefIdent =
+				expectTableRef && tableRefLogical === null && followingSegments === 0;
 			if (isTableRefIdent) {
-				tableRefLogical = logical; // first non-qualifier ident after FROM/INTO/UPDATE/MERGE
+				tableRefLogical = logical; // final segment of the table-reference chain after FROM/INTO/UPDATE/MERGE
 				expectTableRef = false;
 				// INSERT's column list starts immediately after the target
 				// table, with no keyword of its own to open the window on.
@@ -444,7 +491,7 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			if (countingColumns && !isTableRefIdent && !isPairedColumnHalf) {
 				namedColumns++;
 				const overLimit = namedColumns > MAX_NAMED_COLUMNS;
-				if (isQualifierPrefix) {
+				if (followingSegments === 1) {
 					// This ident is only a PREFIX (its paired column, right
 					// after the joiner, is what the count is really about) —
 					// carry the same verdict forward so both halves survive
@@ -557,12 +604,13 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	// chain of several dropped idents) before whatever follows it — a bare
 	// schema word like "dbo", or directly the final quoted/bracketed table
 	// name. Collapse the run to one dot, then drop that one dot too unless a
-	// bare word needs it as a separator before the table name. The qualifier
-	// chain always sits right after FROM/INTO/UPDATE/MERGE now that
-	// isDatabaseQualifier is context-gated (NB1), so in practice the dot is
-	// always preceded by that keyword's trailing space — but "," and "("
-	// are kept here too as defense in depth, since a caller-side regression
-	// widening the gate again shouldn't ALSO reopen this as a second bug.
+	// bare word needs it as a separator before the table name. Since Fix
+	// Round 3 (chainSegmentsAfter is shape-based, not tied to the
+	// FROM/INTO/UPDATE/MERGE table-reference window), a dropped qualifier
+	// chain can start right after "," (a comma-separated FROM item) or "("
+	// (a parenthesized WHERE predicate, e.g. `WHERE ("SQLDATABASE"."dbo"."T"...`)
+	// with no whitespace in between — genuinely reachable now, not just
+	// defense in depth.
 	out = out.replace(/\.{2,}/g, ".");
 	out = out.replace(
 		/(^|[\s,(])\.(?:([A-Za-z_]\w*)\.)?(?=["[])/gi,
