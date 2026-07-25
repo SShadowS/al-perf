@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { parseSqlTable } from "../../src/core/sql-node.js";
 import {
+	attachEvidenceToSignals,
 	parseAlStackFrame,
 	redactSqlForSink,
+	type StatementRow,
 	telemetryRoutineKey,
 } from "../../src/lifecycle/telemetry-sql.js";
+import type { TelemetrySignal } from "../../src/types/telemetry.js";
 
 describe("parseAlStackFrame", () => {
 	test("extracts the method from the first AL CallStack frame", () => {
@@ -1122,9 +1125,7 @@ describe("redactSqlForSink", () => {
 				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SRV"..."CRONUS$B" ON "x"="y"',
 			);
 			expect(out?.text).not.toContain("SRV");
-			expect(out?.text).toBe(
-				'SELECT "a" FROM dbo."A" JOIN "B" ON "x"="y"',
-			);
+			expect(out?.text).toBe('SELECT "a" FROM dbo."A" JOIN "B" ON "x"="y"');
 		});
 
 		test("server..dbo.table (omit only database) no longer leaks the server name", () => {
@@ -1132,9 +1133,7 @@ describe("redactSqlForSink", () => {
 				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SRV"..dbo."CRONUS$B" ON "x"="y"',
 			);
 			expect(out?.text).not.toContain("SRV");
-			expect(out?.text).toBe(
-				'SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"',
-			);
+			expect(out?.text).toBe('SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"');
 		});
 
 		test("a ..word. joiner in first-table-ref position -- the RULE drops it, though the statement still fails closed", () => {
@@ -1160,5 +1159,134 @@ describe("redactSqlForSink", () => {
 				'SELECT "a"."No_" FROM dbo."Sales Header" "a" JOIN dbo."Sales Line" "b" ON "a"."No_"="b"."Document No_"',
 			);
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// attachEvidenceToSignals (telemetry-sql-evidence plan, Task 9): the
+// statement -> signal join. Cross-tenant isolation itself is a caller
+// concern (appinsights.ts calls this once PER SPLIT GROUP) and is pinned at
+// that level in appinsights.test.ts; this suite pins the join's own rules —
+// routine-key matching across signalId, fail-closed dropping, sorting/
+// capping, and threshold aggregation.
+// ---------------------------------------------------------------------------
+
+describe("attachEvidenceToSignals", () => {
+	function signal(overrides: Partial<TelemetrySignal> = {}): TelemetrySignal {
+		return {
+			signalId: "RT0018",
+			appId: "a",
+			objectType: "CodeUnit",
+			objectId: 80,
+			methodName: "PostLines",
+			count: 1,
+			maxDurationMs: 900,
+			...overrides,
+		};
+	}
+
+	function statementRow(overrides: Partial<StatementRow> = {}): StatementRow {
+		return {
+			appId: "a",
+			objectType: "CodeUnit",
+			objectId: 80,
+			stackTrace: 'AL CallStack: "X"(CodeUnit 80).PostLines line 1',
+			sqlStatement: 'SELECT "No_" FROM dbo."CRONUS$Sales Header"',
+			occurrences: 3,
+			measuredTotalMs: 2400,
+			thresholdMs: 750,
+			...overrides,
+		};
+	}
+
+	test("attaches statements to every signal on the routine, across signal ids", () => {
+		const signals = [
+			signal({ signalId: "RT0018" }),
+			signal({ signalId: "RT0005" }),
+		];
+		attachEvidenceToSignals(signals, [statementRow()]);
+		expect(signals[0].sqlEvidence?.statements).toHaveLength(1);
+		expect(signals[1].sqlEvidence?.statements).toHaveLength(1);
+		expect(signals[0].sqlEvidence?.provenance).toBe("measured-threshold-gated");
+		expect(signals[0].sqlEvidence?.attribution).toBe("telemetry-stack");
+		const s = signals[0].sqlEvidence?.statements[0];
+		expect(s?.table).toBe("Sales Header");
+		expect(s?.operation).toBe("SELECT");
+		expect(s?.occurrences).toBe(3);
+		expect(s?.measuredTotalMs).toBe(2400);
+		expect(s?.truncated).toBe(false);
+	});
+
+	test("threshold min/max is computed across the routine's rows", () => {
+		const signals = [signal()];
+		attachEvidenceToSignals(signals, [
+			statementRow({ thresholdMs: 750, sqlStatement: 'SELECT "a" FROM dbo."CRONUS$T"' }),
+			statementRow({ thresholdMs: 1000, sqlStatement: 'SELECT "b" FROM dbo."CRONUS$U"' }),
+		]);
+		expect(signals[0].sqlEvidence?.threshold).toEqual({ minMs: 750, maxMs: 1000 });
+	});
+
+	test("threshold is absent when no row for the routine carries one", () => {
+		const signals = [signal()];
+		attachEvidenceToSignals(signals, [
+			statementRow({ thresholdMs: undefined }),
+		]);
+		expect(signals[0].sqlEvidence?.threshold).toBeUndefined();
+	});
+
+	test("totals sum ALL statements for the routine, even beyond the top-5 slice", () => {
+		const signals = [signal()];
+		const rows = Array.from({ length: 7 }, (_, i) =>
+			statementRow({
+				sqlStatement: `SELECT "c${i}" FROM dbo."CRONUS$Table${i}"`,
+				occurrences: 1,
+				measuredTotalMs: 100 * (i + 1), // 100..700
+			}),
+		);
+		attachEvidenceToSignals(signals, rows);
+		expect(signals[0].sqlEvidence?.statements).toHaveLength(5);
+		expect(signals[0].sqlEvidence?.totalOccurrences).toBe(7);
+		expect(signals[0].sqlEvidence?.totalMeasuredMs).toBe(
+			100 + 200 + 300 + 400 + 500 + 600 + 700,
+		);
+		// sorted descending by measuredTotalMs -> the 5 KEPT are the largest
+		expect(signals[0].sqlEvidence?.statements[0]?.measuredTotalMs).toBe(700);
+		expect(signals[0].sqlEvidence?.statements[4]?.measuredTotalMs).toBe(300);
+	});
+
+	test("a row whose stack has no parseable AL frame is dropped (fail closed, no join key)", () => {
+		const signals = [signal()];
+		attachEvidenceToSignals(signals, [
+			statementRow({ stackTrace: "AppObjectType: CodeUnit\r\nAppObjectId: 80" }),
+		]);
+		expect(signals[0].sqlEvidence).toBeUndefined();
+	});
+
+	test("a row whose SQL fails redaction is dropped rather than attached half-redacted", () => {
+		const signals = [signal()];
+		attachEvidenceToSignals(signals, [
+			// Same swallowed-FROM shape pinned in the redactSqlForSink suite
+			// above ("quoteSwallowsStatement") -- redactSqlForSink returns null.
+			statementRow({
+				sqlStatement: 'SELECT "a FROM dbo."CRONUS$Sales Header" WHERE "Name"=@0',
+			}),
+		]);
+		expect(signals[0].sqlEvidence).toBeUndefined();
+	});
+
+	test("a signal with no matching statement rows is left untouched", () => {
+		const signals = [signal({ methodName: "SomeOtherMethod" })];
+		attachEvidenceToSignals(signals, [statementRow()]);
+		expect(signals[0].sqlEvidence).toBeUndefined();
+	});
+
+	test("the routine key ignores casing/trigger-prefix, matching telemetryRoutineKey's own normalization", () => {
+		const signals = [signal({ methodName: "OnValidate" })];
+		attachEvidenceToSignals(signals, [
+			statementRow({
+				stackTrace: 'AL CallStack: "X"(CodeUnit 80).onvalidate line 1',
+			}),
+		]);
+		expect(signals[0].sqlEvidence?.statements).toHaveLength(1);
 	});
 });

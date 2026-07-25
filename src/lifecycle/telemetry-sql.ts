@@ -17,6 +17,8 @@ import {
 	normalizeAppGuid,
 	normalizeTriggerName,
 } from "../semantic/identity.js";
+import type { TelemetrySqlStatementEvidence } from "../types/patterns.js";
+import type { TelemetrySignal } from "../types/telemetry.js";
 
 /**
  * The AL frame grammar, verified against real RT0005 rows in Gate 0:
@@ -324,7 +326,9 @@ function nextChainHop(tokens: Token[], i: number): ChainHop | null {
 	// this joiner's own token range and stop there.
 	let wordStart = joinerStart;
 	for (let k = joinerStart; k < j; k++) {
-		if (/[A-Za-z_]/.test((tokens[k] as Extract<Token, { kind: "other" }>).value)) {
+		if (
+			/[A-Za-z_]/.test((tokens[k] as Extract<Token, { kind: "other" }>).value)
+		) {
 			wordStart = k;
 			break;
 		}
@@ -791,4 +795,105 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		columnCount,
 		truncated,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// attachEvidenceToSignals — the statement -> signal join (telemetry-sql-
+// evidence plan, Task 9). appinsights.ts owns the KQL and the HTTP fetch for
+// the statement-level RT0005 query; this module owns everything downstream
+// of the raw rows, same split as parseAlStackFrame/telemetryRoutineKey/
+// redactSqlForSink above.
+// ---------------------------------------------------------------------------
+
+/** One row from the statement-level RT0005 query, already row-shaped by appinsights.ts's normalizer. */
+export interface StatementRow {
+	appId: string;
+	objectType: string;
+	objectId: number;
+	stackTrace: string;
+	sqlStatement: string;
+	occurrences: number;
+	measuredTotalMs: number;
+	thresholdMs?: number;
+}
+
+/**
+ * Attach redacted statements to every signal sharing the routine key — RT0018
+ * and RT0005 alike, since `telemetryRoutineKey` omits signalId by design
+ * (§4.1: a key that carried it could only ever reach an RT0005 finding, and
+ * the whole point is that RT0005's own statements should also annotate the
+ * RT0018 finding for the same routine).
+ *
+ * Call this ONCE PER SPLIT GROUP, never over a fleet-wide row set — appinsights.ts's
+ * pullTelemetrySplit groups both signals and statement rows by
+ * (aadTenantId, environmentName) before calling in here per group. A global
+ * join keyed on the routine alone would attach one tenant's redacted SQL onto
+ * another tenant's finding whose app/object/method happen to match, and that
+ * string would reach that tenant's issue tracker.
+ *
+ * Mutates `signals` in place (sets `.sqlEvidence`) rather than returning a
+ * new array — the caller (appinsights.ts) already holds the exact array
+ * reference that ends up as `TelemetryBatchDocument.signals`, so mutating it
+ * here is what makes evidence visible on the batch without appinsights.ts
+ * having to thread a rebuilt array back through.
+ */
+export function attachEvidenceToSignals(
+	signals: TelemetrySignal[],
+	rows: readonly StatementRow[],
+): void {
+	const byRoutine = new Map<string, TelemetrySqlStatementEvidence[]>();
+	const thresholds = new Map<string, { minMs: number; maxMs: number }>();
+
+	for (const row of rows) {
+		const method = parseAlStackFrame(row.stackTrace);
+		if (!method) continue; // no AL frame -> no routine identity to join on
+		const redacted = redactSqlForSink(row.sqlStatement);
+		if (!redacted) continue; // fail closed — never emit half-redacted text
+
+		const key = telemetryRoutineKey(
+			row.appId,
+			row.objectType,
+			row.objectId,
+			method,
+		);
+		const list = byRoutine.get(key) ?? [];
+		list.push({
+			text: redacted.text,
+			operation: redacted.operation,
+			table: redacted.table,
+			extensionAppId: redacted.extensionAppId,
+			occurrences: row.occurrences,
+			measuredTotalMs: row.measuredTotalMs,
+			truncated: redacted.truncated,
+		});
+		byRoutine.set(key, list);
+
+		if (row.thresholdMs !== undefined) {
+			const t = thresholds.get(key);
+			thresholds.set(key, {
+				minMs: t ? Math.min(t.minMs, row.thresholdMs) : row.thresholdMs,
+				maxMs: t ? Math.max(t.maxMs, row.thresholdMs) : row.thresholdMs,
+			});
+		}
+	}
+
+	for (const signal of signals) {
+		const key = telemetryRoutineKey(
+			signal.appId,
+			signal.objectType,
+			signal.objectId,
+			signal.methodName,
+		);
+		const statements = byRoutine.get(key);
+		if (!statements || statements.length === 0) continue;
+		statements.sort((a, b) => b.measuredTotalMs - a.measuredTotalMs);
+		signal.sqlEvidence = {
+			statements: statements.slice(0, 5),
+			totalMeasuredMs: statements.reduce((n, s) => n + s.measuredTotalMs, 0),
+			totalOccurrences: statements.reduce((n, s) => n + s.occurrences, 0),
+			provenance: "measured-threshold-gated",
+			attribution: "telemetry-stack",
+			threshold: thresholds.get(key),
+		};
+	}
 }
