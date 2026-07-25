@@ -638,7 +638,7 @@ describe("detectIncompleteSetLoadFields", () => {
 		const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].id).toBe("incomplete-setloadfields");
-		expect(patterns[0].severity).toBe("critical");
+		expect(patterns[0].severity).toBe("warning");
 		// The description should mention the missing field
 		expect(patterns[0].description.toLowerCase()).toContain("amount");
 	});
@@ -1262,5 +1262,41 @@ describe("missing-setloadfields — records that escape the member", () => {
 		const p = f("FindThenReadOwnFieldsOnly");
 		expect(p).toBeDefined();
 		expect(p.severity).toBe("warning");
+	});
+});
+
+describe("incomplete-setloadfields — what counts as a field access", () => {
+	function f(functionName: string, objectId: number) {
+		return detectIncompleteSetLoadFields(
+			[makeMethod({ functionName, objectType: "Codeunit", objectId })],
+			sourceIndex,
+		);
+	}
+
+	it("does not flag a paren-less table METHOD call as a missing field", () => {
+		// `Email.HasMoreDocuments` in a real codebase is `internal procedure
+		// HasMoreDocuments(): Boolean` — recorded as a field access, it produced
+		// a critical finding claiming runtime errors about a method call.
+		expect(f("SetLoadFieldsThenCallTableMethod", 50600)).toHaveLength(0);
+	});
+
+	it("still flags a genuinely missing field on a known table, at critical", () => {
+		const p = f("SetLoadFieldsMissingRealField", 50600);
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].description.toLowerCase()).toContain("description");
+	});
+
+	it("drops to warning when the table cannot be resolved", () => {
+		// With no table in the index there is no way to tell a field from a
+		// paren-less method call, so the critical "will cause runtime errors"
+		// claim is not one the tool can stand behind. All 16 findings on one
+		// real codebase were in this state, and at least one was a method.
+		const p = f("BadSetLoadFields", 50700);
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toMatch(
+			/could not be confirmed|not in the index/i,
+		);
 	});
 });

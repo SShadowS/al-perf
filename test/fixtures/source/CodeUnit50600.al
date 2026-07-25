@@ -55,4 +55,32 @@ codeunit 50600 "Filter Test"
         if KeyTest.FindFirst() then
             Message(KeyTest."No.");
     end;
+
+    procedure SetLoadFieldsThenCallTableMethod()
+    var
+        KeyTest: Record "Key Test Table";
+    begin
+        // `KeyTest.HasRelatedEntries` is a paren-less PROCEDURE call on the
+        // table, not a field read. Recorded as a field access, it made this
+        // look like a SetLoadFields that forgot a field -- reported critical,
+        // claiming runtime errors, about a method.
+        KeyTest.SetLoadFields("No.");
+        if KeyTest.FindSet() then
+            repeat
+                if KeyTest.HasRelatedEntries then
+                    Message('%1', KeyTest."No.");
+            until KeyTest.Next() = 0;
+    end;
+
+    procedure SetLoadFieldsMissingRealField()
+    var
+        KeyTest: Record "Key Test Table";
+    begin
+        // Description IS a field of Key Test Table, and it is not loaded.
+        KeyTest.SetLoadFields("No.");
+        if KeyTest.FindSet() then
+            repeat
+                Message('%1', KeyTest.Description);
+            until KeyTest.Next() = 0;
+    end;
 }

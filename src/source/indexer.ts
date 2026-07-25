@@ -1207,16 +1207,19 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 			for (const child of declarationChildren(node)) {
 				if (child.type === "integer" && id === 0) {
 					id = parseInt(child.text, 10);
-				} else if (child.type === "quoted_identifier" && !name) {
-					// NOTE (documented, not fixed): field names are only captured from
-					// `quoted_identifier` here. An UNQUOTED field name (e.g.
-					// `field(2; Amount; Decimal) { CalcFormula = Sum(...) }`) never
-					// hits this branch, so `name` stays "" and this FlowField never
-					// resolves in resolveCalcFields/calcFieldSeverity
-					// (src/source/source-patterns.ts) -- it falls back to the
-					// conservative `critical` default there. Fails safe (over-severe,
-					// never under-severe); pre-existing behavior, out of scope for the
-					// calcfields-in-loop severity fix.
+				} else if (
+					(child.type === "quoted_identifier" || child.type === "identifier") &&
+					!name
+				) {
+					// BOTH spellings: `field(1; "No."; Code[20])` and the equally
+					// legal `field(4; Amount; Decimal)`. Capturing only the quoted
+					// form dropped every single-word field name from the table's
+					// field list -- `Key Test Table` indexed 3 of its 5 fields.
+					// That silently degraded calcfields-in-loop severity (an
+					// unresolvable FlowField falls back to the conservative
+					// `critical`) and now matters more: incomplete-setloadfields
+					// checks accessed names AGAINST this list, so a missing entry
+					// would suppress a real finding rather than just over-rate it.
 					name = stripQuotes(child.text);
 				} else if (child.type === "type_specification") {
 					dataType = child.text;

@@ -21,4 +21,9 @@ table 50400 "Key Test Table"
         key(CustomerDate; "Customer No.", "Posting Date") { }
         key(AmountIdx; Amount) { }
     }
+
+    procedure HasRelatedEntries(): Boolean
+    begin
+        exit(true);
+    end;
 }

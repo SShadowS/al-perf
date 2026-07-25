@@ -550,3 +550,25 @@ describe("objects the index used to drop silently", () => {
 		]);
 	});
 });
+
+describe("table field names", () => {
+	it("captures unquoted field names, not only quoted ones", async () => {
+		// `field(4; Amount; Decimal)` is as legal as `field(1; "No."; Code[20])`,
+		// but only the quoted spelling was captured — Key Test Table indexed 3
+		// of its 5 fields. Anything reading ObjectInfo.fields saw a partial
+		// table: calcfields severity silently fell back to `critical`, and the
+		// incomplete-setloadfields field cross-check would suppress real
+		// findings for fields it could not see.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "Table50400.al"),
+			fixturesDir,
+		))!;
+		expect(result.fields.map((f) => f.name).sort()).toEqual([
+			"Amount",
+			"Customer No.",
+			"Description",
+			"No.",
+			"Posting Date",
+		]);
+	});
+});

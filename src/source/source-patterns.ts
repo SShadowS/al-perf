@@ -753,6 +753,31 @@ export function detectIncompleteSetLoadFields(
 				);
 				if (accessesForVar.length === 0) continue;
 
+				// `Rec.SomeName` with no parentheses is a field read OR a
+				// paren-less call to a table PROCEDURE — collectFieldAccesses
+				// cannot tell them apart, and records both as field accesses.
+				// The table's own field list can: `Email.HasMoreDocuments` is
+				// `internal procedure HasMoreDocuments(): Boolean`, and reporting
+				// it as a forgotten field produced a critical finding claiming
+				// runtime errors about a method call.
+				//
+				// When the table is NOT in the index (a base-app or dependency
+				// table) there is no way to tell the two apart, so the finding
+				// stands but stops claiming certainty it does not have. All 16
+				// findings on one real codebase were in that state.
+				const variable = match.features.variables.find(
+					(v) => v.name.toLowerCase() === varLower,
+				);
+				const table = variable?.tableName
+					? [...index.objects.values()].find(
+							(o) =>
+								o.objectType === "Table" && o.objectName === variable.tableName,
+						)
+					: undefined;
+				const knownFields = table
+					? new Set(table.fields.map((f) => f.name.toLowerCase()))
+					: undefined;
+
 				// Resolve coverage PER ACCESS: what did this variable's field set
 				// actually look like at the moment THIS access ran? That is the LAST
 				// SetLoadFields call before the access, not the earliest -- a later
@@ -768,6 +793,9 @@ export function detectIncompleteSetLoadFields(
 
 					const fieldLower = access.fieldName.toLowerCase();
 					if (governingOp.fields.has(fieldLower)) continue;
+					// Not a field of this table => a paren-less table method call,
+					// not a forgotten field. Only skip when the table is KNOWN.
+					if (knownFields && !knownFields.has(fieldLower)) continue;
 
 					const missing = missingByOp.get(governingOp) ?? new Set<string>();
 					missing.add(fieldLower);
@@ -779,9 +807,11 @@ export function detectIncompleteSetLoadFields(
 					const recVar = accessesForVar[0]?.recordVariable ?? varLower;
 					patterns.push({
 						id: "incomplete-setloadfields",
-						severity: "critical",
+						severity: knownFields ? "critical" : "warning",
 						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
-						description: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`,
+						description: knownFields
+							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`
+							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is not in the index, so these names could not be confirmed to be fields at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
 						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
