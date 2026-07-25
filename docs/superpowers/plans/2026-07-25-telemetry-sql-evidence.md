@@ -252,7 +252,10 @@ import { telemetryRoutineKey } from "../../src/lifecycle/telemetry-sql.js";
 
 describe("telemetryRoutineKey", () => {
 	test("is stable across object-type casing and trigger spelling", () => {
-		const a = telemetryRoutineKey("{ABC}", "CodeUnit", 80, "OnRun");
+		// appId is a plain dashed GUID in real telemetry (verified: 25,441 rows,
+		// none braced) and normalizeAppGuid strips dashes + lowercases — it does
+		// NOT strip braces, so do not pass a braced form here.
+		const a = telemetryRoutineKey("ABC", "CodeUnit", 80, "OnRun");
 		const b = telemetryRoutineKey("abc", "codeunit", 80, "onrun");
 		expect(a).toBe(b);
 	});
@@ -314,8 +317,32 @@ export function telemetryRoutineKey(
 		canonicalObjectType(objectType),
 		String(objectId),
 		normalizeTriggerName(methodName).toLowerCase(),
-	].join("|");
+	].join(KEY_SEP);
 }
+```
+
+with the separator matching the one identity already uses:
+
+```ts
+/**
+ * ASCII unit separator — the same separator `fingerprint.ts:237` uses, and for
+ * the same reason: it cannot occur in AL identifiers, GUIDs or paths. A
+ * printable separator like "|" lets a pipe inside objectType or methodName
+ * shift the field boundary and collide two genuinely different routines onto
+ * one key. Inlined rather than imported so this pure module does not pull in
+ * fingerprint.ts's crypto dependency.
+ */
+const KEY_SEP = "\u001f";
+```
+
+and a test pinning that the collision is actually prevented:
+
+```ts
+	test("a separator inside a field cannot collide two different routines", () => {
+		const a = telemetryRoutineKey("abc", "X|CodeUnit", 80, "Foo");
+		const b = telemetryRoutineKey("abc|X", "CodeUnit", 80, "Foo");
+		expect(a).not.toBe(b);
+	});
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
