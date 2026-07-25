@@ -13,7 +13,7 @@ AL CPU Profile Analyzer — a CLI tool and MCP server for analyzing Business Cen
 - **Runtime**: Bun
 - **Language**: TypeScript
 - **CLI framework**: `commander`
-- **tree-sitter**: `web-tree-sitter` + `tree-sitter-al.wasm` V2 (WASM for portability, auto-downloaded from GitHub release)
+- **tree-sitter**: `web-tree-sitter` + `tree-sitter-al.wasm`, pinned to the release named by `AL_GRAMMAR_VERSION` in `src/source/parser-init.ts` (currently v3.0.1). Downloaded on first use and re-downloaded whenever the cached copy's sibling `tree-sitter-al.version` does not match the pin — never `latest`, so every machine and CI run parses with the same grammar
 - **MCP server**: `@modelcontextprotocol/sdk` (stdio transport)
 - **Terminal output**: `chalk` + `cli-table3`
 - **LLM integration**: `@anthropic-ai/sdk` (optional, for `--explain`)
@@ -70,8 +70,8 @@ test/       — Test suites + fixtures (bun:test)
 - Output format (terminal/json/markdown) is a presentation concern, not an analysis concern
 - **Formatter parity**: Enforced at compile time via `SectionRenderers<T>` in `src/output/sections.ts` (single-profile) and `BatchSectionRenderers<T>` in `src/output/batch-sections.ts` (batch). Every formatter must implement a renderer for every section type — TypeScript errors if one is missing. `SECTION_ORDER` / `BATCH_SECTION_ORDER` define the canonical render order.
 - Source correlation is always optional — the tool must work without source files
-- Profile-only pattern detectors work on any `.alcpuprofile`; source-correlated patterns require tree-sitter-al V2 + `.al` files
-- The V2 grammar uses generic `property` nodes with name fields instead of V1's specific nodes (`calc_formula_property`, `table_relation_property`, etc.). See `docs/v2-migration-guide.md` for the full mapping. The `isPropertyNamed()` helper in `indexer.ts` handles these checks.
+- Profile-only pattern detectors work on any `.alcpuprofile`; source-correlated patterns require the pinned tree-sitter-al grammar + `.al` files
+- The grammar (V2 onward, currently v3.x) uses generic `property` nodes with name fields instead of V1's specific nodes (`calc_formula_property`, `table_relation_property`, etc.). See `docs/v2-migration-guide.md` for the full mapping. The `isPropertyNamed()` helper in `indexer.ts` handles these checks.
 - MCP tools are thin wrappers around the same core functions the CLI uses
 - `--format auto` detects TTY vs pipe to choose human vs machine output
 
