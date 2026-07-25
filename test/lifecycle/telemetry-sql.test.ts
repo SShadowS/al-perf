@@ -144,6 +144,12 @@ describe("redactSqlForSink", () => {
 		const out = redactSqlForSink(`SELECT ${cols} FROM dbo."CRONUS$Sales Line"`);
 		expect(out?.columnCount).toBe(47);
 		expect(out?.text).toContain("+42 more");
+		// The marker alone isn't proof the columns were actually dropped — an
+		// implementation that emitted all 47 names AND the marker would also
+		// pass the assertion above. Pin that the kept columns (F0-F4) survive
+		// and a dropped one (F46) doesn't.
+		expect(out?.text).toContain('"F4"');
+		expect(out?.text).not.toContain('"F46"');
 	});
 
 	test("strips comments", () => {
@@ -299,7 +305,7 @@ describe("redactSqlForSink", () => {
 		).toBeNull();
 	});
 
-	test("C5: handles the \"\" escape inside a quoted identifier", () => {
+	test('C5: handles the "" escape inside a quoted identifier', () => {
 		// Before the fix the "" branch stopped scanning at the FIRST quote
 		// character, treating "CRONUS" as a complete (unescaped) identifier
 		// and leaking it -- both in `text` and in `table` (parseSqlTable has
@@ -318,7 +324,7 @@ describe("redactSqlForSink", () => {
 		expect(embeddedCompany).toBeNull();
 	});
 
-	test("C6: fails CLOSED on an unmatched [ or \" that swallows clause text, not just by luck", () => {
+	test('C6: fails CLOSED on an unmatched [ or " that swallows clause text, not just by luck', () => {
 		// Before the fix, an unmatched `[` or `"` scanned forward to the FIRST
 		// unrelated close character it found (here, a `]` or `"` that's really
 		// part of a string literal or a later clause) and echoed everything in
@@ -333,7 +339,7 @@ describe("redactSqlForSink", () => {
 		expect(bracketSwallowsLiteral).toBeNull();
 
 		const bracketSwallowsStatement = redactSqlForSink(
-			"SELECT [a FROM dbo.\"CRONUS$Cust\" WHERE \"N\"=@0 AND [b]",
+			'SELECT [a FROM dbo."CRONUS$Cust" WHERE "N"=@0 AND [b]',
 		);
 		expect(bracketSwallowsStatement).toBeNull();
 
@@ -355,5 +361,103 @@ describe("redactSqlForSink", () => {
 
 	test("minor: returns null when no operation classifies, including empty input", () => {
 		expect(redactSqlForSink("")).toBeNull();
+	});
+
+	describe("Fix Round 1b", () => {
+		test("I1: UPDATE keeps the WHERE predicate and marks the collapsed SET columns", () => {
+			// Before the fix: namedColumns counted the target table AND every
+			// WHERE-clause identifier too (UPDATE has no "FROM" to gate the
+			// old `seenFrom` flag), so both the tail SET columns AND the WHERE
+			// predicate vanished with no "+N more" marker anywhere.
+			const out = redactSqlForSink(
+				'UPDATE dbo."CRONUS Danmark A_S$Sales Header" SET "C1"=\'a\',"C2"=\'b\',"C3"=\'c\',"C4"=\'d\',"C5"=\'e\',"C6"=\'f\',"C7"=\'g\',"C8"=\'SECRET\' WHERE "No_"=\'X\'',
+			);
+			expect(out?.table).toBe("Sales Header");
+			expect(out?.columnCount).toBe(8); // C1-C8, NOT the target table
+			expect(out?.text).toContain("…+3 more");
+			expect(out?.text).toContain('WHERE "No_"=\'?\'');
+			expect(out?.text).not.toContain("SECRET");
+			expect(out?.text).not.toContain("CRONUS");
+		});
+
+		test("I1: INSERT marks the collapsed column list instead of silently dropping it", () => {
+			// Before the fix: the marker-insertion regex only ever matched a
+			// bare "FROM" keyword, which an INSERT statement doesn't have —
+			// so columns past MAX_NAMED_COLUMNS vanished with no marker, and
+			// the VALUES list (including a literal) was untouched.
+			const out = redactSqlForSink(
+				'INSERT INTO dbo."CRONUS$Sales Line" ("a","b","c","d","e","f","g","h") VALUES (1,2,3,4,5,6,7,\'ACME\')',
+			);
+			expect(out?.table).toBe("Sales Line");
+			expect(out?.columnCount).toBe(8); // a-h, NOT the target table
+			expect(out?.text).toContain("…+3 more");
+			expect(out?.text).not.toContain("ACME");
+			expect(out?.text).not.toContain("CRONUS");
+		});
+
+		test("I1: does not splice the marker inside a redacted identifier's own text", () => {
+			// The pre-fix marker was `out.replace(/\bFROM\b/i, ...)` run over
+			// the FINISHED string — matching the first "FROM" anywhere,
+			// including one that landed inside an already-emitted identifier
+			// (e.g. a column literally containing the word "from"). The fix
+			// splices a sentinel live, during the tokenizer loop, at the
+			// point the real FROM keyword is scanned — so it can only ever
+			// land at the real clause boundary.
+			const cols = ["NumFrom1", "F1", "F2", "F3", "F4", "F5"]
+				.map((c) => `"${c}"`)
+				.join(",");
+			const out = redactSqlForSink(`SELECT ${cols} FROM dbo."CRONUS$Cust"`);
+			expect(out?.text).toContain('"NumFrom1"');
+			expect(out?.text).toContain("…+1 more FROM");
+			// The marker must precede the REAL "FROM", not sit mid-identifier.
+			expect(out?.text?.indexOf("…+1 more")).toBeLessThan(
+				out?.text?.indexOf("FROM") ?? -1,
+			);
+		});
+
+		test("corpus gap: UPDATE without a collapsed column list", () => {
+			const out = redactSqlForSink(
+				'UPDATE dbo."CRONUS$Cust" SET "Name"=\'Acme Ltd\' WHERE "No_"=\'X\'',
+			);
+			expect(out?.operation).toBe("UPDATE");
+			expect(out?.table).toBe("Cust");
+			expect(out?.columnCount).toBeNull();
+			expect(out?.text).toBe('UPDATE dbo."Cust" SET "Name"=\'?\' WHERE "No_"=\'?\'');
+		});
+
+		test("corpus gap: INSERT without a collapsed column list", () => {
+			const out = redactSqlForSink(
+				'INSERT INTO dbo."CRONUS$Cust" ("No_","Name") VALUES (\'X\',\'Acme Ltd\')',
+			);
+			expect(out?.operation).toBe("INSERT");
+			expect(out?.table).toBe("Cust");
+			expect(out?.columnCount).toBeNull();
+			expect(out?.text).toBe(
+				'INSERT INTO dbo."Cust" ("No_","Name") VALUES (\'?\',\'?\')',
+			);
+		});
+
+		test("corpus gap: DELETE strips the company and keeps the WHERE predicate", () => {
+			const out = redactSqlForSink(
+				'DELETE FROM dbo."CRONUS$Cust" WHERE "Name"=\'Acme Ltd\'',
+			);
+			expect(out?.operation).toBe("DELETE");
+			expect(out?.table).toBe("Cust");
+			expect(out?.columnCount).toBeNull();
+			expect(out?.text).toBe('DELETE FROM dbo."Cust" WHERE "Name"=\'?\'');
+		});
+
+		test("corpus gap: MERGE is not a classified operation — fails closed", () => {
+			// classifySqlOperation (src/core/sql-node.ts) has no MERGE case in
+			// its switch; SQL_PREFIX_RE matches the keyword but the switch's
+			// default bucket is "OTHER", which redactSqlForSink already
+			// treats as unclassifiable. Pinning this so a future widening of
+			// classifySqlOperation doesn't silently start emitting redacted
+			// MERGE text without a corresponding test here.
+			const out = redactSqlForSink(
+				'MERGE INTO dbo."CRONUS$Cust" AS t USING dbo."CRONUS$Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
+			);
+			expect(out).toBeNull();
+		});
 	});
 });

@@ -86,6 +86,19 @@ export interface RedactedStatement {
 
 const MAX_NAMED_COLUMNS = 5;
 
+/**
+ * Sentinel spliced into `out` at the LIVE clause boundary (the exact point
+ * in the tokenizer loop where the projection ends — "FROM" for SELECT/COUNT,
+ * "WHERE" for UPDATE, the column list's closing ")" for INSERT), then
+ * resolved after the loop into the real "…+N more " marker or dropped
+ * entirely. A control character can't occur in redacted SQL text, so unlike
+ * a post-hoc `out.replace(/\bFROM\b/i, ...)` over the FINISHED string, it
+ * can never match keyword text that ended up sitting inside an already
+ * company-stripped identifier's value (e.g. a column literally named
+ * "Copied From").
+ */
+const COLUMN_MARKER = "\u0000";
+
 /** Mirrors parseSqlTable's GUID check (src/core/sql-node.ts) — not exported there. */
 const GUID_RE =
 	/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
@@ -249,8 +262,7 @@ function isDatabaseQualifier(tokens: Token[], i: number): boolean {
 	}
 	const next = tokens[j];
 	return (
-		next?.kind === "ident" &&
-		/^\s*\.\s*(?:[A-Za-z_]\w*\s*\.\s*)?$/.test(joiner)
+		next?.kind === "ident" && /^\s*\.\s*(?:[A-Za-z_]\w*\s*\.\s*)?$/.test(joiner)
 	);
 }
 
@@ -311,7 +323,17 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	let out = "";
 	let columnCount: number | null = null;
 	let namedColumns = 0;
-	let seenFrom = false;
+	// The "counting as a named column" window is operation-shaped, not just
+	// "before the first FROM": SELECT/COUNT project between SELECT and FROM,
+	// UPDATE's assignments sit between SET and WHERE, INSERT's column list
+	// sits between the target table and the list's closing ")". DELETE has no
+	// column list at all, so it never opens the window — without that, its
+	// WHERE-clause identifiers (which follow "FROM", same as SELECT's do, but
+	// with no columns ever having been named) would otherwise get swept in
+	// and silently dropped past MAX_NAMED_COLUMNS.
+	let countingColumns = operation === "SELECT" || operation === "COUNT";
+	let updateColumnsOpened = false;
+	let columnsBoundaryClosed = false;
 	let expectTableRef = false;
 	let tableRefLogical: string | null = null;
 	for (const [idx, t] of tokens.entries()) {
@@ -323,11 +345,18 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			if (isDatabaseQualifier(tokens, idx)) continue; // drop the bare database name
 			const logical = logicalIdentifier(t.value);
 			if (logical === null) return null; // unrecognized shape -> fail closed
-			if (expectTableRef && tableRefLogical === null) {
+			const isTableRefIdent = expectTableRef && tableRefLogical === null;
+			if (isTableRefIdent) {
 				tableRefLogical = logical; // first non-qualifier ident after FROM/INTO/UPDATE/MERGE
 				expectTableRef = false;
+				// INSERT's column list starts immediately after the target
+				// table, with no keyword of its own to open the window on.
+				if (operation === "INSERT") countingColumns = true;
 			}
-			if (!seenFrom) {
+			// The target table itself is never a "named column", regardless
+			// of the window above — for INSERT it would otherwise be counted
+			// as column #1 by the line above having just opened the window.
+			if (countingColumns && !isTableRefIdent) {
 				namedColumns++;
 				if (namedColumns > MAX_NAMED_COLUMNS) continue;
 			}
@@ -336,13 +365,38 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			// discarded by the $-split) — re-double it on the way back out, or
 			// the emitted "[...]" closes early and the tail reads as raw SQL.
 			out +=
-				t.quote === "["
-					? `[${logical.replace(/\]/g, "]]")}]`
-					: `"${logical}"`;
+				t.quote === "[" ? `[${logical.replace(/\]/g, "]]")}]` : `"${logical}"`;
 			continue;
 		}
 		out += t.value;
-		if (/\bFROM\b\s*$/i.test(out)) seenFrom = true;
+		if (
+			operation === "UPDATE" &&
+			!updateColumnsOpened &&
+			/\bSET\b\s*$/i.test(out)
+		) {
+			countingColumns = true;
+			updateColumnsOpened = true;
+		} else if (countingColumns && !columnsBoundaryClosed) {
+			// Splice the sentinel live, at the boundary token itself — see
+			// COLUMN_MARKER's doc comment for why this can't be a post-hoc
+			// regex over the finished string.
+			if (
+				(operation === "SELECT" || operation === "COUNT") &&
+				/\bFROM\b\s*$/i.test(out)
+			) {
+				out = `${out.slice(0, -"FROM".length)}${COLUMN_MARKER}${out.slice(-"FROM".length)}`;
+				countingColumns = false;
+				columnsBoundaryClosed = true;
+			} else if (operation === "UPDATE" && /\bWHERE\b\s*$/i.test(out)) {
+				out = `${out.slice(0, -"WHERE".length)}${COLUMN_MARKER}${out.slice(-"WHERE".length)}`;
+				countingColumns = false;
+				columnsBoundaryClosed = true;
+			} else if (operation === "INSERT" && t.value === ")") {
+				out = `${out.slice(0, -1)}${COLUMN_MARKER})`;
+				countingColumns = false;
+				columnsBoundaryClosed = true;
+			}
+		}
 		if (/\b(?:FROM|INTO|UPDATE|MERGE)\b\s*$/i.test(out)) expectTableRef = true;
 	}
 
@@ -392,10 +446,16 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		columnCount = namedColumns;
 		// Dropped column idents still leave their separating commas behind.
 		out = out.replace(/,(?:\s*,)+/g, ",");
-		out = out.replace(
-			/\bFROM\b/i,
-			`…+${namedColumns - MAX_NAMED_COLUMNS} more FROM`,
-		);
+		const marker = `…+${namedColumns - MAX_NAMED_COLUMNS} more `;
+		// The sentinel was spliced in live, at the real clause boundary, by
+		// the tokenizer loop above. If the clause never closed (e.g. an
+		// UPDATE with no WHERE, or a truncated statement cut off mid column
+		// list) no sentinel was inserted — fall back to the tail.
+		out = out.includes(COLUMN_MARKER)
+			? out.replace(COLUMN_MARKER, marker)
+			: `${out} ${marker}`;
+	} else if (out.includes(COLUMN_MARKER)) {
+		out = out.replace(COLUMN_MARKER, "");
 	}
 
 	return {
