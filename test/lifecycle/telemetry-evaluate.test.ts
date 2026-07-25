@@ -23,6 +23,10 @@ import { processEventsForSinks } from "../../src/lifecycle/sinks/triggers.js";
 import type { LifecycleSinksConfig } from "../../src/lifecycle/sinks/types.js";
 import { LifecycleStore } from "../../src/lifecycle/store.js";
 import { evaluateTelemetryBatch } from "../../src/lifecycle/telemetry.js";
+import {
+	attachEvidenceToSignals,
+	type StatementRow,
+} from "../../src/lifecycle/telemetry-sql.js";
 import type { AnalysisResult } from "../../src/output/types.js";
 import { normalizeAppGuid } from "../../src/semantic/identity.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
@@ -352,6 +356,61 @@ describe("evaluateTelemetryBatch — sink flow-through", () => {
 		const rows = store.listPendingOutbox("github", "create-issue");
 		expect(rows).toHaveLength(1);
 		expect(rows[0].dedupeKey).toBe(`github:create:t1:${fp}`);
+		store.close();
+	});
+});
+
+// F8 (final review): spec §12 promises a "sink-path pin" — the persisted
+// occurrence details a GitHub/Azure DevOps issue body is built from must
+// never carry a company or database name, and no test exercised the FULL
+// chain end to end (adapter redaction -> wire batch -> parser -> store).
+// The behavior was already correct; this is the regression net.
+describe("evaluateTelemetryBatch — sink-path SQL evidence redaction pin (F8)", () => {
+	test("a company/database name in the raw statement never reaches the persisted occurrence details", () => {
+		const s = signal();
+		const company = "CRONUS Danmark A_S";
+		const database = "SQLDATABASE";
+		const statementRow: StatementRow = {
+			appId: s.appId,
+			objectType: s.objectType,
+			objectId: s.objectId,
+			stackTrace: `AL CallStack: "Order Processor"(${s.objectType} ${s.objectId}).${s.methodName} line 12 - App:My ISV App`,
+			sqlStatement: `SELECT "No_" FROM "${database}".dbo."${company}$Sales Header"`,
+			occurrences: 3,
+			measuredTotalMs: 2400,
+			thresholdMs: 750,
+		};
+
+		// Adapter-level step: attachEvidenceToSignals is exactly what
+		// appinsights.ts's pullTelemetry calls to redact raw statement rows
+		// onto signals BEFORE they ever become a wire TelemetryBatchDocument.
+		const signals = [s];
+		attachEvidenceToSignals(signals, [statementRow]);
+		const wireBatch = batch(signals);
+
+		// Adapter-level assertion (brief's second ask): the wire batch itself
+		// must never carry the company/database name, independent of what
+		// evaluateTelemetryBatch/the store later do with it.
+		expect(JSON.stringify(wireBatch)).not.toContain(company);
+		expect(JSON.stringify(wireBatch)).not.toContain(database);
+
+		const store = new LifecycleStore(":memory:");
+		const outcome = evaluateTelemetryBatch(
+			store,
+			wireBatch,
+			runArgs("batch-sql-evidence-1"),
+		);
+		expect(outcome.transitions).toHaveLength(1);
+		const findingId = outcome.transitions[0].findingId;
+
+		// Sink-path assertion: the LAST point before an external tracker
+		// (triggers.ts reads exactly this column to build an issue body).
+		const details = store.getLatestOccurrenceDetails(findingId);
+		expect(details).not.toBeNull();
+		expect(details).toContain("Sales Header"); // redacted, logical form survives
+		expect(details).not.toContain(company);
+		expect(details).not.toContain(database);
+		expect(details).not.toContain("```"); // plain text only — §8
 		store.close();
 	});
 });

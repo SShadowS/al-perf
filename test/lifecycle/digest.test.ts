@@ -445,6 +445,13 @@ describe("digest — signal availability", () => {
 		seed(store, "new", { tenant: "acme" });
 		const digest = buildDigest(store, {
 			tenant: "acme",
+			// Pinned `now` (pre-existing flake fix, unrelated to F1/F2): without
+			// this, `generatedAt` defaults to the real wall clock, and its ISO
+			// timestamp can coincidentally contain the literal "42"/"9999" under
+			// test — e.g. any run starting in the HH:42 minute — tripping the
+			// assertions below for a reason that has nothing to do with what
+			// they're pinning.
+			now: "2026-01-15T09:00:00.000Z",
 			signalAvailability: [
 				{
 					signalId: "RT0005",
