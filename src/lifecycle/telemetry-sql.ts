@@ -336,6 +336,13 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	let columnsBoundaryClosed = false;
 	let expectTableRef = false;
 	let tableRefLogical: string | null = null;
+	// [start, end) spans of `out` occupied by a KEPT identifier's own emitted
+	// text (quotes/brackets included) — the numeric-blanking pass below must
+	// never touch a digit inside one of these, or an ordinary retained column
+	// name like "Shortcut Dimension 1 Code" comes out "Shortcut Dimension ?
+	// Code". Only recorded for idents that actually get appended to `out`
+	// (columns dropped past MAX_NAMED_COLUMNS never reach the `out +=` below).
+	const identRanges: Array<[number, number]> = [];
 	for (const [idx, t] of tokens.entries()) {
 		if (t.kind === "literal") {
 			out += "'?'";
@@ -364,8 +371,10 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			// "]]"-escaped physical name whose logical segment wasn't
 			// discarded by the $-split) — re-double it on the way back out, or
 			// the emitted "[...]" closes early and the tail reads as raw SQL.
+			const identStart = out.length;
 			out +=
 				t.quote === "[" ? `[${logical.replace(/\]/g, "]]")}]` : `"${logical}"`;
+			identRanges.push([identStart, out.length]);
 			continue;
 		}
 		out += t.value;
@@ -399,6 +408,28 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		}
 		if (/\b(?:FROM|INTO|UPDATE|MERGE)\b\s*$/i.test(out)) expectTableRef = true;
 	}
+
+	// Bare numbers and hex literals — the profile-side normalizer misses hex.
+	// Runs on the reassembled string, so a match's index must be checked
+	// against identRanges: this is a text-level regex sweep, not aware on its
+	// own that some of that text is a KEPT identifier's value rather than raw
+	// SQL punctuation/keywords (see identRanges' own doc comment above). One
+	// combined pass (not two chained `.replace()` calls) so every match's
+	// offset is measured against the SAME unshortened string identRanges was
+	// recorded against — a second pass over the first pass's (shorter)
+	// result would see shifted offsets and check the wrong ranges. The hex
+	// alternative is listed first so it wins at a shared start position (a
+	// leading "0" in "0xDEAD" can't match the bare-digit alternative anyway:
+	// its trailing `\b` fails between the digit and the following "x").
+	// Must run before any later pass changes `out`'s length (dot cleanup,
+	// comma collapse, the "+N more" marker) or these recorded positions go
+	// stale.
+	const isInsideIdent = (at: number) =>
+		identRanges.some(([start, end]) => at >= start && at < end);
+	out = out.replace(
+		/\b0x[0-9a-f]+\b|(?<![@\w])\d+(?:\.\d+)?\b/gi,
+		(m, at: number) => (isInsideIdent(at) ? m : "?"),
+	);
 
 	// Our own escape-aware scan of the table reference can disagree with
 	// parseSqlTable's regex-based capture of the SAME reference — e.g. a ""
@@ -434,13 +465,6 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		(_m, pre: string, word: string | undefined) =>
 			pre + (word ? `${word}.` : ""),
 	);
-
-	// Bare numbers and hex literals — the profile-side normalizer misses hex.
-	// Must run BEFORE the "+N more" marker below: that marker's own digits
-	// would otherwise get blanked right back out by this same pass.
-	out = out
-		.replace(/\b0x[0-9a-f]+\b/gi, "?")
-		.replace(/(?<![@\w])\d+(?:\.\d+)?\b/g, "?");
 
 	if (namedColumns > MAX_NAMED_COLUMNS) {
 		columnCount = namedColumns;

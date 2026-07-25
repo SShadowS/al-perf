@@ -415,6 +415,41 @@ describe("redactSqlForSink", () => {
 			);
 		});
 
+		test("I2: preserves digits inside a retained identifier's own name", () => {
+			// Before the fix, the numeric-blanking pass ran as a blind
+			// text-level sweep over the WHOLE reassembled string, so a
+			// perfectly ordinary BC column name containing a digit came out
+			// mangled: "Shortcut Dimension 1 Code" -> "Shortcut Dimension ?
+			// Code".
+			const out = redactSqlForSink(
+				'SELECT "Shortcut Dimension 1 Code","Amount 2" FROM dbo."CRONUS$Cust"',
+			);
+			expect(out?.text).toContain('"Shortcut Dimension 1 Code"');
+			expect(out?.text).toContain('"Amount 2"');
+		});
+
+		test("I2: still blanks a bare numeric literal or hex value outside any identifier", () => {
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM dbo."CRONUS$Cust" WHERE "Qty">5 AND "B"=0xDEADBEEF',
+			);
+			expect(out?.text).toContain('"Qty">?');
+			expect(out?.text).not.toContain("DEADBEEF");
+			expect(out?.text).toContain('"B"=?');
+		});
+
+		test("I2: no longer mangles a purely-numeric table alias (real RT0005 shape)", () => {
+			// Companion fix to the identifier-digit case above: a numeric
+			// alias IS emitted from an ident token too, so the same rule
+			// (blank `other`-token text only) now leaves it intact. This is
+			// a fidelity improvement, not a new leak -- a positional alias
+			// carries no customer data.
+			const out = redactSqlForSink(
+				'SELECT TOP (1) "50102"."timestamp","50102"."Store No_" FROM dbo."CRONUS$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED)',
+			);
+			expect(out?.text).toContain('"50102"');
+			expect(out?.text).toContain("TOP (?)"); // the LITERAL "1" is still blanked
+		});
+
 		test("corpus gap: UPDATE without a collapsed column list", () => {
 			const out = redactSqlForSink(
 				'UPDATE dbo."CRONUS$Cust" SET "Name"=\'Acme Ltd\' WHERE "No_"=\'X\'',
