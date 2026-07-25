@@ -1649,8 +1649,26 @@ function mergeEvidence(
 In `parseTelemetryBatch`, after validating signals:
 
 ```ts
-	const availability = validateAvailability(raw.signalAvailability);
+	// Task 9 already implemented this validator, as `validateSignalAvailability`.
+	// Do NOT add a second one.
+	const availability = validateSignalAvailability(raw.signalAvailability);
+
+	// TWO derived sets from one array, and the split is deliberate.
+	//
+	// `failedSignals` drives the note text: an operator wants to see every query
+	// that failed, enrichment included.
+	//
+	// `failedSignalQueries` drives incompleteInvocations, and EXCLUDES the
+	// statement query. §9's incompleteness rule exists so a failed SIGNAL query
+	// cannot falsely resolve findings — absent signal data means routines went
+	// unobserved. The statement query is enrichment: its failure does not mean
+	// the routines went unobserved, so suppressing the absence pass for it would
+	// needlessly delay resolving findings that are genuinely fixed.
+	const STATEMENT_LABEL = "RT0005 statements";
 	const failedSignals = availability.filter((a) => a.error !== undefined);
+	const failedSignalQueries = failedSignals.filter(
+		(a) => a.signalId !== STATEMENT_LABEL,
+	);
 	const availabilityNote =
 		failedSignals.length > 0
 			? `Signal(s) unavailable this window: ${failedSignals.map((a) => `${a.signalId} (${a.error})`).join("; ")} — absence not counted.`
@@ -1665,7 +1683,9 @@ and in the `meta` block:
 			// absence pass entirely (evaluate.ts:610-611). Without this, an
 			// RT0018-only batch would accrue absence against every RT0005 finding
 			// of the same app and eventually resolve them.
-			incompleteInvocations: failedSignals.length,
+			// failedSignalQueries, NOT failedSignals — a failed enrichment query
+			// must not suppress the absence pass (see the derivation above).
+			incompleteInvocations: failedSignalQueries.length,
 ```
 
 - [ ] **Step 6: Re-baseline the byte-identical golden deliberately**
