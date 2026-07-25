@@ -466,6 +466,18 @@ function logicalIdentifier(raw: string): string | null {
  * must never survive; logical table names and extension GUIDs are schema,
  * not customer data, and are kept. Anything the tokenizer can't fully
  * account for is dropped (`null`) rather than emitted half-redacted.
+ *
+ * **Invariant this function relies on (final review, F10) — read before
+ * changing anything below:** customer identity only ever appears inside a
+ * `$`-bearing identifier (`Company$Table[$guid]`, stripped by
+ * `logicalIdentifier`) or a string literal (blanked). Every code path here
+ * assumes that. **Known residual:** a quoted identifier that IS customer
+ * data but carries no `$` — e.g. a table alias `AS "CRONUS Danmark A_S"` —
+ * survives verbatim; BC generates aliases as object-id numbers in practice,
+ * so this is not load-bearing today, but it IS a hole in the invariant
+ * above, not covered by it. If BC ever emits a customer-derived, `$`-free
+ * quoted identifier anywhere in RT0005 statement text, this function does
+ * not catch it.
  */
 export function redactSqlForSink(sql: string): RedactedStatement | null {
 	const result = tokenize(sql);
