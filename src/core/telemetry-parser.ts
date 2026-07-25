@@ -21,6 +21,7 @@ import type {
 } from "../types/patterns.js";
 import {
 	TELEMETRY_BATCH_SCHEMA_VERSION,
+	type TelemetryBatchDocument,
 	type TelemetrySignal,
 } from "../types/telemetry.js";
 
@@ -41,6 +42,8 @@ export interface ParsedTelemetryBatch {
 	result: AnalysisResult; // stub: patterns[] + minimal hotspots + meta
 	windowEnd: string; // canonical captureTime for RunMetadata
 	signalCount: number;
+	/** Validated signalAvailability entries (Task 9); absent when the document carries none. */
+	signalAvailability?: SignalAvailabilityEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +176,47 @@ function optionalNonNegativeInteger(
 	return v;
 }
 
+function requireNonNegativeInteger(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): number {
+	const v = requireInteger(obj, field, context);
+	if (v < 0) {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}'`,
+		);
+	}
+	return v;
+}
+
+function requireBoolean(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): boolean {
+	const v = obj[field];
+	if (typeof v !== "boolean") {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}'`,
+		);
+	}
+	return v;
+}
+
+function optionalBoolean(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): boolean | undefined {
+	const v = obj[field];
+	if (v === undefined) return undefined;
+	if (typeof v !== "boolean") {
+		throw new Error(`telemetry-batch ${context}: invalid field '${field}'`);
+	}
+	return v;
+}
+
 /**
  * clientType enters severity-key composition (`${signalId}@${clientType}`,
  * config-file.ts D3) — same injection posture as signalId. Letters-only by
@@ -254,6 +298,67 @@ export function validateSignal(raw: unknown, index: number): TelemetrySignal {
 		sqlRowsRead: optionalNonNegativeInteger(obj, "sqlRowsRead", context),
 		sqlEvidence: optionalTelemetrySqlEvidence(obj, "sqlEvidence", context),
 	};
+}
+
+// ---------------------------------------------------------------------------
+// signalAvailability validation (telemetry-sql-evidence plan, Task 9).
+//
+// TelemetryBatchDocument.signalAvailability was typed on the wire (Task 7)
+// but never validated here — a malformed entry silently passed through as an
+// ignored unknown key, same as any other additive field. Unlike a genuinely
+// unknown future field, this one is a KNOWN, currently-producible shape
+// (appinsights.ts's pullTelemetry/pullTelemetrySplit populate it), so a
+// present-but-malformed entry is a real bug in whatever produced the batch
+// and should fail closed the same way validateSignal's per-field checks do,
+// not be silently dropped.
+//
+// A later task wires the validated array into meta.incompleteInvocations /
+// the evidence string's availability note (evaluate.ts's absence gating
+// reads meta.incompleteInvocations) — this task only validates and surfaces
+// it on ParsedTelemetryBatch, so that consumer doesn't have to re-validate
+// raw.signalAvailability itself.
+// ---------------------------------------------------------------------------
+
+type SignalAvailabilityEntry = NonNullable<
+	TelemetryBatchDocument["signalAvailability"]
+>[number];
+
+function validateSignalAvailabilityEntry(
+	raw: unknown,
+	index: number,
+): SignalAvailabilityEntry {
+	const context = `signalAvailability[${index}]`;
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		throw new Error(`telemetry-batch ${context}: not an object`);
+	}
+	const obj = raw as Record<string, unknown>;
+	return {
+		signalId: requireNonEmptyString(obj, "signalId", context),
+		queried: requireBoolean(obj, "queried", context),
+		rows: requireNonNegativeInteger(obj, "rows", context),
+		truncated: optionalBoolean(obj, "truncated", context),
+		error: optionalString(obj, "error", context),
+	};
+}
+
+/**
+ * Exported for direct unit testing, matching validateSignal's own rationale.
+ * Absent entirely -> undefined (not "unavailable", just "not reported by
+ * this producer") so a signalAvailability-free document still parses to a
+ * ParsedTelemetryBatch with the key omitted rather than an empty array —
+ * keeps `ParsedTelemetryBatch` JSON-stringify byte-identical for every batch
+ * that predates this field (see the pinned golden in telemetry-contract.test.ts).
+ */
+export function validateSignalAvailability(
+	raw: unknown,
+): SignalAvailabilityEntry[] | undefined {
+	if (raw === undefined) return undefined;
+	if (!Array.isArray(raw)) {
+		throw new Error(
+			"telemetry-batch document: invalid field 'signalAvailability' (expected an array)",
+		);
+	}
+	return raw.map((entry, i) => validateSignalAvailabilityEntry(entry, i));
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +598,11 @@ export function parseTelemetryBatch(
 		validateSignal(s, i),
 	);
 
+	// Fail closed on a malformed signalAvailability entry (Task 9) — see the
+	// section doc comment above validateSignalAvailability for why this
+	// wasn't a silently-ignored unknown key before.
+	const signalAvailability = validateSignalAvailability(raw.signalAvailability);
+
 	// Severity assignment (D3) happens per-signal, BEFORE the D4 merge below —
 	// each constituent's severity is resolved against its own clientType.
 	const withSeverity: SignalSeverity[] = signals.map((s) => ({
@@ -564,5 +674,10 @@ export function parseTelemetryBatch(
 		objectBreakdown: [],
 	};
 
-	return { result, windowEnd, signalCount: signals.length };
+	return {
+		result,
+		windowEnd,
+		signalCount: signals.length,
+		signalAvailability,
+	};
 }
