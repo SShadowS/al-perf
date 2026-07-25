@@ -1183,6 +1183,46 @@ describe("responsibility 9: SQL evidence on patterns (Task 10)", () => {
 		expect(parsed.result.meta.incompleteInvocations ?? 0).toBeGreaterThan(0);
 	});
 
+	// F2 fix (final review): `truncated` was validated and carried on the
+	// batch but never read by the renderer — a truncated-but-error-free entry
+	// produced no note at all, indistinguishable from a clean result. Pin
+	// that it now renders its own sentence, distinct from both a clean entry
+	// (no note) and a failed one ("absence not counted"/"findings still
+	// counted").
+	test("a truncated-but-error-free entry renders its own sentence, distinct from clean and failed", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 500,
+					truncated: true,
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).toContain(
+			"SQL evidence truncated this window: RT0005 statements (query hit its row cap — some slow statements may be missing).",
+		);
+		expect(evidenceText).not.toContain("absence not counted");
+		expect(evidenceText).not.toContain("findings still counted");
+		// Truncation without error must not mark the run incomplete either —
+		// it's not a query failure.
+		expect(parsed.result.meta.incompleteInvocations ?? 0).toBe(0);
+	});
+
+	// A clean entry (no error, no truncation) still renders nothing at all.
+	test("a clean, non-truncated entry renders no availability note", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [{ signalId: "RT0005", queried: true, rows: 4 }],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).not.toContain("unavailable");
+		expect(evidenceText).not.toContain("truncated");
+	});
+
 	test("counts line renders only the present field", () => {
 		const doc = batch([signal({ sqlExecutes: 12 })]);
 		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);

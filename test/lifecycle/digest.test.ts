@@ -397,6 +397,49 @@ describe("digest — signal availability", () => {
 		store.close();
 	});
 
+	// F2 fix (final review): `truncated` without `error` renders its own
+	// sentence, distinct from a clean entry (nothing rendered) and a failed
+	// one ("absence not counted"/"findings still counted").
+	it("reports a truncated-but-error-free query as its own distinct advisory line", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 500,
+					truncated: true,
+				},
+			],
+		});
+		expect(digest.unavailable).toEqual([]);
+		expect(digest.truncated.map((s) => s.signalId)).toEqual([
+			"RT0005 statements",
+		]);
+		const md = renderDigestMarkdown(digest);
+		expect(md).toContain(
+			"SQL evidence truncated this window: RT0005 statements (query hit its row cap — some slow statements may be missing).",
+		);
+		expect(md).not.toContain("absence not counted");
+		expect(md).not.toContain("findings still counted");
+		store.close();
+	});
+
+	it("renders NOTHING for a clean, non-truncated availability entry", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [{ signalId: "RT0005", queried: true, rows: 4 }],
+		});
+		expect(digest.unavailable).toEqual([]);
+		expect(digest.truncated).toEqual([]);
+		expect(renderDigestMarkdown(digest)).not.toMatch(/unavailable|truncated/i);
+		store.close();
+	});
+
 	it("never renders pull-wide rows/unmatchedRows as tenant-specific text", () => {
 		const store = new LifecycleStore(":memory:");
 		seed(store, "new", { tenant: "acme" });

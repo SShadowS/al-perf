@@ -802,6 +802,23 @@ export function parseTelemetryBatch(
 			`SQL evidence unavailable this window: ${failedEnrichmentQueries.map((a) => `${a.signalId} (${a.error})`).join("; ")} (findings still counted).`,
 		);
 	}
+	// F2 fix (final review): `truncated` is a distinct signal from `error` — a
+	// query can come back successfully (no error) yet still have been cut off
+	// by App Insights' row cap or a partial-failure marker (see
+	// appinsights.ts's fetchStatementTable/APPINSIGHTS_QUERY_ROW_CAP). Before
+	// this fix `truncated` was validated and carried on the batch but never
+	// read by either renderer, so a truncated-but-error-free query produced
+	// no note at all — indistinguishable from a clean, complete result.
+	// Entries already covered by an error sentence above are excluded so one
+	// entry never produces two lines for the same underlying failure.
+	const truncatedQueries = (signalAvailability ?? []).filter(
+		(a) => a.truncated === true && a.error === undefined,
+	);
+	if (truncatedQueries.length > 0) {
+		availabilityNoteParts.push(
+			`SQL evidence truncated this window: ${truncatedQueries.map((a) => a.signalId).join(", ")} (query hit its row cap — some slow statements may be missing).`,
+		);
+	}
 	const availabilityNote =
 		availabilityNoteParts.length > 0 ? availabilityNoteParts.join(" ") : null;
 

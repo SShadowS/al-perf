@@ -42,15 +42,15 @@ export interface DigestOptions {
 	 * The `signalAvailability` array from this tenant's most recent telemetry
 	 * pull (the same shape `parseTelemetryBatch` validates off the wire — see
 	 * src/types/telemetry.ts). Absent (e.g. a tenant with no telemetry pull,
-	 * or a caller that hasn't been wired up yet) → `unavailable` is always
-	 * `[]` and nothing renders.
+	 * or a caller that hasn't been wired up yet) → `unavailable` and
+	 * `truncated` are always `[]` and nothing renders.
 	 *
 	 * Two rules this option's ONLY consumer (buildDigest, below) must respect:
 	 *  - `rows`/`unmatchedRows` on an entry are PULL-WIDE (the whole pull,
 	 *    which may span other tenants) — never rendered as tenant-specific
 	 *    text, never used to gate a per-tenant "clean" claim. Only a signal's
-	 *    own `error` (and, for future use, `queried`/`truncated`) may drive
-	 *    that.
+	 *    own `error` and `truncated` may drive that (F2 fix, final review:
+	 *    `truncated` now drives its own sentence, distinct from `error`).
 	 *  - The `"RT0005 statements"` entry is the enrichment query — its
 	 *    failure does NOT mark a run incomplete (evaluateRun's absence gate
 	 *    deliberately excludes it, telemetry-parser.ts's failedSignalQueries
@@ -108,6 +108,18 @@ export interface DigestData {
 	 * enrichment-query caveats this must not violate.
 	 */
 	unavailable: SignalAvailabilityEntry[];
+	/**
+	 * Signals whose query succeeded (no `error`) but reported `truncated:
+	 * true` — App Insights cut the response off at its row cap or returned a
+	 * partial-failure marker (F2 fix, final review). A distinct condition
+	 * from `unavailable`: the query didn't fail, but its result may be
+	 * incomplete, so it gets its own rendered sentence rather than being
+	 * silently indistinguishable from a clean, complete result. Always `[]`
+	 * when the caller didn't supply availability data, no query truncated, or
+	 * an entry's `error` already explains it (covered by `unavailable`
+	 * instead — one entry never appears in both).
+	 */
+	truncated: SignalAvailabilityEntry[];
 }
 
 function toEntry(store: LifecycleStore, row: FindingRow): DigestFindingEntry {
@@ -181,6 +193,12 @@ export function buildDigest(
 	const unavailable = (opts?.signalAvailability ?? []).filter(
 		(s) => s.error !== undefined,
 	);
+	// F2 fix (final review): `truncated` without `error` — the query
+	// succeeded but was cut off. Excludes anything already in `unavailable`
+	// so one entry never renders two lines.
+	const truncated = (opts?.signalAvailability ?? []).filter(
+		(s) => s.truncated === true && s.error === undefined,
+	);
 
 	return {
 		generatedAt,
@@ -196,6 +214,7 @@ export function buildDigest(
 			.map((row) => toEntry(store, row)),
 		captureQueue,
 		unavailable,
+		truncated,
 	};
 }
 
@@ -272,6 +291,14 @@ export function renderDigestMarkdown(digest: DigestData): string {
 	if (unavailableEnrichmentQueries.length > 0) {
 		unavailableLines.push(
 			`> SQL evidence unavailable this window: ${unavailableEnrichmentQueries.map((s) => s.signalId).join(", ")} (findings still counted).`,
+		);
+	}
+	// F2 fix (final review): `truncated` (query succeeded, but was cut off)
+	// is distinct from `unavailable` (query failed outright) and renders its
+	// own sentence — never silently identical to a clean, complete result.
+	if (digest.truncated.length > 0) {
+		unavailableLines.push(
+			`> SQL evidence truncated this window: ${digest.truncated.map((s) => s.signalId).join(", ")} (query hit its row cap — some slow statements may be missing).`,
 		);
 	}
 	const unavailableBlock: string[] =
