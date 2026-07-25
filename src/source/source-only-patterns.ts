@@ -74,7 +74,15 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 	// SetView belongs here and SetCurrentKey does not: SetView applies a filter
 	// group (it is how a caller-supplied filter string reaches the record),
 	// while SetCurrentKey only picks the sort order and restricts nothing.
-	const FILTER_OPS = new Set(["SetRange", "SetFilter", "SetView"]);
+	// CopyFilters (plural) copies every filter onto the RECEIVER, so it belongs
+	// here too; CopyFilter (singular) filters the record owning its second
+	// argument instead, and is resolved separately below.
+	const FILTER_OPS = new Set([
+		"SetRange",
+		"SetFilter",
+		"SetView",
+		"CopyFilters",
+	]);
 	const patterns: DetectedPattern[] = [];
 
 	for (const obj of index.objects.values()) {
@@ -83,11 +91,16 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 			const ops = member.features.recordOps;
 			const findOps = ops.filter((op) => FIND_OPS.has(op.type));
 
-			// Collect all record variables that have SetRange or SetFilter
+			// Collect all record variables that end up carrying a filter
 			const filteredVars = new Set<string>();
 			for (const op of ops) {
 				if (FILTER_OPS.has(op.type) && op.recordVariable) {
 					filteredVars.add(op.recordVariable.toLowerCase());
+				} else if (op.type === "CopyFilter") {
+					// `A.CopyFilter(fieldOfA, B.fieldOfB)` filters B: the target is
+					// the qualifier of the second argument, not the receiver.
+					const target = op.allFieldArguments?.[1]?.split(".")[0];
+					if (target) filteredVars.add(target.toLowerCase());
 				}
 			}
 

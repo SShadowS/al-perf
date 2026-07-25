@@ -34,7 +34,7 @@ describe("source-map functionality", () => {
 
 		const tableObj = index.objects.get("Table_50100");
 		expect(tableObj).toBeDefined();
-		expect(tableObj!.procedures.length).toBe(1);
+		expect(tableObj!.procedures.length).toBe(2);
 		expect(tableObj!.triggers.length).toBe(2);
 	});
 });

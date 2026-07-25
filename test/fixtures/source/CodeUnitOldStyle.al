@@ -18,4 +18,16 @@ codeunit 50950 "Old Style Calls"
                     until SalesLine.Next = 0;
             until Customer.Next = 0;
     end;
+
+    procedure CopyFiltersFromCaller(var SourceCustomer: Record Customer)
+    var
+        Target: Record Customer;
+    begin
+        // Plural CopyFilters copies every filter onto the RECEIVER, so Target
+        // is filtered here even though no SetRange/SetFilter is in sight.
+        Target.CopyFilters(SourceCustomer);
+        if Target.FindSet then
+            repeat
+            until Target.Next = 0;
+    end;
 }

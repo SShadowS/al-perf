@@ -177,7 +177,7 @@ describe("Indexer output snapshots", () => {
 
 	// --- Table50100: triggers in tables ---
 	describe("Table50100", () => {
-		it("should find 2 triggers and 1 procedure", async () => {
+		it("should find 2 triggers and 2 procedures", async () => {
 			const r = (await indexALFile(
 				resolve(fixturesDir, "Table50100.al"),
 				fixturesDir,
@@ -188,7 +188,10 @@ describe("Indexer output snapshots", () => {
 				"OnInsert",
 				"OnModify",
 			]);
-			expect(r.procedures.map((p) => p.name)).toEqual(["LookupRecords"]);
+			expect(r.procedures.map((p) => p.name).sort()).toEqual([
+				"CopyFilterAcrossRecords",
+				"LookupRecords",
+			]);
 		});
 
 		it("LookupRecords: for loop with record ops", async () => {

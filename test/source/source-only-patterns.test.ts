@@ -76,6 +76,28 @@ describe("detectUnfilteredFindSet", () => {
 		expect(falsePositive).toBeUndefined();
 	});
 
+	test("does not flag a FindSet preceded by CopyFilters on the receiver", async () => {
+		// Plural CopyFilters copies every filter onto the receiver, so Target is
+		// filtered with no SetRange/SetFilter anywhere in the member.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnfilteredFindSet(index);
+		const falsePositive = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("CopyFiltersFromCaller")),
+		);
+		expect(falsePositive).toBeUndefined();
+	});
+
+	test("does not flag a FindSet whose filter arrived via singular CopyFilter", async () => {
+		// COPYFILTER("No.", Other."No.") filters Other -- the record owning the
+		// SECOND argument -- not the implicit Rec it is called on.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnfilteredFindSet(index);
+		const falsePositive = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("CopyFilterAcrossRecords")),
+		);
+		expect(falsePositive).toBeUndefined();
+	});
+
 	test("does not flag a RecordRef find — its filters live on FieldRef", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectUnfilteredFindSet(index);

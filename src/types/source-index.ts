@@ -231,6 +231,8 @@ export type RecordOpType =
 	| "SetRange"
 	| "SetFilter"
 	| "SetView"
+	| "CopyFilters"
+	| "CopyFilter"
 	| "Reset"
 	| "Next"
 	| "Count"

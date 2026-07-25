@@ -38,6 +38,8 @@ const RECORD_OPS: Set<string> = new Set([
 	"setrange",
 	"setfilter",
 	"setview",
+	"copyfilters",
+	"copyfilter",
 	"reset",
 	"next",
 	"count",
@@ -63,6 +65,8 @@ const RECORD_OP_CASE_MAP: Record<string, RecordOpType> = {
 	setrange: "SetRange",
 	setfilter: "SetFilter",
 	setview: "SetView",
+	copyfilters: "CopyFilters",
+	copyfilter: "CopyFilter",
 	reset: "Reset",
 	next: "Next",
 	count: "Count",
@@ -446,10 +450,14 @@ function collectRecordOps(
 		// coverage checks. CalcFields/CalcSums' argument list matters for rating
 		// calcfields-in-loop severity on the field(s) actually calculated, not on
 		// the table as a whole (see calcFieldSeverity in source-patterns.ts).
+		// CopyFilter's second argument names the record that ends up filtered
+		// (`COPYFILTER("No.", Other."No.")` filters Other, not the receiver),
+		// so unfiltered-findset needs the argument list to resolve the target.
 		if (
 			lowerMethod !== "setloadfields" &&
 			lowerMethod !== "calcfields" &&
-			lowerMethod !== "calcsums"
+			lowerMethod !== "calcsums" &&
+			lowerMethod !== "copyfilter"
 		)
 			return undefined;
 		const argList = callNode.namedChildren.find(

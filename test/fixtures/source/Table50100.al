@@ -29,4 +29,17 @@ table 50100 "Test Table"
             Customer.CalcFields(Balance);
         end;
     end;
+
+    procedure CopyFilterAcrossRecords()
+    var
+        Other: Record "Test Table";
+    begin
+        // Singular CopyFilter moves ONE field's filter, and the record it
+        // filters is the one owning the SECOND argument -- Other here, not the
+        // implicit Rec this is called on.
+        COPYFILTER("No.", Other."No.");
+        if Other.FindSet then
+            repeat
+            until Other.Next = 0;
+    end;
 }
