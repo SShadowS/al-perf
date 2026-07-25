@@ -2,7 +2,53 @@ import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern, PatternDetector } from "../types/patterns.js";
 import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import { aggregateByMethod } from "./aggregator.js";
+import { isSqlStatement } from "./display-utils.js";
 import { isIdleNode } from "./processor.js";
+import { classifySqlOperation, isSqlNode, parseSqlTable } from "./sql-node.js";
+
+/**
+ * A node's name as it may appear in HUMAN-FACING finding text — title,
+ * description, evidence.
+ *
+ * A BC sampling profile embeds SQL statements as call-tree nodes whose
+ * `functionName` IS the statement text, company- and database-qualified:
+ * `SELECT L.Text FROM [CRONUS].[dbo].[$ndo$textlookup] ...`. `evaluate.ts`
+ * copies a pattern's title into the finding, and the GitHub/Azure DevOps
+ * sinks put that straight into the issue title — so a raw statement publishes
+ * the customer's database and company name to an external tracker. That is
+ * exactly what `redactSqlForSink` prevents on the telemetry path; the profile
+ * path had no equivalent.
+ *
+ * `parseSqlTable` already strips the company prefix (`Company$Table` -> the
+ * logical table), so the operation plus that table is both safe and more
+ * readable than 300 characters of SQL.
+ *
+ * NOT used for `involvedMethods`: that is the fingerprint anchor
+ * (`resolvePatternAnchor`), rewriting it would churn the identity of every
+ * SQL finding, and it never reaches a sink — the issue body carries title,
+ * severity, state, patternId, fingerprint, appName and evidence only.
+ */
+export function displayFunctionName(node: ProcessedNode): string {
+	const name = node.callFrame.functionName;
+	// Deliberately the BROADER of the codebase's two SQL recognizers.
+	// `isSqlNode` matches SELECT/INSERT/UPDATE/DELETE/MERGE only, and BC also
+	// emits `IF EXISTS(SELECT ...)`, `EXEC ...` and `BEGIN ...` nodes — one of
+	// which slipped through this guard carrying a company-qualified table.
+	// Redaction must be gated on the widest recognizer, not the narrowest.
+	if (!isSqlStatement(name) && !isSqlNode(node)) return name;
+	const { table } = parseSqlTable(name);
+	const operation = classifySqlOperation(name);
+	// `classifySqlOperation` returns OTHER for the forms it has no case for;
+	// "OTHER statement" tells the reader nothing, so name it plainly.
+	const label = operation === "OTHER" ? "SQL statement" : operation;
+	return table ? `${label} on "${table}"` : label;
+}
+
+/** `formatMethodRef` for human-facing text: SQL nodes get their redacted descriptor. */
+export function displayMethodRef(node: ProcessedNode): string {
+	const { objectType, objectId } = node.applicationDefinition;
+	return `${displayFunctionName(node)} (${objectType} ${objectId})`;
+}
 
 /**
  * Format a node reference as "FunctionName (ObjectType ObjectId)".
@@ -199,8 +245,8 @@ export const detectHighHitCount: PatternDetector = (
 			patterns.push({
 				id: "high-hit-count",
 				severity: "warning",
-				title: `${node.callFrame.functionName} has disproportionate hit count`,
-				description: `${formatMethodRef(node)} has ${node.hitCount} hits vs parent ${formatMethodRef(node.parent)} with ${node.parent.hitCount} hits (ratio ${(node.hitCount / node.parent.hitCount).toFixed(1)}x).`,
+				title: `${displayFunctionName(node)} has disproportionate hit count`,
+				description: `${displayMethodRef(node)} has ${node.hitCount} hits vs parent ${displayMethodRef(node.parent)} with ${node.parent.hitCount} hits (ratio ${(node.hitCount / node.parent.hitCount).toFixed(1)}x).`,
 				impact: node.selfTime,
 				involvedMethods: [formatMethodRef(node), formatMethodRef(node.parent)],
 				evidence: `hitCount ratio = ${(node.hitCount / node.parent.hitCount).toFixed(1)}x (threshold: 10x)`,

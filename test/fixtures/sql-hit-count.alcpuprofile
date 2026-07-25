@@ -1,0 +1,90 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": {
+        "functionName": "OnRun",
+        "scriptId": "CU_50003",
+        "url": "",
+        "lineNumber": 1,
+        "columnNumber": 0
+      },
+      "hitCount": 1,
+      "children": [
+        2
+      ],
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "SQL Caller",
+        "objectId": 50003
+      },
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "frameIdentifier": 1
+    },
+    {
+      "id": 2,
+      "callFrame": {
+        "functionName": "SQL",
+        "scriptId": "CU_50003",
+        "url": "",
+        "lineNumber": 2,
+        "columnNumber": 0
+      },
+      "hitCount": 1,
+      "children": [
+        3
+      ],
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "SQL Caller",
+        "objectId": 50003
+      },
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "frameIdentifier": 2
+    },
+    {
+      "id": 3,
+      "callFrame": {
+        "functionName": "SELECT L.Text FROM [CRONUS].[dbo].[$ndo$textlookup] L WHERE L.TextHash = @0",
+        "scriptId": "CU_50003",
+        "url": "",
+        "lineNumber": 3,
+        "columnNumber": 0
+      },
+      "hitCount": 547,
+      "children": [],
+      "applicationDefinition": {
+        "objectType": "CodeUnit",
+        "objectName": "SQL Caller",
+        "objectId": 50003
+      },
+      "declaringApplication": {
+        "appName": "Test App",
+        "appPublisher": "Test",
+        "appVersion": "1.0.0.0"
+      },
+      "frameIdentifier": 3
+    }
+  ],
+  "startTime": 63793000000000000,
+  "endTime": 63793000012000000,
+  "samples": [
+    3,
+    3,
+    3
+  ],
+  "timeDeltas": [
+    0,
+    100000,
+    100000
+  ],
+  "kind": 1
+}

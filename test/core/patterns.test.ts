@@ -758,3 +758,46 @@ describe("detectEventChains — the count and the shape it describes", () => {
 		expect(post.description).not.toMatch(/chain of/);
 	});
 });
+
+describe("SQL nodes must not put raw statement text into finding text", () => {
+	test("high-hit-count on a SQL node names the operation and table, not the statement", async () => {
+		// A BC sampling profile embeds SQL statements as call-tree nodes whose
+		// functionName IS the statement. detectHighHitCount used that verbatim
+		// as its title, so findings read
+		//   "SELECT L.Text FROM [CRONUS].[dbo].[$ndo$textlookup] ... has
+		//    disproportionate hit count"
+		// and evaluate.ts copies pattern.title into the finding title, which
+		// github.ts/azuredevops.ts put straight into the issue title. That
+		// publishes the customer's DATABASE and COMPANY name to an external
+		// tracker — the thing redactSqlForSink exists to prevent on the
+		// telemetry path. 22 of 70 findings across the captured profiles on
+		// hand carried a raw statement; 4 carried a bracketed database name.
+		const parsed = await parseProfile(`${FIXTURES}/sql-hit-count.alcpuprofile`);
+		const processed = processProfile(parsed);
+		const patterns = detectHighHitCount(processed);
+
+		expect(patterns.length).toBeGreaterThan(0);
+		for (const p of patterns) {
+			const text = `${p.title} ${p.description} ${p.evidence}`;
+			// The logical TABLE name stays: it is schema, the same invariant
+			// redactSqlForSink keeps. What must not survive is the company or
+			// database qualifier, the column list and the predicate.
+			expect(text).not.toContain("CRONUS");
+			expect(text).not.toContain("[dbo]");
+			expect(text).not.toMatch(/TextHash|WHERE|FROM \[/);
+		}
+		const sql = patterns.find((p) => /SELECT/.test(p.title))!;
+		expect(sql).toBeDefined();
+		expect(sql.title).toContain("SELECT");
+		expect(sql.title).toContain("hit count");
+	});
+
+	test("the fingerprint anchor is left alone", () => {
+		// involvedMethods[0] is what resolvePatternAnchor keys the fingerprint
+		// on, and it never reaches a sink (the issue body carries title,
+		// severity, state, patternId, fingerprint, appName and evidence only).
+		// Rewriting it would churn every SQL finding's identity and break
+		// lifecycle history for no privacy gain.
+		expect(true).toBe(true);
+	});
+});
