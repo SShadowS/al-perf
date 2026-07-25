@@ -32,7 +32,7 @@
 		"executionTimeInMsNonNullRows": 6,
 		"executionTimeTimespanNonNullRows": 15967,
 		"thresholdMs": { "min": 750, "max": 750 },
-		"sampleStack": "AppObjectType: Table\r\n  AppObjectId: 50100\r\n  AL CallStack: \"Sample Job\"(Table 50100).Run line 60 - Sample Extension by Sample Publisher version 27.3.4.347848\r\n\"Sample Mgt.\"(CodeUnit 50101).RunJobs line 8 - Sample Extension by Sample Publisher version 27.3.4.347848\r\n\"Sample Mgt.\"(CodeUnit 50101).OnRun(Trigger) line 2 - Sample Extension by Sample Publisher version 27.3.4.347848",
+		"sampleStack": "AppObjectType: Table\r\n  AppObjectId: 50100\r\n  AL CallStack: \"Sample Job\"(Table 50100).Run line 60 - Sample Extension by Sample Publisher version 1.0.0.0\r\n\"Sample Mgt.\"(CodeUnit 50101).RunJobs line 8 - Sample Extension by Sample Publisher version 1.0.0.0\r\n\"Sample Mgt.\"(CodeUnit 50101).OnRun(Trigger) line 2 - Sample Extension by Sample Publisher version 1.0.0.0",
 		"sampleStatement": "SELECT  TOP (1) \"50102\".\"timestamp\",\"50102\".\"Store No_\",\"50102\".\"Terminal No_\" FROM dbo.\"COMPANY$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900\" \"50102\" WITH(READUNCOMMITTED) WHERE (\"50102\".\"Store No_\"=@0)",
 		"sampleStatementLengths": [890, 2721, 6483]
 	},
