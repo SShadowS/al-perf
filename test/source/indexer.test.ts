@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(34);
-		expect(index.objects.size).toBe(34);
+		expect(index.files.length).toBe(37);
+		expect(index.objects.size).toBe(37);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -518,5 +518,35 @@ describe("record parameters", () => {
 		expect(
 			proc.features.variables.find((v) => v.name === "SalesLine"),
 		).toBeDefined();
+	});
+});
+
+describe("objects the index used to drop silently", () => {
+	it("indexes an object wrapped in a preprocessor conditional", async () => {
+		// findObjectDeclaration scanned only the root's direct children, but
+		// `#if CLOUD` wraps the declaration in a preproc_conditional_object, so
+		// the whole file was skipped. 19 files in one real 583-file codebase.
+		const result = await indexALFile(
+			resolve(fixturesDir, "TableGuarded.al"),
+			fixturesDir,
+		);
+		expect(result).not.toBeNull();
+		expect(result!.objectType).toBe("Table");
+		expect(result!.objectId).toBe(50980);
+		expect(result!.procedures.map((p) => p.name)).toContain("ScanEverything");
+	});
+
+	it("keeps every ID-less object, not just the last one", async () => {
+		// Interfaces and control add-ins carry no object ID, so every one of
+		// them keyed to "Interface_0" and overwrote the previous — 18 objects
+		// lost in one codebase.
+		const index = await buildSourceIndex(fixturesDir);
+		const interfaces = [...index.objects.values()].filter(
+			(o) => o.objectType === "Interface",
+		);
+		expect(interfaces.map((o) => o.objectName).sort()).toEqual([
+			"Alpha Handler",
+			"Beta Handler",
+		]);
 	});
 });

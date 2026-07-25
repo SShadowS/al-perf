@@ -257,6 +257,16 @@ function findObjectDeclaration(root: SyntaxNode): SyntaxNode | null {
 		if (child.type in OBJECT_TYPE_MAP) {
 			return child;
 		}
+		// `#if CLOUD` / `#if not CLEAN22` around a whole object wraps the
+		// declaration in a preproc_conditional_object, so it is no longer a
+		// direct child of the root. Scanning only the top level skipped every
+		// such file outright — not one finding, not one procedure, no warning.
+		// Localization and cloud/on-prem variants are guarded this way as a
+		// matter of course: 19 files in one real 583-file codebase.
+		if (child.type.startsWith("preproc")) {
+			const nested = findObjectDeclaration(child);
+			if (nested) return nested;
+		}
 	}
 	return null;
 }
@@ -1573,7 +1583,15 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
 
 		index.files.push(objectInfo.file);
 
-		const objectKey = `${objectInfo.objectType}_${objectInfo.objectId}`;
+		// Interfaces and control add-ins carry no object ID, so every one of
+		// them keyed to "Interface_0"/"ControlAddIn_0" and silently overwrote
+		// the previous — 18 objects lost in one real codebase. Fall back to the
+		// object NAME when there is no id to key on. Objects that do have an id
+		// keep the `Type_Id` key every lookup already uses (`ownerObject`).
+		const objectKey =
+			objectInfo.objectId === 0
+				? `${objectInfo.objectType}_${objectInfo.objectName}`
+				: `${objectInfo.objectType}_${objectInfo.objectId}`;
 		index.objects.set(objectKey, objectInfo);
 
 		for (const proc of objectInfo.procedures) {

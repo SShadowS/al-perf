@@ -267,10 +267,10 @@ describe("Indexer output snapshots", () => {
 
 	// --- buildSourceIndex aggregate ---
 	describe("buildSourceIndex", () => {
-		it("should index all 34 fixture files", async () => {
+		it("should index all 37 fixture files", async () => {
 			const index = await buildSourceIndex(fixturesDir);
-			expect(index.files).toHaveLength(34);
-			expect(index.objects.size).toBe(34);
+			expect(index.files).toHaveLength(37);
+			expect(index.objects.size).toBe(37);
 		});
 
 		it("should build event catalog", async () => {
