@@ -225,3 +225,29 @@ Gotchas: `logical_reads`=8KB pages not rows; `rows`=returned not examined; DMV p
 - Use SQL-node `scriptId`/`applicationDefinition` self-identification as the primary correlation key; nearest-AL-ancestor as fallback.
 - Rows-read is NOT profiler-side. If v1 wants a rows-read signal, the AL-native path is a companion extension reading `SessionInformation.SqlRowsRead()` deltas (operation-level, not per-statement) — separate from the profile ingest. Full per-statement text+rows+duration is telemetry/OnPrem-only.
 - Telemetry-side (project 2) target set is broader than RT0005: RT0009 (all SQL text+duration), RT0006/RT0008/RT0018 (object-level rows-read), RT0012/13/27/28 (locks/deadlock). RT0005 alone is threshold-gated and rows-read-less.
+
+---
+
+## ✅ GATE 0 ANSWERED (2026-07-25) — live BC telemetry, ISV production App Insights
+
+Probe run via `az monitor app-insights query` against a real resource, 7-day window:
+RT0005 15,987 rows / 841 distinct stacks; RT0018 17,073 rows / 1,381 distinct stacks.
+Redacted probe output committed at `test/fixtures/telemetry/rt0005-probe.json`.
+
+| Question | Answer |
+|---|---|
+| RT0005 carries `alMethod`? | **No.** Absent from the dimension set. RT0018 has it. Confirms the routine join must parse `alStackTrace`. |
+| `sqlStatement` on RT0005? | **Yes.** Sampled lengths 890–6,483 chars (8,192 truncation is real but not the common case). |
+| `alStackTrace` grammar | **Header lines, then the first frame INLINE:** `AppObjectType: <T>\r\n  AppObjectId: <N>\r\n  AL CallStack: "<Object Name>"(<Type> <Id>).<Method> line <N> - <app> by <publisher> version <v>`, further frames one per line. `OnRun(Trigger)` appears as a method name. **Line 0 is the header** — the shipped `stackTrace.split(/\r?\n/)[0]` fallback yields `AppObjectType: Table`, confirming the identity bug on live data. |
+| `executionTimeInMs` exists? | **Effectively NO — and the shipped puller depends on it.** Non-null on **0 of 17,045** RT0018 rows and **6 of 15,957** RT0005 rows. `src/lifecycle/appinsights.ts` reads exactly this column, so `max(ms)` is null and `asDurationMs` throws: `lifecycle pull-telemetry` cannot have worked against this telemetry. **Working path:** `toreal(totimespan(customDimensions.executionTime))/10000` → non-null on **100%** of rows for both signals (Microsoft's own documented conversion). |
+| `longRunningThreshold` per row? | **Yes, as a .NET timespan**, non-null on 100% of rows. RT0005 uniformly **750 ms**, RT0018 uniformly **1000 ms**. `longRunningThresholdInMs` is as absent as `executionTimeInMs` (6 rows). |
+| RT0018 `sqlExecutes` / `sqlRowsRead`? | **Both present** — these tenants are BC ≥ v22.0. |
+| Stack fragmentation for §10's regrouping | **Safe.** RT0005 ≈19 rows per distinct stack, RT0018 ≈12. Regrouping on `alStackTrace` splits findings by routine, not into per-row dust. |
+
+**Statement shape note (changes the redactor's corpus):** real statements alias-qualify their
+columns — `"Purch_ Rcpt_ Line"."timestamp"`, `"99001472"."Store No_"` — and the company-prefixed
+physical name appears in the `FROM` clause rather than in the projection. The redaction corpus must
+cover alias-qualified column references, not only `dbo."Company$Table"` forms.
+
+**Verdict: GO**, with one prerequisite — the duration extraction is broken in shipped code and must
+be fixed as part of this work, for BOTH signals, before any pull produces usable data.
