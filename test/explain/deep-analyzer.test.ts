@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import { parseProfile } from "../../src/core/parser.js";
 import { processProfile } from "../../src/core/processor.js";
 import { buildDeepPayload } from "../../src/explain/deep-analyzer.js";
@@ -129,5 +129,40 @@ describe("buildDeepPayload", () => {
 
 		expect(payload.sourceSnippets).toBeUndefined();
 		expect(payload.callTreeStrategy).toBe("chains");
+	});
+});
+
+describe("deep payload size — every character is billed", () => {
+	test("appBreakdown carries totals, not each app's whole method list", async () => {
+		// buildDeepPayload already deletes tableBreakdown as "noise without
+		// value". appBreakdown[].methods is the same thing and far bigger: on a
+		// captured profile it was 79,335 of the payload's 127,300 characters —
+		// 62% — roughly 20k tokens of per-app method names sent to the model on
+		// every --deep call. The hotspots list already names the methods that
+		// matter, bounded by `top`.
+		const { analyzeProfile } = await import("../../src/core/analyzer.js");
+		let processed: unknown;
+		const result = await analyzeProfile(
+			"test/fixtures/batch-recorded/profile-1.alcpuprofile",
+			{
+				top: 20,
+				onProcessedProfile: (p) => {
+					processed = p;
+				},
+			},
+		);
+		const payload = buildDeepPayload(
+			result,
+			processed as Parameters<typeof buildDeepPayload>[1],
+		);
+		const analysis = (payload as { analysis?: Record<string, unknown> })
+			.analysis;
+		for (const app of (analysis?.appBreakdown ?? []) as Array<
+			Record<string, unknown>
+		>) {
+			expect(app.methods).toBeUndefined();
+			expect(app.selfTime).toBeDefined();
+		}
+		expect(JSON.stringify(payload).length).toBeLessThan(80_000);
 	});
 });
