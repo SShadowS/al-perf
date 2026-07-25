@@ -701,17 +701,27 @@ describe("responsibility 8: signalAvailability validation", () => {
 	});
 
 	test("validateSignalAvailability rejects a non-array value", () => {
-		expect(() => validateSignalAvailability({})).toThrow(
-			/signalAvailability/,
-		);
+		expect(() => validateSignalAvailability({})).toThrow(/signalAvailability/);
 	});
 
 	test("validateSignalAvailability carries a well-formed entry through, including optional fields", () => {
 		const parsed = validateSignalAvailability([
-			{ signalId: "RT0005", queried: true, rows: 4, truncated: true, error: "boom" },
+			{
+				signalId: "RT0005",
+				queried: true,
+				rows: 4,
+				truncated: true,
+				error: "boom",
+			},
 		]);
 		expect(parsed).toEqual([
-			{ signalId: "RT0005", queried: true, rows: 4, truncated: true, error: "boom" },
+			{
+				signalId: "RT0005",
+				queried: true,
+				rows: 4,
+				truncated: true,
+				error: "boom",
+			},
 		]);
 	});
 
@@ -744,7 +754,9 @@ describe("responsibility 8: signalAvailability validation", () => {
 
 	test("rejects a signalAvailability entry missing a required field, naming the field and index", () => {
 		const doc = batch([signal()], {
-			signalAvailability: [{ signalId: "RT0005", rows: 0 }] as unknown as TelemetryBatchDocument["signalAvailability"],
+			signalAvailability: [
+				{ signalId: "RT0005", rows: 0 },
+			] as unknown as TelemetryBatchDocument["signalAvailability"],
 		});
 		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
 			/signalAvailability\[0\].*queried/,
@@ -772,7 +784,11 @@ describe("responsibility 8: signalAvailability validation", () => {
 	test("rejects a non-boolean queried value fail-closed", () => {
 		const doc = batch([signal()], {
 			signalAvailability: [
-				{ signalId: "RT0005", queried: "yes", rows: 0 } as unknown as NonNullable<
+				{
+					signalId: "RT0005",
+					queried: "yes",
+					rows: 0,
+				} as unknown as NonNullable<
 					TelemetryBatchDocument["signalAvailability"]
 				>[number],
 			],
@@ -803,7 +819,10 @@ describe("responsibility 8: signalAvailability validation", () => {
 
 	test("does not accidentally alter impact/severity/fingerprint on the associated signal's pattern", () => {
 		const s = signal();
-		const withoutAvail = parseTelemetryBatch(batch([s]), DEFAULT_LIFECYCLE_CONFIG);
+		const withoutAvail = parseTelemetryBatch(
+			batch([s]),
+			DEFAULT_LIFECYCLE_CONFIG,
+		);
 		const withAvail = parseTelemetryBatch(
 			batch([s], {
 				signalAvailability: [{ signalId: s.signalId, queried: true, rows: 1 }],
