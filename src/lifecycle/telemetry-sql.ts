@@ -6,6 +6,12 @@
  * without a fetch mock.
  */
 
+import {
+	canonicalObjectType,
+	normalizeAppGuid,
+	normalizeTriggerName,
+} from "../semantic/identity.js";
+
 /**
  * The AL frame grammar, verified against real RT0005 rows in Gate 0:
  *   "<Object Name>"(<ObjectType> <ObjectId>).<Method> line <N> - <app info>
@@ -33,12 +39,6 @@ export function parseAlStackFrame(stack: string): string | null {
 // telemetryRoutineKey
 // ---------------------------------------------------------------------------
 
-import {
-	canonicalObjectType,
-	normalizeAppGuid,
-	normalizeTriggerName,
-} from "../semantic/identity.js";
-
 /**
  * The join key evidence attaches on. Uses the SAME normalizers as
  * `computeTelemetryFingerprint` (fingerprint.ts) so the key and the identity
@@ -48,6 +48,9 @@ import {
  * that carried it could only ever reach RT0005 findings — and the whole point
  * is that RT0005 statements must also annotate the RT0018 finding for the same
  * routine.
+ *
+ * The separator is the ASCII unit separator (U+001F), the same as fingerprint.ts:237,
+ * to prevent field-boundary collisions (see test regression for pipe-collision).
  */
 export function telemetryRoutineKey(
 	appId: string,
@@ -60,5 +63,5 @@ export function telemetryRoutineKey(
 		canonicalObjectType(objectType),
 		String(objectId),
 		normalizeTriggerName(methodName).toLowerCase(),
-	].join("|");
+	].join("");
 }
