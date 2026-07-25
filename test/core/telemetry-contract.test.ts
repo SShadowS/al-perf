@@ -506,10 +506,13 @@ describe("SQL evidence wire contract (Task 7)", () => {
 		);
 	});
 
-	// F7 fix (final review): columnCount is now a required (but nullable)
-	// field on the wire, matching the module's fail-closed discipline for
-	// every other statement field.
-	test("rejects a statement missing columnCount", () => {
+	// F7 follow-up (final review, second pass): columnCount must be OPTIONAL
+	// on the wire, not required — it isn't in spec §5's per-statement field
+	// list (unlike table/extensionAppId), and v1 keeps
+	// TELEMETRY_BATCH_SCHEMA_VERSION at 1 precisely because every addition is
+	// optional. A third-party producer that never populates columnCount must
+	// still get a valid batch, not a rejected one.
+	test("a statement omitting columnCount parses successfully, defaulting to null", () => {
 		const batch = makeBatch([
 			{
 				...baseSignal,
@@ -533,9 +536,51 @@ describe("SQL evidence wire contract (Task 7)", () => {
 				},
 			},
 		]);
-		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
-			/statements\[0\].*columnCount/,
-		);
+		expect(() =>
+			parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG),
+		).not.toThrow();
+		const parsed = parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG);
+		expect(
+			parsed.result.patterns[0]?.sqlEvidence?.statements[0]?.columnCount,
+		).toBeNull();
+	});
+
+	// A malformed columnCount, when the field IS present, is still rejected —
+	// "optional" means absence is fine, not that any value goes.
+	test("rejects a statement with a negative or non-integer columnCount", () => {
+		const statementWith = (columnCount: unknown) =>
+			makeBatch([
+				{
+					...baseSignal,
+					sqlEvidence: {
+						provenance: "measured-threshold-gated",
+						attribution: "telemetry-stack",
+						totalMeasuredMs: 100,
+						totalOccurrences: 1,
+						statements: [
+							{
+								text: "SELECT * FROM [Sales Line]",
+								operation: "SELECT",
+								table: "Sales Line",
+								extensionAppId: null,
+								occurrences: 1,
+								measuredTotalMs: 100,
+								truncated: false,
+								columnCount,
+							},
+						],
+					},
+				},
+			]);
+		expect(() =>
+			parseTelemetryBatch(statementWith(-1), DEFAULT_LIFECYCLE_CONFIG),
+		).toThrow(/statements\[0\].*columnCount/);
+		expect(() =>
+			parseTelemetryBatch(statementWith(3.5), DEFAULT_LIFECYCLE_CONFIG),
+		).toThrow(/statements\[0\].*columnCount/);
+		expect(() =>
+			parseTelemetryBatch(statementWith("12"), DEFAULT_LIFECYCLE_CONFIG),
+		).toThrow(/statements\[0\].*columnCount/);
 	});
 
 	test("carries a null and a numeric columnCount through validation", () => {

@@ -279,17 +279,29 @@ function requireStringOrNull(
 	return v;
 }
 
-/** `columnCount` is required but nullable — null when the redactor's column list wasn't collapsed (F7 fix, final review). */
-function requireNonNegativeIntegerOrNull(
+/**
+ * `columnCount` is OPTIONAL on the wire (F7 follow-up, final review) — unlike
+ * `table`/`extensionAppId` (spec §5's per-statement field list), it isn't
+ * part of the field set a producer is required to supply, and v1 keeps
+ * `TELEMETRY_BATCH_SCHEMA_VERSION` at 1 precisely because every addition
+ * must be optional: a third-party producer that omits it must still emit a
+ * valid v1 batch, not get its whole batch rejected. Absent -> `null`, the
+ * same value `columnCount` already carries when the redactor's column list
+ * wasn't collapsed — there's no separate "unknown" state to distinguish.
+ * When PRESENT, it's still validated fail-closed: a malformed value
+ * (negative, non-integer, wrong type) is rejected, same as every other
+ * field.
+ */
+function optionalNonNegativeIntegerOrNull(
 	obj: Record<string, unknown>,
 	field: string,
 	context: string,
 ): number | null {
 	const v = obj[field];
-	if (v === null) return null;
+	if (v === undefined || v === null) return null;
 	if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
 		throw new Error(
-			`telemetry-batch ${context}: missing/invalid field '${field}' (expected a non-negative integer or null)`,
+			`telemetry-batch ${context}: invalid field '${field}' (expected a non-negative integer or null)`,
 		);
 	}
 	return v;
@@ -329,7 +341,7 @@ function validateTelemetrySqlStatementEvidence(
 			stmtContext,
 		),
 		truncated: requireBoolean(obj, "truncated", stmtContext),
-		columnCount: requireNonNegativeIntegerOrNull(
+		columnCount: optionalNonNegativeIntegerOrNull(
 			obj,
 			"columnCount",
 			stmtContext,
