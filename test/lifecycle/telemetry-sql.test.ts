@@ -376,7 +376,7 @@ describe("redactSqlForSink", () => {
 			expect(out?.table).toBe("Sales Header");
 			expect(out?.columnCount).toBe(8); // C1-C8, NOT the target table
 			expect(out?.text).toContain("…+3 more");
-			expect(out?.text).toContain('WHERE "No_"=\'?\'');
+			expect(out?.text).toContain("WHERE \"No_\"='?'");
 			expect(out?.text).not.toContain("SECRET");
 			expect(out?.text).not.toContain("CRONUS");
 		});
@@ -396,14 +396,27 @@ describe("redactSqlForSink", () => {
 			expect(out?.text).not.toContain("CRONUS");
 		});
 
-		test("I1: does not splice the marker inside a redacted identifier's own text", () => {
-			// The pre-fix marker was `out.replace(/\bFROM\b/i, ...)` run over
-			// the FINISHED string — matching the first "FROM" anywhere,
-			// including one that landed inside an already-emitted identifier
-			// (e.g. a column literally containing the word "from"). The fix
-			// splices a sentinel live, during the tokenizer loop, at the
-			// point the real FROM keyword is scanned — so it can only ever
-			// land at the real clause boundary.
+		test("I1: a digit-bearing column survives the collapse, and the marker lands at the real clause boundary", () => {
+			// Originally written to pin a hazard the pre-fix marker had: a
+			// post-hoc `out.replace(/\bFROM\b/i, ...)` over the FINISHED
+			// string could match "FROM" text sitting inside an already
+			// company-stripped identifier's value (e.g. a column literally
+			// named "Copied From"). Corrected per Fix Round 2 review: that
+			// EXACT hazard is now unreachable through this input shape
+			// regardless of the marker fix, because C6's
+			// sawSwallowedClauseText (see its own doc comment above) already
+			// rejects any double-quoted identifier containing a bounded
+			// FROM/WHERE/SELECT keyword — same regex family, so any
+			// identifier that could fool the old post-hoc regex necessarily
+			// trips C6 first and fails tokenize() closed before the marker
+			// code is ever reached (`"NumFrom1"` here has no WORD-bounded
+			// "From" in it, so it evades C6 and survives to prove the
+			// column-collapse machinery itself still works correctly for a
+			// digit-bearing name — it does NOT exercise the mid-identifier
+			// splice hazard the original comment claimed). The
+			// operation-shaped counting window itself (SELECT→FROM,
+			// UPDATE→SET/WHERE, INSERT→target-table/")") is what the UPDATE
+			// and INSERT tests below actually pin.
 			const cols = ["NumFrom1", "F1", "F2", "F3", "F4", "F5"]
 				.map((c) => `"${c}"`)
 				.join(",");
@@ -447,7 +460,15 @@ describe("redactSqlForSink", () => {
 			const out = redactSqlForSink(
 				'SELECT TOP (1) "50102"."timestamp","50102"."Store No_" FROM dbo."CRONUS$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED)',
 			);
-			expect(out?.text).toContain('"50102"');
+			// NOT just `.toContain('"50102"')` -- that also matches the
+			// trailing STANDALONE alias after the table name, so it would
+			// still pass even if the qualifier form `"50102"."Store No_"`
+			// (what this test actually means to protect) got corrupted, as
+			// it briefly did between Fix Rounds 1b and 2 (NB1: the broadened
+			// isDatabaseQualifier ate quoted column qualifiers too). Assert
+			// the qualified form explicitly.
+			expect(out?.text).toContain('"50102"."timestamp"');
+			expect(out?.text).toContain('"50102"."Store No_"');
 			expect(out?.text).toContain("TOP (?)"); // the LITERAL "1" is still blanked
 		});
 
@@ -496,7 +517,7 @@ describe("redactSqlForSink", () => {
 			expect(out?.text).toBe('SELECT "Foo""Bar" FROM dbo."Cust"');
 		});
 
-		test('symmetric quote escape: the TABLE reference case fails closed instead (pre-existing C5 cross-check)', () => {
+		test("symmetric quote escape: the TABLE reference case fails closed instead (pre-existing C5 cross-check)", () => {
 			// Unlike the column case above, an embedded "" in the TABLE
 			// reference's segment is already caught: parseSqlTable's own
 			// (escape-unaware) capture of the same reference stops at the
@@ -505,7 +526,9 @@ describe("redactSqlForSink", () => {
 			// fails the whole statement closed on that disagreement -- so
 			// this shape was never reachable via the table-ref position, only
 			// via an ordinary column identifier (covered above).
-			const out = redactSqlForSink('SELECT "a" FROM dbo."CRONUS$Sales""Header"');
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$Sales""Header"',
+			);
 			expect(out).toBeNull();
 		});
 
@@ -516,7 +539,9 @@ describe("redactSqlForSink", () => {
 			expect(out?.operation).toBe("UPDATE");
 			expect(out?.table).toBe("Cust");
 			expect(out?.columnCount).toBeNull();
-			expect(out?.text).toBe('UPDATE dbo."Cust" SET "Name"=\'?\' WHERE "No_"=\'?\'');
+			expect(out?.text).toBe(
+				'UPDATE dbo."Cust" SET "Name"=\'?\' WHERE "No_"=\'?\'',
+			);
 		});
 
 		test("corpus gap: INSERT without a collapsed column list", () => {
@@ -541,17 +566,26 @@ describe("redactSqlForSink", () => {
 			expect(out?.text).toBe('DELETE FROM dbo."Cust" WHERE "Name"=\'?\'');
 		});
 
-		test("corpus gap: MERGE is not a classified operation — fails closed", () => {
-			// classifySqlOperation (src/core/sql-node.ts) has no MERGE case in
-			// its switch; SQL_PREFIX_RE matches the keyword but the switch's
-			// default bucket is "OTHER", which redactSqlForSink already
-			// treats as unclassifiable. Pinning this so a future widening of
-			// classifySqlOperation doesn't silently start emitting redacted
-			// MERGE text without a corresponding test here.
+		test("corpus gap: MERGE redacts (classifySqlOperation has no MERGE case, but it still isn't dropped)", () => {
+			// NB2 (Fix Round 2): classifySqlOperation (src/core/sql-node.ts)
+			// has no dedicated MERGE case in its switch, so a MERGE statement
+			// classifies as "OTHER" -- but redactSqlForSink's fail-closed
+			// gate is keyed on SQL_PREFIX_RE (which DOES recognize MERGE, and
+			// sql-node.ts has a dedicated MERGE_MATCHER for its table), not
+			// on classifySqlOperation's result, so MERGE is still redacted.
+			// Gating on `operation === "OTHER"` here (Round 1b's original
+			// take on this test) silently dropped a working statement class
+			// with real evidence to redact -- fixed by the team lead's
+			// review, not by this task's own author.
 			const out = redactSqlForSink(
 				'MERGE INTO dbo."CRONUS$Cust" AS t USING dbo."CRONUS$Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
 			);
-			expect(out).toBeNull();
+			expect(out?.operation).toBe("OTHER"); // real, reachable value -- no MERGE case exists in SqlOperation
+			expect(out?.table).toBe("Cust");
+			expect(out?.text).not.toContain("CRONUS");
+			expect(out?.text).toBe(
+				'MERGE INTO dbo."Cust" AS t USING dbo."Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
+			);
 		});
 
 		test("corpus gap: fails CLOSED on a 4-segment $ identifier (untested since Round 1)", () => {
@@ -582,8 +616,7 @@ describe("redactSqlForSink", () => {
 			];
 			for (const candidate of candidates) {
 				const sql = `SELECT "a" FROM dbo."CRONUS$Table$${candidate}"`;
-				const telemetryTreatsAsGuid =
-					redactSqlForSink(sql)?.table === "Table";
+				const telemetryTreatsAsGuid = redactSqlForSink(sql)?.table === "Table";
 				const sqlNodeTreatsAsGuid = parseSqlTable(sql).table === "Table";
 				expect(telemetryTreatsAsGuid).toBe(sqlNodeTreatsAsGuid);
 			}
@@ -693,15 +726,112 @@ describe("redactSqlForSink", () => {
 			expect(out).toBeNull();
 		});
 
-		test("probe: a CTE (WITH ...) is not a classified operation — fails closed", () => {
+		test("probe: a CTE (WITH ...) fails the SQL_PREFIX_RE gate — fails closed", () => {
 			// SQL_PREFIX_RE (src/core/sql-node.ts) only recognizes a
 			// statement starting with SELECT/INSERT/UPDATE/DELETE/MERGE; a
-			// CTE's leading "WITH" doesn't match, so classifySqlOperation
-			// buckets it as "OTHER" before any tokenizing/redaction happens.
+			// CTE's leading "WITH" doesn't match. redactSqlForSink's own
+			// fail-closed gate is keyed directly on that same regex as of
+			// Fix Round 2 (NB2) -- not on classifySqlOperation's result,
+			// which would ALSO bucket this as "OTHER" but for the wrong
+			// reason (no dedicated WITH/CTE case, same as its missing MERGE
+			// case) -- gating on that alone would be right here by accident,
+			// the same "false confidence" pattern flagged elsewhere in this
+			// file for other checks.
 			const out = redactSqlForSink(
 				'WITH cte AS (SELECT "a" FROM dbo."CRONUS$T") SELECT "a" FROM cte',
 			);
 			expect(out).toBeNull();
+		});
+	});
+
+	describe("Fix Round 2", () => {
+		test("NB1: the real RT0005 canonical shape redacts cleanly — quoted alias qualifiers survive intact", () => {
+			// Exact string from test/fixtures/telemetry/rt0005-probe.json:36
+			// (the live shape Gate 0 found). Before NB1, the broadened
+			// isDatabaseQualifier (Fix Round 1b, C1) treated ANY ident
+			// immediately followed by ".ident" as a database/server
+			// qualifier to drop -- indistinguishable, by shape alone, from a
+			// table ALIAS qualifying a column. Every "50102" alias
+			// qualifier here was dropped, leaving stray dots
+			// (`,."Store No_"`, `(."Store No_"`) that the OLD whitespace-only
+			// cleanup regex couldn't clean up either, since a comma or open
+			// paren -- not whitespace -- preceded them.
+			const canonical =
+				'SELECT  TOP (1) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."COMPANY$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)';
+			const out = redactSqlForSink(canonical);
+			expect(out?.table).toBe("Sample Table");
+			expect(out?.extensionAppId).toBe("aa11bb22-cc33-dd44-ee55-ff6677889900");
+			expect(out?.text).not.toContain("COMPANY");
+			expect(out?.text).not.toContain(",.");
+			expect(out?.text).not.toContain("(.");
+			expect(out?.text).toBe(
+				'SELECT TOP (?) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."Sample Table" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)',
+			);
+			// The 3 projected columns are alias.column PAIRS, not 6 separate
+			// idents -- an alias prefix and the column it qualifies are ONE
+			// logical named column (see the pair-counting test below), so
+			// this well-under-MAX_NAMED_COLUMNS statement never collapses.
+			expect(out?.columnCount).toBeNull();
+		});
+
+		test("NB1: a JOIN with QUOTED aliases on both sides of the ON clause keeps both qualifiers", () => {
+			// The bare-alias JOIN test earlier in this file ("strips the
+			// company from EVERY reference...") never exercised NB1's bug,
+			// because unquoted aliases aren't ident tokens at all --
+			// isDatabaseQualifier never even runs on them. Quoting the alias
+			// (a real, if less common, RT0005 shape) is what triggers it.
+			const out = redactSqlForSink(
+				'SELECT "a"."No_" FROM dbo."CRONUS$Sales Header" "a" JOIN dbo."CRONUS$Sales Line" "b" ON "a"."No_"="b"."Document No_"',
+			);
+			expect(out?.text).toBe(
+				'SELECT "a"."No_" FROM dbo."Sales Header" "a" JOIN dbo."Sales Line" "b" ON "a"."No_"="b"."Document No_"',
+			);
+		});
+
+		test("NB1: an alias.column pair that overflows MAX_NAMED_COLUMNS drops BOTH halves together, cleanly", () => {
+			// Regression on the fix itself: counting each alias-qualified
+			// column as ONE (not two) still has to decide, per PAIR, whether
+			// it survives the column-collapse threshold -- and if not, drop
+			// the alias prefix, its joiner "." AND its column together, or a
+			// dangling "50102"., or a lone "." with nothing on either side,
+			// leaks through as a formatting artifact (a weaker version of
+			// the exact bug NB1 fixes).
+			const cols = ["c1", "c2", "c3", "c4", "c5", "c6", "c7"]
+				.map((c) => `"50102"."${c}"`)
+				.join(",");
+			const out = redactSqlForSink(
+				`SELECT ${cols} FROM dbo."CRONUS$Cust" "50102"`,
+			);
+			expect(out?.columnCount).toBe(7); // 7 pairs = 7 named columns, not 14
+			expect(out?.text).toContain('"50102"."c5"'); // last kept pair, intact
+			expect(out?.text).toContain("…+2 more");
+			expect(out?.text).not.toContain("c6");
+			expect(out?.text).not.toContain("c7");
+			expect(out?.text).not.toContain(",.");
+			expect(out?.text).not.toContain(". ");
+			expect(out?.text).not.toMatch(/"\s*,\s*,|,\s*\.\s*,/); // no dangling separators either
+		});
+
+		test("NB2: MERGE redacts instead of being dropped (regression on Fix Round 1b's own MERGE test)", () => {
+			const out = redactSqlForSink(
+				'MERGE INTO dbo."CRONUS$Sales Line" AS t USING dbo."CRONUS$Sales Header" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Qty"=s."Qty";',
+			);
+			expect(out).not.toBeNull();
+			expect(out?.table).toBe("Sales Line");
+			expect(out?.text).not.toContain("CRONUS");
+			expect(out?.text).toBe(
+				'MERGE INTO dbo."Sales Line" AS t USING dbo."Sales Header" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Qty"=s."Qty";',
+			);
+		});
+
+		test("NB2: an unclassifiable statement (incl. empty input) still fails closed", () => {
+			// The gate moved from `operation === "OTHER"` to
+			// `!SQL_PREFIX_RE.test(body)` -- confirm the ORIGINAL minor fix
+			// this rode in on (empty input -> null, not an all-null
+			// RedactedStatement) still holds, plus a garbage verb that
+			// matches neither SQL_PREFIX_RE nor any real SQL statement.
+			expect(redactSqlForSink("")).toBeNull();
+			expect(redactSqlForSink("EXEC sp_who")).toBeNull();
 		});
 	});
 });

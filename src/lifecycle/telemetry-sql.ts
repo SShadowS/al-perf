@@ -9,6 +9,7 @@
 import {
 	classifySqlOperation,
 	parseSqlTable,
+	SQL_PREFIX_RE,
 	type SqlOperation,
 } from "../core/sql-node.js";
 import {
@@ -249,11 +250,12 @@ function tokenize(sql: string): TokenizeResult | null {
 }
 
 /**
- * True when the ident at `tokens[i]` is a leading qualifier segment in a
- * multi-part `"DB"."dbo"."Table"` / `"DB".dbo."Table"` reference — recognized
- * by peeking past the joiner for a following identifier. Database/server
- * names carry no `$`, so `logicalIdentifier` alone would pass one through
- * unredacted (it has nothing to split on); this closes that gap.
+ * True when the ident at `tokens[i]` LOOKS like a leading qualifier segment
+ * in a multi-part `"DB"."dbo"."Table"` / `"DB".dbo."Table"` reference —
+ * recognized by peeking past the joiner for a following identifier.
+ * Database/server names carry no `$`, so `logicalIdentifier` alone would
+ * pass one through unredacted (it has nothing to split on); this closes
+ * that gap.
  *
  * The joiner between two idents can be a bare dot (when the next segment —
  * e.g. `dbo` — is ITSELF quoted/bracketed and so arrives as its own `ident`
@@ -263,6 +265,13 @@ function tokenize(sql: string): TokenizeResult | null {
  * the final table name — not just the literal `dbo` spelling — so a
  * server/database ident is dropped regardless of how the segment after it is
  * quoted or spelled.
+ *
+ * The joiner shape alone is NOT enough to call: `"50102"."Store No_"` (a
+ * table alias qualifying a column) has the exact same ident-dot-ident shape
+ * as a real qualifier chain (NB1). The caller MUST additionally restrict
+ * calls to this function to the table-reference-parsing window
+ * (`expectTableRef && tableRefLogical === null`) — position, not shape, is
+ * what disambiguates a qualifier from an alias.
  */
 function isDatabaseQualifier(tokens: Token[], i: number): boolean {
 	let j = i + 1;
@@ -325,7 +334,15 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		tokenizeTruncated || sql.length >= PLATFORM_TRUNCATION_LENGTH;
 
 	const operation = classifySqlOperation(body);
-	if (operation === "OTHER") return null; // no operation classifies (incl. "") -> fail closed rather than emit a meaningless result
+	// NOT `operation === "OTHER"` (NB2): classifySqlOperation's switch has no
+	// dedicated MERGE case, so a MERGE statement classifies as "OTHER" too —
+	// gating on that would drop a working, SQL_PREFIX_RE-recognized statement
+	// class entirely (sql-node.ts has a dedicated MERGE_MATCHER for its table
+	// too). Gate on the SAME prefix check classifySqlOperation itself uses to
+	// recognize a statement AT ALL, so only a genuinely unclassifiable input
+	// (including empty) fails closed here — a MERGE statement still redacts,
+	// just reported as SqlOperation "OTHER" (a real, reachable value again).
+	if (!SQL_PREFIX_RE.test(body)) return null;
 	const { table: rawTable, extensionAppId } = parseSqlTable(body);
 	// parseSqlTable deliberately never $-splits a BRACKET-quoted name (brackets
 	// mark system-table syntax, which is never company-prefixed there) — but
@@ -354,6 +371,19 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	let columnsBoundaryClosed = false;
 	let expectTableRef = false;
 	let tableRefLogical: string | null = null;
+	// True right after a qualifier-prefix ident (e.g. the alias "50102" in
+	// "50102"."Store No_") is processed, until its paired column is
+	// consumed — an alias.column pair is ONE logical named column, not two,
+	// and MUST survive or drop TOGETHER: if only the alias were kept while
+	// its column dropped past MAX_NAMED_COLUMNS (or vice versa), the output
+	// would carry a dangling "50102." with nothing meaningful after it.
+	// `pairedColumnDropped` (valid only while this is true) carries that
+	// joint verdict from the prefix to the ident right after it; the "other"
+	// token branch below ALSO suppresses the joiner "." between them when a
+	// pair is being dropped, or that lone dot survives as its own stray
+	// artifact even though both idents either side of it are gone.
+	let expectingPairedColumn = false;
+	let pairedColumnDropped = false;
 	// [start, end) spans of `out` occupied by a KEPT identifier's own emitted
 	// text (quotes/brackets included) — the numeric-blanking pass below must
 	// never touch a digit inside one of these, or an ordinary retained column
@@ -367,7 +397,35 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			continue;
 		}
 		if (t.kind === "ident") {
-			if (isDatabaseQualifier(tokens, idx)) continue; // drop the bare database name
+			// Resolve any pending pair verdict from the PREVIOUS ident first,
+			// unconditionally — structurally, the ident right after a
+			// qualifier-prefix's joiner IS its paired column
+			// (isDatabaseQualifier's own lookahead guarantees this), so this
+			// can never collide with the table-ref-qualifier-drop path below
+			// (that path never sets expectingPairedColumn in the first
+			// place). `isPairedColumnHalf` marks this ident as already
+			// accounted for by its prefix, so the counting block further
+			// down must skip it — otherwise a KEPT pair's second half would
+			// increment namedColumns all over again.
+			let isPairedColumnHalf = false;
+			if (expectingPairedColumn) {
+				expectingPairedColumn = false;
+				isPairedColumnHalf = true;
+				if (pairedColumnDropped) continue; // drop the column half of a pair whose alias prefix didn't survive MAX_NAMED_COLUMNS
+			}
+			// Ident-dot-ident: either a database/server qualifier ahead of
+			// the statement's own table reference ("DB"."dbo"."Table") or a
+			// table ALIAS qualifying a column elsewhere ("50102"."Store
+			// No_") — the joiner shape alone can't tell them apart, only
+			// POSITION can (NB1). Compute the shape once; the two uses below
+			// (drop vs. don't-double-count) apply it differently.
+			const isQualifierPrefix = isDatabaseQualifier(tokens, idx);
+			// Only a LEADING segment of the table reference itself (right
+			// after FROM/INTO/UPDATE/MERGE, before the real table name is
+			// captured) gets DROPPED as a database/server qualifier.
+			if (expectTableRef && tableRefLogical === null && isQualifierPrefix) {
+				continue; // drop the bare database name
+			}
 			const logical = logicalIdentifier(t.value);
 			if (logical === null) return null; // unrecognized shape -> fail closed
 			const isTableRefIdent = expectTableRef && tableRefLogical === null;
@@ -381,9 +439,21 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			// The target table itself is never a "named column", regardless
 			// of the window above — for INSERT it would otherwise be counted
 			// as column #1 by the line above having just opened the window.
-			if (countingColumns && !isTableRefIdent) {
+			// A paired column's SECOND half is skipped too — it was already
+			// counted (once) via its prefix, right above.
+			if (countingColumns && !isTableRefIdent && !isPairedColumnHalf) {
 				namedColumns++;
-				if (namedColumns > MAX_NAMED_COLUMNS) continue;
+				const overLimit = namedColumns > MAX_NAMED_COLUMNS;
+				if (isQualifierPrefix) {
+					// This ident is only a PREFIX (its paired column, right
+					// after the joiner, is what the count is really about) —
+					// carry the same verdict forward so both halves survive
+					// or drop together (handled at the top of this block on
+					// the next ident).
+					expectingPairedColumn = true;
+					pairedColumnDropped = overLimit;
+				}
+				if (overLimit) continue;
 			}
 			// A kept identifier can still carry a literal delimiter char (from
 			// a "]]"/`""`-escaped physical name whose logical segment wasn't
@@ -401,6 +471,11 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			identRanges.push([identStart, out.length]);
 			continue;
 		}
+		// The joiner between a dropped alias prefix and its (about-to-be-
+		// dropped) paired column is its OWN "other" token (typically a bare
+		// "."), never part of either ident's value — suppress it too, or a
+		// lone "." survives with nothing meaningful on either side of it.
+		if (expectingPairedColumn && pairedColumnDropped) continue;
 		out += t.value;
 		if (
 			operation === "UPDATE" &&
@@ -482,10 +557,15 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	// chain of several dropped idents) before whatever follows it — a bare
 	// schema word like "dbo", or directly the final quoted/bracketed table
 	// name. Collapse the run to one dot, then drop that one dot too unless a
-	// bare word needs it as a separator before the table name.
+	// bare word needs it as a separator before the table name. The qualifier
+	// chain always sits right after FROM/INTO/UPDATE/MERGE now that
+	// isDatabaseQualifier is context-gated (NB1), so in practice the dot is
+	// always preceded by that keyword's trailing space — but "," and "("
+	// are kept here too as defense in depth, since a caller-side regression
+	// widening the gate again shouldn't ALSO reopen this as a second bug.
 	out = out.replace(/\.{2,}/g, ".");
 	out = out.replace(
-		/(^|\s)\.(?:([A-Za-z_]\w*)\.)?(?=["[])/gi,
+		/(^|[\s,(])\.(?:([A-Za-z_]\w*)\.)?(?=["[])/gi,
 		(_m, pre: string, word: string | undefined) =>
 			pre + (word ? `${word}.` : ""),
 	);
