@@ -902,6 +902,10 @@ export function attachEvidenceToSignals(
 			occurrences: row.occurrences,
 			measuredTotalMs: row.measuredTotalMs,
 			truncated: redacted.truncated,
+			// F7 fix (final review): previously discarded here — computed by
+			// redactSqlForSink, then dropped on the floor instead of reaching
+			// the finding's structured sqlEvidence.
+			columnCount: redacted.columnCount,
 		});
 		byKey.set(key, list);
 

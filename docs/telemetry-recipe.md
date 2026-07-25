@@ -651,17 +651,24 @@ shaped like:
 	"threshold": { "minMs": 750, "maxMs": 750 },
 	"statements": [
 		{
-			"text": "SELECT \"No_\" FROM \"Sales Header\" WHERE ... (+2 more)",
+			"text": "SELECT \"No_\",\"Amount\",\"Quantity\",\"Description\",\"Type\"…+2 more  FROM \"Sales Header\" WHERE ...",
 			"operation": "SELECT",
 			"table": "Sales Header",
 			"extensionAppId": null,
 			"occurrences": 12,
 			"measuredTotalMs": 4200,
-			"truncated": false
+			"truncated": false,
+			"columnCount": 7
 		}
 	]
 }
 ```
+
+`columnCount` is the FULL named-column count (7 above), kept as its own field
+whenever the redactor collapsed the column list past its 5-column display
+cap — `null` when it wasn't collapsed. `text`'s embedded `…+N more` marker
+only shows the overflow (2 above); `columnCount` is what makes the full
+count available without hardcoding the cap.
 
 `totalMeasuredMs`/`totalOccurrences` are full-set totals; `statements` is
 capped to the top 5 by `measuredTotalMs` for display, same cap as the
@@ -703,9 +710,10 @@ non-match, not a coverage gap.
 Every statement is redacted before it's ever persisted
 (`redactSqlForSink`, `src/lifecycle/telemetry-sql.ts`): the company/database
 prefix is stripped from every table reference, literal values are dropped
-entirely, and named columns collapse to a count (`(+N more)`). What
-survives — operation, **logical table name**, column count, extension app
-id — is retained **deliberately**: it's schema shape, not customer data, and
+entirely, and named columns past the fifth collapse into an inline `…+N more`
+marker (the overflow only — see `columnCount` above for the full count).
+What survives — operation, **logical table name**, column count, extension
+app id — is retained **deliberately**: it's schema shape, not customer data, and
 it's exactly what makes a `record-op-in-loop`-style finding actionable
 ("`SELECT` against `Sales Header`", not "`SELECT` against
 `CRONUS$Sales Header$a1b2c3d4`"). A statement the tokenizer can't safely

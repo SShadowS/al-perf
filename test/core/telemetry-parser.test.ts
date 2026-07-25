@@ -895,6 +895,7 @@ function sqlStatement(
 		occurrences: 1,
 		measuredTotalMs: 100,
 		truncated: false,
+		columnCount: null,
 		...overrides,
 	};
 }

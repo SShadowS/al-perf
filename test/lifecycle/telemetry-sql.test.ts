@@ -1215,6 +1215,24 @@ describe("attachEvidenceToSignals", () => {
 		expect(s?.occurrences).toBe(3);
 		expect(s?.measuredTotalMs).toBe(2400);
 		expect(s?.truncated).toBe(false);
+		expect(s?.columnCount).toBeNull(); // 3 named columns — well under the cap
+	});
+
+	// F7 fix (final review): redactSqlForSink computes columnCount but it used
+	// to be dropped here instead of reaching the finding's structured
+	// sqlEvidence — spec §6 rule 5 ("keep the full column count") was
+	// unimplemented. Pin that it survives redact -> attach end-to-end.
+	test("carries the full column count through when the redactor collapsed the column list", () => {
+		const signals = [signal()];
+		const cols = Array.from({ length: 8 }, (_, i) => `"F${i}"`).join(",");
+		attachEvidenceToSignals(signals, [
+			statementRow({
+				sqlStatement: `SELECT ${cols} FROM dbo."CRONUS$Sales Line"`,
+			}),
+		]);
+		const s = signals[0].sqlEvidence?.statements[0];
+		expect(s?.columnCount).toBe(8); // full count, not the "+3 more" delta
+		expect(s?.text).toContain("+3 more");
 	});
 
 	test("threshold min/max is computed across the routine's rows", () => {
@@ -1409,7 +1427,10 @@ describe("attachEvidenceToSignals", () => {
 	});
 
 	test("returns 0 when every statement row attaches to some signal", () => {
-		const signals = [signal({ signalId: "RT0018" }), signal({ signalId: "RT0005" })];
+		const signals = [
+			signal({ signalId: "RT0018" }),
+			signal({ signalId: "RT0005" }),
+		];
 		const unmatched = attachEvidenceToSignals(signals, [statementRow()]);
 		expect(unmatched).toBe(0);
 	});
@@ -1417,7 +1438,9 @@ describe("attachEvidenceToSignals", () => {
 	test("a row dropped for fail-closed reasons (no AL frame / redaction failure) is NOT counted as unmatched", () => {
 		const signals = [signal()];
 		const unmatched = attachEvidenceToSignals(signals, [
-			statementRow({ stackTrace: "AppObjectType: CodeUnit\r\nAppObjectId: 80" }),
+			statementRow({
+				stackTrace: "AppObjectType: CodeUnit\r\nAppObjectId: 80",
+			}),
 		]);
 		expect(unmatched).toBe(0);
 	});

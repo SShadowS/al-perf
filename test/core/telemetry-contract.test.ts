@@ -505,4 +505,59 @@ describe("SQL evidence wire contract (Task 7)", () => {
 			/statements\[0\].*operation/,
 		);
 	});
+
+	// F7 fix (final review): columnCount is now a required (but nullable)
+	// field on the wire, matching the module's fail-closed discipline for
+	// every other statement field.
+	test("rejects a statement missing columnCount", () => {
+		const batch = makeBatch([
+			{
+				...baseSignal,
+				sqlEvidence: {
+					provenance: "measured-threshold-gated",
+					attribution: "telemetry-stack",
+					totalMeasuredMs: 100,
+					totalOccurrences: 1,
+					statements: [
+						{
+							text: "SELECT * FROM [Sales Line]",
+							operation: "SELECT",
+							table: "Sales Line",
+							extensionAppId: null,
+							occurrences: 1,
+							measuredTotalMs: 100,
+							truncated: false,
+							// columnCount deliberately omitted
+						},
+					],
+				},
+			},
+		]);
+		expect(() => parseTelemetryBatch(batch, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/statements\[0\].*columnCount/,
+		);
+	});
+
+	test("carries a null and a numeric columnCount through validation", () => {
+		const statement = (columnCount: number | null) => ({
+			text: "SELECT * FROM [Sales Line]",
+			operation: "SELECT" as const,
+			table: "Sales Line",
+			extensionAppId: null,
+			occurrences: 1,
+			measuredTotalMs: 100,
+			truncated: false,
+			columnCount,
+		});
+		const evidence = {
+			provenance: "measured-threshold-gated" as const,
+			attribution: "telemetry-stack" as const,
+			totalMeasuredMs: 100,
+			totalOccurrences: 1,
+			statements: [statement(null), statement(12)],
+		};
+		const parsed = validateSignal({ ...baseSignal, sqlEvidence: evidence }, 0);
+		expect(parsed.sqlEvidence?.statements[0]?.columnCount).toBeNull();
+		expect(parsed.sqlEvidence?.statements[1]?.columnCount).toBe(12);
+	});
 });

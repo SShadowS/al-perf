@@ -45,6 +45,17 @@ export interface TelemetrySqlStatementEvidence {
 	occurrences: number;
 	measuredTotalMs: number;
 	truncated: boolean;
+	/**
+	 * The full named-column count when it exceeded `redactSqlForSink`'s
+	 * five-column display cap (`RedactedStatement.columnCount`,
+	 * `src/lifecycle/telemetry-sql.ts`) — null when the column list wasn't
+	 * collapsed. `text`'s embedded `…+N more` marker only shows the OVERFLOW
+	 * (columns past the cap); this is the total, kept as its own field so a
+	 * consumer doesn't need to hardcode the cap to recover it — spec §6 rule 5:
+	 * the full count is what makes a `missing-setloadfields`-style finding
+	 * legible.
+	 */
+	columnCount: number | null;
 }
 
 /**

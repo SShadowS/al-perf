@@ -279,6 +279,22 @@ function requireStringOrNull(
 	return v;
 }
 
+/** `columnCount` is required but nullable — null when the redactor's column list wasn't collapsed (F7 fix, final review). */
+function requireNonNegativeIntegerOrNull(
+	obj: Record<string, unknown>,
+	field: string,
+	context: string,
+): number | null {
+	const v = obj[field];
+	if (v === null) return null;
+	if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+		throw new Error(
+			`telemetry-batch ${context}: missing/invalid field '${field}' (expected a non-negative integer or null)`,
+		);
+	}
+	return v;
+}
+
 /**
  * Fail-closed shape check for ONE statement (F4 fix, final review). Before
  * this, only `provenance` and `Array.isArray(statements)` were checked and
@@ -313,6 +329,11 @@ function validateTelemetrySqlStatementEvidence(
 			stmtContext,
 		),
 		truncated: requireBoolean(obj, "truncated", stmtContext),
+		columnCount: requireNonNegativeIntegerOrNull(
+			obj,
+			"columnCount",
+			stmtContext,
+		),
 	};
 }
 
