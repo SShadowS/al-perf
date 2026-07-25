@@ -62,5 +62,16 @@ export interface TelemetryBatchDocument {
 		rows: number;
 		truncated?: boolean;
 		error?: string;
+		/**
+		 * telemetry-sql-evidence plan, Task 9, Fix Round 2: statement rows that
+		 * matched no signal on this pull — e.g. a routine's statements were all
+		 * measured under a clientType no emitted signal carries. The
+		 * statement->signal join is intentionally strict on clientType (SQL
+		 * measured in one client session should not annotate another's
+		 * finding), so a systematic mismatch produces a total, silent loss of
+		 * evidence that otherwise looks identical to a genuinely clean "no slow
+		 * SQL" result. Only meaningful on the `"RT0005 statements"` entry.
+		 */
+		unmatchedRows?: number;
 	}>;
 }

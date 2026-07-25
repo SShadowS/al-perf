@@ -731,6 +731,28 @@ describe("responsibility 8: signalAvailability validation", () => {
 		]);
 		expect(parsed?.[0].truncated).toBeUndefined();
 		expect(parsed?.[0].error).toBeUndefined();
+		expect(parsed?.[0].unmatchedRows).toBeUndefined();
+	});
+
+	// Fix Round 2 (N1): unmatchedRows surfaces statement rows that matched no
+	// signal (e.g. a clientType the routine's signals don't carry) — reuses
+	// optionalNonNegativeInteger, same as sqlExecutes/sqlRowsRead.
+	test("validateSignalAvailability carries unmatchedRows through", () => {
+		const parsed = validateSignalAvailability([
+			{ signalId: "RT0005 statements", queried: true, rows: 5, unmatchedRows: 2 },
+		]);
+		expect(parsed?.[0].unmatchedRows).toBe(2);
+	});
+
+	test("rejects a negative unmatchedRows fail-closed", () => {
+		const doc = batch([signal()], {
+			signalAvailability: [
+				{ signalId: "RT0005 statements", queried: true, rows: 0, unmatchedRows: -1 },
+			],
+		});
+		expect(() => parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG)).toThrow(
+			/signalAvailability\[0\].*unmatchedRows/,
+		);
 	});
 
 	test("a well-formed signalAvailability array parses through parseTelemetryBatch without throwing, and is surfaced on the envelope", () => {

@@ -1381,4 +1381,60 @@ describe("attachEvidenceToSignals", () => {
 		if (a.sqlEvidence) a.sqlEvidence.statements[0].text = "MUTATED";
 		expect(b.sqlEvidence?.statements[0]?.text).not.toBe("MUTATED");
 	});
+
+	// ---------------------------------------------------------------------
+	// Fix Round 2 (N1, IMPORTANT): strict clientType matching is correct —
+	// SQL measured in one client session must not annotate another's finding
+	// — but with several distinct clientType values common on both sides
+	// (measured live: 5 on both RT0018 and RT0005), a systematic mismatch
+	// silently drops ALL evidence for a routine while looking identical to a
+	// genuine "no slow SQL" result. attachEvidenceToSignals now returns the
+	// count of statement rows that matched no signal, so the caller
+	// (appinsights.ts) can surface it instead of it staying invisible.
+	// ---------------------------------------------------------------------
+
+	test("statement rows whose clientType matches no signal are counted and reported, not silently dropped", () => {
+		const signals = [signal({ clientType: "WebClient" })];
+		const unmatched = attachEvidenceToSignals(signals, [
+			statementRow({ clientType: "Background" }),
+			statementRow({
+				clientType: "Background",
+				sqlStatement: 'SELECT "b" FROM dbo."CRONUS$Item Ledger Entry"',
+			}),
+		]);
+		// The strict-matching semantics are unchanged: no evidence appears.
+		expect(signals[0].sqlEvidence).toBeUndefined();
+		// But the caller learns the query genuinely had statements it couldn't attach.
+		expect(unmatched).toBe(2);
+	});
+
+	test("returns 0 when every statement row attaches to some signal", () => {
+		const signals = [signal({ signalId: "RT0018" }), signal({ signalId: "RT0005" })];
+		const unmatched = attachEvidenceToSignals(signals, [statementRow()]);
+		expect(unmatched).toBe(0);
+	});
+
+	test("a row dropped for fail-closed reasons (no AL frame / redaction failure) is NOT counted as unmatched", () => {
+		const signals = [signal()];
+		const unmatched = attachEvidenceToSignals(signals, [
+			statementRow({ stackTrace: "AppObjectType: CodeUnit\r\nAppObjectId: 80" }),
+		]);
+		expect(unmatched).toBe(0);
+	});
+
+	test("unmatched count is scoped per routine — a matching routine's rows don't mask a mismatched routine's", () => {
+		const signals = [signal({ objectId: 80, clientType: "Background" })];
+		const unmatched = attachEvidenceToSignals(signals, [
+			statementRow({ clientType: "Background" }), // matches
+			statementRow({
+				// different routine, unmatched clientType too
+				objectId: 90,
+				clientType: "WebClient",
+				stackTrace: 'AL CallStack: "X"(CodeUnit 90).OtherMethod line 1',
+				sqlStatement: 'SELECT "c" FROM dbo."CRONUS$Other Table"',
+			}),
+		]);
+		expect(signals[0].sqlEvidence?.statements).toHaveLength(1);
+		expect(unmatched).toBe(1);
+	});
 });

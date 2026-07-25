@@ -338,6 +338,9 @@ function validateSignalAvailabilityEntry(
 		rows: requireNonNegativeInteger(obj, "rows", context),
 		truncated: optionalBoolean(obj, "truncated", context),
 		error: optionalString(obj, "error", context),
+		// Fix Round 2: reuses the same optionalNonNegativeInteger validator as
+		// sqlExecutes/sqlRowsRead — no new helper needed.
+		unmatchedRows: optionalNonNegativeInteger(obj, "unmatchedRows", context),
 	};
 }
 

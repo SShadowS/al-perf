@@ -828,7 +828,10 @@ export interface StatementRow {
 }
 
 /** Routine key + clientType, joined so a Map key never collides across BOTH dimensions at once (same separator convention as telemetryRoutineKey itself). */
-function evidenceKey(routineKey: string, clientType: string | undefined): string {
+function evidenceKey(
+	routineKey: string,
+	clientType: string | undefined,
+): string {
 	return `${routineKey}\u001f${clientType ?? ""}`;
 }
 
@@ -856,11 +859,24 @@ function evidenceKey(routineKey: string, clientType: string | undefined): string
  * signals sharing a key would otherwise share object references, so a later
  * mutation of one signal's evidence (e.g. a renderer) could silently leak
  * into the other's.
+ *
+ * Returns the number of statement ROWS that built a valid (routine,
+ * clientType) key but matched no signal (Fix Round 2). The strict clientType
+ * scoping is intentionally correct — SQL measured in one client session
+ * should never annotate a different session's finding — but with several
+ * distinct clientType values common on both sides (measured live: 5 on both
+ * RT0018 and RT0005), a systematic mismatch silently drops ALL evidence for
+ * a routine while looking identical to "queried, genuinely no slow SQL".
+ * This count is how the caller (appinsights.ts) surfaces that distinction —
+ * rows that fail to parse an AL frame or fail redaction are NOT counted here
+ * (that's a different failure mode, already skip-counted upstream in
+ * appinsights.ts's normalizeStatementTable); this counts only rows that were
+ * fully valid and simply had nowhere to attach.
  */
 export function attachEvidenceToSignals(
 	signals: TelemetrySignal[],
 	rows: readonly StatementRow[],
-): void {
+): number {
 	const byKey = new Map<string, TelemetrySqlStatementEvidence[]>();
 	const thresholds = new Map<string, { minMs: number; maxMs: number }>();
 
@@ -898,6 +914,7 @@ export function attachEvidenceToSignals(
 		}
 	}
 
+	const claimedKeys = new Set<string>();
 	for (const signal of signals) {
 		const routineKey = telemetryRoutineKey(
 			signal.appId,
@@ -906,6 +923,7 @@ export function attachEvidenceToSignals(
 			signal.methodName,
 		);
 		const key = evidenceKey(routineKey, signal.clientType);
+		claimedKeys.add(key);
 		const statements = byKey.get(key);
 		if (!statements || statements.length === 0) continue;
 		statements.sort((a, b) => b.measuredTotalMs - a.measuredTotalMs);
@@ -921,4 +939,10 @@ export function attachEvidenceToSignals(
 			threshold: threshold ? { ...threshold } : undefined,
 		};
 	}
+
+	let unmatchedRows = 0;
+	for (const [key, statements] of byKey) {
+		if (!claimedKeys.has(key)) unmatchedRows += statements.length;
+	}
+	return unmatchedRows;
 }
