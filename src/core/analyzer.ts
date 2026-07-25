@@ -173,8 +173,14 @@ function computeConfidenceScore(
 	};
 }
 
+/**
+ * `isIdleNode`'s rule for an already-aggregated method. Kept in step with it
+ * deliberately — including the `<= 0` bound, since a captured BC profile emits
+ * the idle frame with objectId -1 and a `=== 0` test silently let idle through
+ * into the hotspot list and both sides of compareProfiles.
+ */
 function isIdle(method: MethodBreakdown): boolean {
-	return method.functionName === "IdleTime" && method.objectId === 0;
+	return method.functionName === "IdleTime" && method.objectId <= 0;
 }
 
 /**
@@ -211,6 +217,41 @@ export function appVersionForApp(
  * Analyze a single profile file, returning an AnalysisResult with meta, summary,
  * hotspots, patterns, and breakdowns.
  */
+/**
+ * 100 minus penalties for the DISTINCT problems found, and for idle time.
+ *
+ * The penalty used to count FINDINGS. One pattern exhibited by many places is
+ * still one problem, and the profile detectors emit one finding per site — so
+ * a capture with 16 `high-hit-count` findings, all the same problem seen on 16
+ * different SQL statements, scored 20/100 while a capture with 4 of that very
+ * same pattern scored 80. Measured across the captured profiles on hand, every
+ * one had ZERO critical patterns yet scored 5, 5, 20, 25 and 35: the number
+ * was reporting how repetitive a pattern was, not how unhealthy the profile
+ * was, and it read as a contradiction next to "0 critical patterns".
+ *
+ * Counting distinct pattern ids per severity keeps the original weights and
+ * the original meaning ("how many kinds of problem, weighted by how bad they
+ * are") without letting one repetitive detector bottom out the scale.
+ */
+export function computeHealthScore(
+	patterns: DetectedPattern[],
+	idleRatio: number,
+): number {
+	const idsBySeverity: Record<DetectedPattern["severity"], Set<string>> = {
+		critical: new Set(),
+		warning: new Set(),
+		info: new Set(),
+	};
+	for (const p of patterns) idsBySeverity[p.severity].add(p.id);
+
+	const patternPenalty =
+		idsBySeverity.critical.size * 20 +
+		idsBySeverity.warning.size * 5 +
+		idsBySeverity.info.size * 1;
+	const idlePenalty = idleRatio > 0.9 ? 20 : idleRatio > 0.7 ? 10 : 0;
+	return Math.max(0, Math.min(100, 100 - patternPenalty - idlePenalty));
+}
+
 export async function analyzeProfile(
 	filePath: string,
 	options?: AnalyzeOptions,
@@ -368,17 +409,8 @@ export async function analyzeProfile(
 	// Compute confidence score
 	const confidence = computeConfidenceScore(processed, parsed);
 
-	// Health score: 100 minus penalties for patterns and idle ratio
-	const patternPenalty =
-		patternCount.critical * 20 +
-		patternCount.warning * 5 +
-		patternCount.info * 1;
 	const idleRatio = processed.idleSelfTime / (processed.totalSelfTime || 1);
-	const idlePenalty = idleRatio > 0.9 ? 20 : idleRatio > 0.7 ? 10 : 0;
-	const healthScore = Math.max(
-		0,
-		Math.min(100, 100 - patternPenalty - idlePenalty),
-	);
+	const healthScore = computeHealthScore(patterns, idleRatio);
 
 	// Build table-centric breakdown
 	const tableBreakdown = buildTableBreakdown(processed, sourceIndex);

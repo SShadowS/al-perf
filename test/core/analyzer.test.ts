@@ -4,6 +4,7 @@ import {
 	analyzeProfile,
 	comparabilityWarning,
 	compareProfiles,
+	computeHealthScore,
 } from "../../src/core/analyzer.js";
 import { FINGERPRINT_ALGO_VERSION } from "../../src/lifecycle/fingerprint.js";
 import type { ProfileMetadata } from "../../src/types/batch.js";
@@ -538,5 +539,55 @@ describe("SQL evidence enrichment (v1) — synthetic fixture (always runs)", () 
 
 		const without = await analyzeProfile(SYNTHETIC);
 		expect(without.sqlActivity).toBeUndefined();
+	});
+});
+
+describe("healthScore — repetition of one pattern is one problem", () => {
+	function patterns(id: string, n: number) {
+		return Array.from({ length: n }, (_, i) => ({
+			id,
+			severity: "warning" as const,
+			title: `${id} #${i}`,
+			description: "",
+			impact: 0,
+			involvedMethods: [],
+			evidence: "",
+			suggestion: "",
+		}));
+	}
+
+	test("N findings of the SAME pattern id cost the same as one", () => {
+		// The penalty counted FINDINGS, so 16 high-hit-count findings — one
+		// pattern exhibited by 16 different SQL statements — scored 20/100 while
+		// 4 findings of that same single pattern scored 80. Measured on captured
+		// profiles: every one had ZERO criticals, yet scored 5, 5, 20, 25, 35,
+		// entirely on how many times one pattern repeated.
+		expect(computeHealthScore(patterns("high-hit-count", 1), 0)).toBe(
+			computeHealthScore(patterns("high-hit-count", 16), 0),
+		);
+	});
+
+	test("distinct problems still each cost", () => {
+		const one = computeHealthScore(patterns("high-hit-count", 3), 0);
+		const two = computeHealthScore(
+			[...patterns("high-hit-count", 3), ...patterns("event-chain", 3)],
+			0,
+		);
+		expect(two).toBeLessThan(one);
+	});
+
+	test("severity still dominates count", () => {
+		const oneCritical = computeHealthScore(
+			[{ ...patterns("a", 1)[0], severity: "critical" as const }],
+			0,
+		);
+		const oneWarning = computeHealthScore(patterns("b", 1), 0);
+		expect(oneCritical).toBeLessThan(oneWarning);
+	});
+
+	test("a heavily idle profile is still penalized", () => {
+		expect(computeHealthScore([], 0.95)).toBeLessThan(
+			computeHealthScore([], 0.1),
+		);
 	});
 });
