@@ -10,6 +10,10 @@ table 50400 "Key Test Table"
         field(3; "Posting Date"; Date) { }
         field(4; Amount; Decimal) { }
         field(5; Description; Text[100]) { }
+        field(6; "Date Filter"; Date)
+        {
+            FieldClass = FlowFilter;
+        }
     }
 
     keys

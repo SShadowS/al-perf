@@ -408,6 +408,19 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 				}
 				if (!tableObj?.keys || tableObj.keys.length === 0) continue;
 
+				// Fields that cannot produce the scan this detector warns about.
+				// A FlowFilter is not a table column at all — it parameterises
+				// FlowField calculation and has no index by definition — and
+				// SystemId carries its own unique index in BC. On a 15,436-file
+				// corpus "Date Filter" was the single most-flagged field (450 of
+				// 10,352) with SystemId another 147.
+				const filteredLower = op.fieldArgument.toLowerCase();
+				if (filteredLower === "systemid") continue;
+				const fieldDef = tableObj.fields.find(
+					(f) => f.name.toLowerCase() === filteredLower,
+				);
+				if (fieldDef?.fieldClass?.toLowerCase() === "flowfilter") continue;
+
 				// Check if any key has the filtered field as a leading (first) field
 				if (isKeyLeadingField(tableObj, op.fieldArgument)) continue;
 

@@ -94,6 +94,12 @@ export interface TableFieldInfo {
 		| "Max"
 		| "Exist";
 	calcFormulaTable?: string;
+	/**
+	 * The field's `FieldClass` property when declared. `FlowFilter` fields are
+	 * not table columns — they parameterise FlowField calculation and have no
+	 * index, so a filter on one cannot cause a table scan.
+	 */
+	fieldClass?: string;
 	/** Table referenced in TableRelation property */
 	tableRelationTarget?: string;
 	line: number;

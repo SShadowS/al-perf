@@ -1214,6 +1214,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 			let id = 0;
 			let name = "";
 			let dataType = "";
+			let fieldClass: string | undefined;
 			let calcFormulaType: TableFieldInfo["calcFormulaType"] | undefined;
 			let calcFormulaTable: string | undefined;
 			let tableRelationTarget: string | undefined;
@@ -1237,6 +1238,11 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 					name = stripQuotes(child.text);
 				} else if (child.type === "type_specification") {
 					dataType = child.text;
+				} else if (isPropertyNamed(child, "FieldClass")) {
+					// FlowFilter fields are not table columns — they parameterise
+					// FlowField calculation and have no index by definition, so a
+					// filter on one cannot cause a table scan.
+					fieldClass = child.childForFieldName("value")?.text;
 				} else if (isPropertyNamed(child, "CalcFormula")) {
 					const value = child.childForFieldName("value");
 					if (value) {
@@ -1307,6 +1313,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 					calcFormulaType,
 					calcFormulaTable,
 					tableRelationTarget,
+					...(fieldClass !== undefined ? { fieldClass } : {}),
 					line: node.startPosition.row + 1,
 				});
 			}

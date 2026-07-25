@@ -566,6 +566,7 @@ describe("table field names", () => {
 		expect(result.fields.map((f) => f.name).sort()).toEqual([
 			"Amount",
 			"Customer No.",
+			"Date Filter",
 			"Description",
 			"No.",
 			"Posting Date",

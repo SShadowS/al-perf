@@ -98,4 +98,18 @@ codeunit 50600 "Filter Test"
                 Message('%1', KeyTest."No.");
             until KeyTest.Next() = 0;
     end;
+
+    procedure FilterOnFlowFilterAndSystemId()
+    var
+        KeyTest: Record "Key Test Table";
+    begin
+        // A FlowFilter is not a table column and has no index: it parameterises
+        // FlowField calculation. SystemId carries its own unique index. Neither
+        // can cause the table scan this detector warns about.
+        KeyTest.SetRange("Date Filter", 0D, Today());
+        KeyTest.SetRange(SystemId, CreateGuid());
+        if KeyTest.FindSet() then
+            repeat
+            until KeyTest.Next() = 0;
+    end;
 }

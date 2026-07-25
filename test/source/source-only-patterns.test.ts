@@ -566,3 +566,20 @@ describe("unindexed-filter on a record parameter", () => {
 		expect(f!.title).toContain("Key Test Table");
 	});
 });
+
+describe("unindexed-filter — fields that cannot cause a scan", () => {
+	test("a FlowFilter and SystemId are never unindexed filters", async () => {
+		// A FlowFilter is not a table column: it parameterises FlowField
+		// calculation and has no index by definition. SystemId carries its own
+		// unique index in BC. Neither can produce the scan this detector warns
+		// about. On a 15,436-file corpus "Date Filter" was the single
+		// most-flagged field (450) and SystemId accounted for another 147.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const found = detectUnindexedFilters(index).filter((p) =>
+			p.involvedMethods.some((m) =>
+				m.includes("FilterOnFlowFilterAndSystemId"),
+			),
+		);
+		expect(found).toHaveLength(0);
+	});
+});
