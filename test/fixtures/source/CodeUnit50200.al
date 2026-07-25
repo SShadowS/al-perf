@@ -35,6 +35,31 @@ codeunit 50200 "Advanced Patterns"
         SalesLine.FindSet();
     end;
 
+    procedure LoopOverKeyFieldsInsideRecordLoop()
+    var
+        SalesLine: Record "Sales Line";
+        KRef: KeyRef;
+        FRef: FieldRef;
+        RecRef: RecordRef;
+        Filters: array[20] of Text;
+        i: Integer;
+    begin
+        // The inner loop walks the KEY's fields through FieldRef -- bounded by
+        // the key width, entirely in memory, no record op anywhere in it. It
+        // multiplies CPU, not database round-trips, so calling it a nested-loop
+        // performance problem is wrong.
+        SalesLine.SetRange("Document No.", 'SO-001');
+        if SalesLine.FindSet() then
+            repeat
+                RecRef.GetTable(SalesLine);
+                KRef := RecRef.KeyIndex(1);
+                for i := 1 to KRef.FieldCount do begin
+                    FRef := KRef.FieldIndex(i);
+                    Filters[i] := FRef.GetFilter;
+                end;
+            until SalesLine.Next() = 0;
+    end;
+
     procedure FilteredBySetView()
     var
         SalesLine: Record "Sales Line";

@@ -115,12 +115,12 @@ describe("Indexer output snapshots", () => {
 
 	// --- CodeUnit50200: nested loops, event subscribers ---
 	describe("CodeUnit50200", () => {
-		it("should have 9 procedures, 0 triggers", async () => {
+		it("should have 10 procedures, 0 triggers", async () => {
 			const r = (await indexALFile(
 				resolve(fixturesDir, "CodeUnit50200.al"),
 				fixturesDir,
 			))!;
-			expect(r.procedures).toHaveLength(9);
+			expect(r.procedures).toHaveLength(10);
 			expect(r.triggers).toHaveLength(0);
 		});
 

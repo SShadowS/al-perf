@@ -43,6 +43,21 @@ export function detectNestedLoops(index: SourceIndex): DetectedPattern[] {
 						inner.lineStart > outer.lineStart &&
 						inner.lineEnd <= outer.lineEnd
 					) {
+						// Nesting only multiplies DATABASE cost when the inner body
+						// actually reaches the database. A `for i := 1 to
+						// KRef.FieldCount` walking key fields through FieldRef is
+						// bounded by the key width and touches nothing — flagging it
+						// tells the reader to restructure a loop that costs nothing.
+						//
+						// Recall trade: an inner loop whose I/O happens inside a
+						// procedure it calls is invisible here and is no longer
+						// reported. Not observed on the measured corpus — every inner
+						// loop there with no record op of its own also did no I/O by
+						// proxy — but that is the shape this misses.
+						const innerHasRecordOp = member.features.recordOps.some(
+							(op) => op.line >= inner.lineStart && op.line <= inner.lineEnd,
+						);
+						if (!innerHasRecordOp) continue;
 						reported.add(inner.lineStart);
 						patterns.push({
 							id: "nested-loops",

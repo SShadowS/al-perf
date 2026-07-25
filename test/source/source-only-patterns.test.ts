@@ -26,6 +26,20 @@ describe("detectNestedLoops", () => {
 		expect(match!.suggestion).toBeDefined();
 	});
 
+	test("does not flag an inner loop that performs no record operation", async () => {
+		// A `for i := 1 to KRef.FieldCount` walking key fields through FieldRef
+		// is bounded by the key width and never touches the database. It
+		// multiplies CPU, not round-trips.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectNestedLoops(index);
+		const falsePositive = patterns.find((p) =>
+			p.involvedMethods.some((m) =>
+				m.includes("LoopOverKeyFieldsInsideRecordLoop"),
+			),
+		);
+		expect(falsePositive).toBeUndefined();
+	});
+
 	test("does not flag single-level loops", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectNestedLoops(index);
