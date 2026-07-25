@@ -480,6 +480,34 @@ describe("redactSqlForSink", () => {
 			expect(redactSqlForSink(build(8192))?.truncated).toBe(true);
 		});
 
+		test('symmetric quote escape: re-escapes a literal " when re-emitting a double-quoted identifier', () => {
+			// The `]]` re-escape fixed in Round 1a's minors only covered the
+			// bracket delimiter. tokenize() already UN-escapes "" -> " while
+			// scanning a `"`-delimited identifier (needed so C5's swallowed-
+			// clause-text check sees the real value), so a kept identifier's
+			// logical (post-$-split) segment can legitimately carry a bare
+			// `"` the same way a bracket identifier carries a bare `]` --
+			// e.g. a physical name like `Foo"Bar`, escaped as `Foo""Bar` on
+			// the wire. Without re-doubling on the way out, `"Foo"Bar"` closes
+			// the identifier one character early: malformed SQL, not a leak,
+			// but a corrupted evidence string in the issue tracker either way.
+			const out = redactSqlForSink('SELECT "Foo""Bar" FROM dbo."CRONUS$Cust"');
+			expect(out?.text).toBe('SELECT "Foo""Bar" FROM dbo."Cust"');
+		});
+
+		test('symmetric quote escape: the TABLE reference case fails closed instead (pre-existing C5 cross-check)', () => {
+			// Unlike the column case above, an embedded "" in the TABLE
+			// reference's segment is already caught: parseSqlTable's own
+			// (escape-unaware) capture of the same reference stops at the
+			// FIRST "" it sees, disagreeing with our escape-aware scan, and
+			// the C5 cross-check (this file's `tableRefLogical !== table`)
+			// fails the whole statement closed on that disagreement -- so
+			// this shape was never reachable via the table-ref position, only
+			// via an ordinary column identifier (covered above).
+			const out = redactSqlForSink('SELECT "a" FROM dbo."CRONUS$Sales""Header"');
+			expect(out).toBeNull();
+		});
+
 		test("corpus gap: UPDATE without a collapsed column list", () => {
 			const out = redactSqlForSink(
 				'UPDATE dbo."CRONUS$Cust" SET "Name"=\'Acme Ltd\' WHERE "No_"=\'X\'',

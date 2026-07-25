@@ -385,13 +385,19 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 				namedColumns++;
 				if (namedColumns > MAX_NAMED_COLUMNS) continue;
 			}
-			// A kept bracket identifier can still carry a literal "]" (from a
-			// "]]"-escaped physical name whose logical segment wasn't
+			// A kept identifier can still carry a literal delimiter char (from
+			// a "]]"/`""`-escaped physical name whose logical segment wasn't
 			// discarded by the $-split) — re-double it on the way back out, or
-			// the emitted "[...]" closes early and the tail reads as raw SQL.
+			// the emitted identifier closes early and the tail reads as raw
+			// SQL. Symmetric fix for both delimiters: the tokenizer already
+			// UN-escapes "" -> " while scanning (see tokenize()'s `"` branch),
+			// so `logical` can legitimately carry a bare `"` the same way a
+			// bracket identifier can carry a bare `]`.
 			const identStart = out.length;
 			out +=
-				t.quote === "[" ? `[${logical.replace(/\]/g, "]]")}]` : `"${logical}"`;
+				t.quote === "["
+					? `[${logical.replace(/\]/g, "]]")}]`
+					: `"${logical.replace(/"/g, '""')}"`;
 			identRanges.push([identStart, out.length]);
 			continue;
 		}
