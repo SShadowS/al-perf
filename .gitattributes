@@ -1,0 +1,21 @@
+# Normalize every text file to LF in the repository AND in the working tree.
+#
+# Why `eol=lf` and not just `text=auto`: without it, a Windows checkout gets
+# CRLF working-tree files while the repo stores LF, so `git status` reports ~200
+# files as permanently modified. That stat-dirt blocked merges and rebases, had
+# to be stashed before every integration, and — once Biome 2.5.5 started
+# checking line endings — turned `bun run verify` red on a clean checkout.
+#
+# LF in the working tree is safe for this project: it is Bun/TypeScript, the
+# shell scripts require LF anyway, and PowerShell 5.1+ reads LF fine.
+* text=auto eol=lf
+
+# Binary — never touch these, line-ending translation corrupts them.
+*.png binary
+*.gz binary
+*.wasm binary
+*.zip binary
+*.app binary
+*.exe binary
+*.db binary
+*.snapshot binary
