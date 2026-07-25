@@ -253,18 +253,19 @@ function tokenize(sql: string): TokenizeResult | null {
 interface ChainHop {
 	/** Token index of the ident this hop leads to. */
 	nextIdentIndex: number;
-	/** Segments this hop contributes toward `chainSegmentsAfter`'s count:
-	 * 1 for a bare-dot hop (just the next ident), 2 for a dot-word-dot or
-	 * empty-schema-slot ("..") hop (the word/empty-slot AND the ident past
-	 * it). */
-	segments: 1 | 2;
+	/** Segments this hop contributes toward `chainSegmentsAfter`'s count —
+	 * the number of `.` characters in the joiner: 1 for a bare dot, 2 for
+	 * `.word.` or an empty schema slot (`..`), 3 for `...` or `..word.`,
+	 * and so on for any number of omitted parts T-SQL allows. */
+	segments: number;
 	/** Token index (EXCLUSIVE) up to which a DROPPED ident's own trailing
-	 * joiner should be suppressed by the caller. For a bare-dot or "..' hop
-	 * this is the whole joiner (nothing worth keeping). For a dot-word-dot
-	 * hop it stops right after the FIRST dot — the bare schema word and the
-	 * SECOND dot survive regardless of whether the ident before them is
-	 * dropped, since the word was never "owned" by that ident (Fix Round 4:
-	 * suppressing the whole joiner here previously ate a legitimate `dbo`).
+	 * joiner should be suppressed by the caller. When the joiner has no bare
+	 * word, this is the whole joiner (nothing worth keeping). When it has
+	 * one, this stops right before the word starts — the bare schema word
+	 * and everything from it onward survives regardless of whether the
+	 * ident before it is dropped, since the word was never "owned" by that
+	 * ident (Fix Round 4: suppressing the whole joiner here previously ate
+	 * a legitimate `dbo`).
 	 */
 	suppressThrough: number;
 }
@@ -274,46 +275,61 @@ interface ChainHop {
  * any) a recognized dot-chain joiner leads to next. Returns `null` if
  * nothing recognizable follows (chain ends at `tokens[i]`).
  *
- * The three recognized joiner shapes: a bare dot (next segment is ITSELF
- * quoted/bracketed, arriving as its own `ident` token), a dot-word-dot
- * (next segment is a bare, unquoted word such as `dbo`), or a dot-dot (Fix
- * Round 4: `database..table` is valid T-SQL — an EMPTY schema slot meaning
- * "use the default schema"). Mirrors the QUALIFIER regex in
- * src/core/sql-node.ts, which strips ANY quoted/bracketed segment ahead of
- * the final table name — not just the literal `dbo` spelling.
+ * Fix Round 5: generalized from four separately-enumerated joiner shapes
+ * (bare dot, dot-word-dot, empty-schema-slot "..", each added in a
+ * different round as a leak surfaced) to ONE dot-counting rule, because
+ * T-SQL allows omitting ANY number of leading qualifier parts —
+ * `server...table` (omit database AND schema) and `server..dbo.table`
+ * (omit only database) are both valid and were BOTH still leaking after
+ * Round 4's three-case enumeration, the same way `database..table` leaked
+ * before Round 4 added ITS case. A joiner matching
+ * `/^\s*(?:\.\s*)+(?:[A-Za-z_]\w*\s*(?:\.\s*)+)?$/` — one or more dots,
+ * optionally followed by a single bare word and one or more MORE dots — is
+ * accepted; `segments` is simply how many `.` characters it contains. This
+ * subsumes all four previously-enumerated cases (each is just a specific
+ * dot count) without adding a fifth, sixth, ... case for the next omitted-
+ * part spelling BC's T-SQL generator happens to emit.
+ *
+ * Mirrors the QUALIFIER regex in src/core/sql-node.ts, which strips ANY
+ * quoted/bracketed segment ahead of the final table name — not just the
+ * literal `dbo` spelling.
  *
  * Coupling the caller must preserve: this only ever recognizes a joiner made
- * of dots, whitespace and AT MOST one bare word between idents (the empty-
- * schema-slot case has zero words, not an unbounded number). The "other"-
+ * of dots, whitespace and AT MOST one bare word between idents. The "other"-
  * token loop below suppresses a dropped qualifier's joiner (via
  * `suppressThrough`) BEFORE clause-boundary keyword detection runs on that
  * same character; that ordering is only safe because this grammar can never
  * itself contain FROM/WHERE/SET/VALUES-shaped text for the boundary
  * detector to miss. Widening what this function accepts between segments
- * would need that assumption re-checked.
+ * (e.g. more than one bare word) would need that assumption re-checked.
  */
 function nextChainHop(tokens: Token[], i: number): ChainHop | null {
 	let j = i + 1;
+	const joinerStart = j;
 	let joiner = "";
-	let firstDotIdx = -1;
 	for (; j < tokens.length; j++) {
 		const tok = tokens[j];
 		if (tok.kind !== "other") break;
-		if (firstDotIdx === -1 && tok.value === ".") firstDotIdx = j;
 		joiner += tok.value;
 	}
 	const next = tokens[j];
 	if (next?.kind !== "ident") return null;
-	if (/^\s*\.\s*$/.test(joiner)) {
-		return { nextIdentIndex: j, segments: 1, suppressThrough: j };
+	const m = /^\s*(?:\.\s*)+(?:([A-Za-z_]\w*)\s*(?:\.\s*)+)?$/.exec(joiner);
+	if (!m) return null; // joiner isn't the recognized shape -- chain ends here
+	const segments = (joiner.match(/\./g) ?? []).length;
+	if (!m[1]) {
+		return { nextIdentIndex: j, segments, suppressThrough: j }; // no bare word -- suppress the whole joiner
 	}
-	if (/^\s*\.\s*[A-Za-z_]\w*\s*\.\s*$/.test(joiner)) {
-		return { nextIdentIndex: j, segments: 2, suppressThrough: firstDotIdx + 1 };
+	// Suppress everything before the bare word: find where it starts within
+	// this joiner's own token range and stop there.
+	let wordStart = joinerStart;
+	for (let k = joinerStart; k < j; k++) {
+		if (/[A-Za-z_]/.test((tokens[k] as Extract<Token, { kind: "other" }>).value)) {
+			wordStart = k;
+			break;
+		}
 	}
-	if (/^\s*\.\s*\.\s*$/.test(joiner)) {
-		return { nextIdentIndex: j, segments: 2, suppressThrough: j };
-	}
-	return null; // joiner isn't one of the three recognized shapes -- chain ends here
+	return { nextIdentIndex: j, segments, suppressThrough: wordStart };
 }
 
 /**
@@ -397,7 +413,10 @@ function isWordStart(tokens: Token[], i: number): boolean {
  * than deferring/buffering every "other" token on the chance it turns out
  * to matter.
  */
-function bareAliasHop(tokens: Token[], i: number): { identIndex: number } | null {
+function bareAliasHop(
+	tokens: Token[],
+	i: number,
+): { identIndex: number } | null {
 	if (!isWordStart(tokens, i)) return null;
 	let j = i;
 	let run = "";
@@ -622,7 +641,8 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 					// column is invisible to the pair-tracking above (see
 					// bareAliasHop's doc comment) — roll it back too, or it's
 					// left dangling with nothing after it.
-					if (myBareAliasRollback !== null) out = out.slice(0, myBareAliasRollback);
+					if (myBareAliasRollback !== null)
+						out = out.slice(0, myBareAliasRollback);
 					continue;
 				}
 			}

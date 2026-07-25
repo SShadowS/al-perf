@@ -964,9 +964,7 @@ describe("redactSqlForSink", () => {
 				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SQLDATABASE".."CRONUS$B" ON "x"="y"',
 			);
 			expect(out?.text).not.toContain("SQLDATABASE");
-			expect(out?.text).toBe(
-				'SELECT "a" FROM dbo."A" JOIN "B" ON "x"="y"',
-			);
+			expect(out?.text).toBe('SELECT "a" FROM dbo."A" JOIN "B" ON "x"="y"');
 		});
 
 		test("CRITICAL: db..table in first-table-ref position -- the RULE drops it, though the statement still fails closed", () => {
@@ -1045,9 +1043,7 @@ describe("redactSqlForSink", () => {
 			const cols = ["c1", "c2", "c3", "c4", "c5", "c6"]
 				.map((c) => `a."${c}"`)
 				.join(",");
-			const out = redactSqlForSink(
-				`SELECT ${cols} FROM dbo."CRONUS$T" a`,
-			);
+			const out = redactSqlForSink(`SELECT ${cols} FROM dbo."CRONUS$T" a`);
 			expect(out?.columnCount).toBe(6);
 			expect(out?.text).toContain('a."c5"');
 			expect(out?.text).toContain("…+1 more");
@@ -1071,6 +1067,10 @@ describe("redactSqlForSink", () => {
 		});
 
 		test("re-verify: the seven Round 3 repros still redact cleanly", () => {
+			// Was six entries (MERGE USING missing) -- no coverage gap, since
+			// R3-3 pins it separately above, but the test name overstated
+			// what THIS array covered. Added the seventh entry rather than
+			// just renaming, so the name is accurate again.
 			const repros: [string, string][] = [
 				[
 					'SELECT "a" FROM dbo."CRONUS$A" JOIN "SQLDATABASE".dbo."CRONUS$B" ON "x"="y"',
@@ -1079,6 +1079,10 @@ describe("redactSqlForSink", () => {
 				[
 					'SELECT "a" FROM dbo."CRONUS$A", "SQLDATABASE".dbo."CRONUS$B"',
 					'SELECT "a" FROM dbo."A", dbo."B"',
+				],
+				[
+					'MERGE INTO dbo."CRONUS$Cust" AS t USING "SQLDATABASE".dbo."CRONUS$Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
+					'MERGE INTO dbo."Cust" AS t USING dbo."Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
 				],
 				[
 					'SELECT "SQLDATABASE"."dbo"."CRONUS$T"."No_" FROM dbo."CRONUS$T"',
@@ -1100,6 +1104,61 @@ describe("redactSqlForSink", () => {
 			for (const [sql, expected] of repros) {
 				expect(redactSqlForSink(sql)?.text).toBe(expected);
 			}
+		});
+	});
+
+	describe("Fix Round 5", () => {
+		// Rounds 3-4 closed this family one enumerated joiner shape at a
+		// time (bare dot, dot-word-dot, then "..' in Round 4) -- T-SQL
+		// allows omitting ANY number of leading qualifier parts, so two
+		// more valid spellings still leaked right up through Round 4:
+		// "server...table" (omit database AND schema) and
+		// "server..dbo.table" (omit only database). Fixed by replacing the
+		// enumeration with one dot-counting rule in nextChainHop (see its
+		// doc comment) rather than adding a fourth and fifth case.
+
+		test("server...table (omit database AND schema) no longer leaks the server name", () => {
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SRV"..."CRONUS$B" ON "x"="y"',
+			);
+			expect(out?.text).not.toContain("SRV");
+			expect(out?.text).toBe(
+				'SELECT "a" FROM dbo."A" JOIN "B" ON "x"="y"',
+			);
+		});
+
+		test("server..dbo.table (omit only database) no longer leaks the server name", () => {
+			const out = redactSqlForSink(
+				'SELECT "a" FROM dbo."CRONUS$A" JOIN "SRV"..dbo."CRONUS$B" ON "x"="y"',
+			);
+			expect(out?.text).not.toContain("SRV");
+			expect(out?.text).toBe(
+				'SELECT "a" FROM dbo."A" JOIN dbo."B" ON "x"="y"',
+			);
+		});
+
+		test("a ..word. joiner in first-table-ref position -- the RULE drops it, though the statement still fails closed", () => {
+			// Same "rule vs. cross-check" distinction as Round 4's db..table
+			// test: parseSqlTable (out of scope) has the SAME inherent
+			// inability to parse a bare ".." hop, regardless of a bare word
+			// appearing later in the same joiner -- verified directly
+			// before writing this test.
+			const sql = 'SELECT "a" FROM "SRV"..dbo."CRONUS$B"';
+			expect(parseSqlTable(sql).table).toBe('B"'); // confirms the SAME out-of-scope garbage capture as Round 4's db..table case
+			expect(redactSqlForSink(sql)).toBeNull();
+		});
+
+		test("re-verify: the canonical RT0005 fixture and the quoted-alias JOIN still round-trip unchanged", () => {
+			const canonical =
+				'SELECT  TOP (1) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."COMPANY$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)';
+			expect(redactSqlForSink(canonical)?.text).toBe(
+				'SELECT TOP (?) "50102"."timestamp","50102"."Store No_","50102"."Terminal No_" FROM dbo."Sample Table" "50102" WITH(READUNCOMMITTED) WHERE ("50102"."Store No_"=@0)',
+			);
+			const quotedAliasJoin =
+				'SELECT "a"."No_" FROM dbo."CRONUS$Sales Header" "a" JOIN dbo."CRONUS$Sales Line" "b" ON "a"."No_"="b"."Document No_"';
+			expect(redactSqlForSink(quotedAliasJoin)?.text).toBe(
+				'SELECT "a"."No_" FROM dbo."Sales Header" "a" JOIN dbo."Sales Line" "b" ON "a"."No_"="b"."Document No_"',
+			);
 		});
 	});
 });
