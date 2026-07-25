@@ -598,20 +598,33 @@ export const detectEventChains: PatternDetector = (
 		}
 	}
 
-	// Report chains with 2+ event subscribers
+	// Report a root that has at least one event subscriber beneath it.
 	for (const [_, chain] of chains) {
-		if (chain.chain.length < 2) continue;
+		// `chain.chain[0]` is the ROOT itself — it is not one of the subscribers
+		// it triggers, and counting it inflated every number the finding
+		// reported by one ("OnAfterLogin (11 subscribers)" for 10).
+		const members = chain.chain.slice(1);
+		if (members.length < 1) continue;
+		// Members are grouped by NEAREST event ancestor, so they form a TREE
+		// under the root, not a chain: in a captured BC profile their depth
+		// offsets were [6,9,6,1,1,1,1,1,1,6] — six siblings directly beneath,
+		// plus deeper branches. Saying "a chain of N" and advising "reduce the
+		// chain depth" described a shape the profile does not have, and so the
+		// wrong fix. Report the fan-out and the real nesting depth separately.
+		const depths = members.map((n) => n.depth - chain.root.depth);
+		const maxDepth = Math.max(...depths);
+		const direct = depths.filter((d) => d === 1).length;
 		const methods = chain.chain.map((n) => formatMethodRef(n));
 		patterns.push({
 			id: "event-chain",
 			severity: "warning",
-			title: `Event chain from ${chain.root.callFrame.functionName} (${chain.chain.length} subscribers)`,
-			description: `Event subscriber ${formatMethodRef(chain.root)} triggers a chain of ${chain.chain.length} nested event subscribers, compounding execution cost.`,
+			title: `Event chain from ${chain.root.callFrame.functionName} (${members.length} subscribers)`,
+			description: `Event subscriber ${formatMethodRef(chain.root)} runs ${members.length} further event subscriber(s) beneath it — ${direct} directly beneath it, nested at most ${maxDepth} level(s) deep. Every one of them runs on each publish.`,
 			impact: chain.totalTime,
 			involvedMethods: methods,
-			evidence: `${chain.chain.length} nested event subscriber calls`,
+			evidence: `${members.length} event subscriber(s) beneath ${chain.root.callFrame.functionName}, ${direct} directly beneath it, ${maxDepth} level(s) deep`,
 			suggestion:
-				"Review whether all subscribers in this chain are necessary. Consider consolidating event handlers or reducing the chain depth.",
+				"Review whether all of these subscribers are necessary. Fan-out is reduced by consolidating handlers on the same event; depth is reduced by not raising further events from inside a subscriber.",
 		});
 	}
 

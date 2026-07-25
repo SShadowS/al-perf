@@ -725,3 +725,36 @@ describe("detectRecursion — counts only the recursive chain", () => {
 		expect(patterns[0].impact).toBe(chainSelf);
 	});
 });
+
+describe("detectEventChains — the count and the shape it describes", () => {
+	async function groups() {
+		const parsed = await parseProfile(`${FIXTURES}/event-fanout.alcpuprofile`);
+		const processed = processProfile(parsed);
+		return detectEventChains(processed);
+	}
+
+	test("counts the subscribers BENEATH the root, not the root itself", async () => {
+		// OnAfterPost has three event children; the deepest one belongs to
+		// OnAfterBranch, which forms its own group. The root used to be pushed
+		// into its own member list and counted as one of the subscribers it
+		// triggers. Real instance: "OnAfterLogin (11 subscribers)" in a
+		// captured BC profile, where 10 sit beneath it.
+		const post = (await groups()).find((p) => p.title.includes("OnAfterPost"))!;
+		expect(post).toBeDefined();
+		expect(post.title).toContain("3 subscribers");
+		expect(post.description).toContain("3");
+	});
+
+	test("describes fan-out as fan-out, and reports the real nesting depth", async () => {
+		// Members are grouped by NEAREST event ancestor, so they form a tree
+		// under the root, not a chain — all three of OnAfterPost's sit at the
+		// same level. The text claimed a "chain ... compounding execution cost"
+		// and advised "reducing the chain depth", which is the wrong shape and
+		// therefore the wrong fix. In the captured profile the member depth
+		// offsets were [6,9,6,1,1,1,1,1,1,6].
+		const post = (await groups()).find((p) => p.title.includes("OnAfterPost"))!;
+		expect(post.evidence).toMatch(/1 level/);
+		expect(post.description).toMatch(/directly beneath|beneath it/i);
+		expect(post.description).not.toMatch(/chain of/);
+	});
+});
