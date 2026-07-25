@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseSqlTable } from "../../src/core/sql-node.js";
 import {
 	parseAlStackFrame,
 	redactSqlForSink,
@@ -549,6 +550,156 @@ describe("redactSqlForSink", () => {
 			// MERGE text without a corresponding test here.
 			const out = redactSqlForSink(
 				'MERGE INTO dbo."CRONUS$Cust" AS t USING dbo."CRONUS$Staging" AS s ON t."No_"=s."No_" WHEN MATCHED THEN UPDATE SET t."Name"=s."Name";',
+			);
+			expect(out).toBeNull();
+		});
+
+		test("corpus gap: fails CLOSED on a 4-segment $ identifier (untested since Round 1)", () => {
+			// logicalIdentifier's fallback for parts.length >= 4 -- no
+			// documented BC physical-name shape has 4 $-segments, so there is
+			// no safe guess to make.
+			expect(redactSqlForSink('SELECT "No_" FROM dbo."A$B$C$D"')).toBeNull();
+		});
+
+		test("corpus gap: local GUID_RE stays in sync with sql-node.ts's copy", () => {
+			// telemetry-sql.ts's GUID_RE (used by logicalIdentifier) is a
+			// hand-mirrored copy of sql-node.ts's GUID_RE (used by
+			// parseSqlTable) -- not imported, per that constant's own doc
+			// comment, to keep this module decoupled. Nothing stops the two
+			// from drifting apart silently. Neither is exported, so probe
+			// both through their public surface (redactSqlForSink here,
+			// parseSqlTable directly) with edge cases chosen to trip up a
+			// slightly-wrong GUID pattern, and assert they agree on every one
+			// about whether the 3rd $-segment counts as a GUID.
+			const candidates = [
+				"aa11bb22-cc33-dd44-ee55-ff6677889900", // valid, lowercase, dashed
+				"AA11BB22-CC33-DD44-EE55-FF6677889900", // valid, uppercase
+				"aa11bb22cc33dd44ee55ff6677889900", // valid, undashed (32 hex)
+				"aa11bb22-cc33-dd44-ee55-ff667788990", // one char short
+				"aa11bb22-cc33-dd44-ee55-ff66778899001", // one char long
+				"gg11bb22-cc33-dd44-ee55-ff6677889900", // non-hex char
+				"aa11bb22_cc33_dd44_ee55_ff6677889900", // wrong separator
+			];
+			for (const candidate of candidates) {
+				const sql = `SELECT "a" FROM dbo."CRONUS$Table$${candidate}"`;
+				const telemetryTreatsAsGuid =
+					redactSqlForSink(sql)?.table === "Table";
+				const sqlNodeTreatsAsGuid = parseSqlTable(sql).table === "Table";
+				expect(telemetryTreatsAsGuid).toBe(sqlNodeTreatsAsGuid);
+			}
+		});
+
+		test("probe: strips a -- comment containing quotes without losing the FROM/WHERE clauses", () => {
+			const out = redactSqlForSink(
+				`SELECT "No_" FROM dbo."CRONUS$Cust" -- customer's "note" with 'quotes'\nWHERE "No_"='X'`,
+			);
+			expect(out?.table).toBe("Cust");
+			expect(out?.text).toBe('SELECT "No_" FROM dbo."Cust" WHERE "No_"=\'?\'');
+			expect(out?.text).not.toContain("customer");
+			expect(out?.text).not.toContain("note");
+		});
+
+		test("probe: strips a -- comment with no trailing newline", () => {
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM dbo."CRONUS$Cust" -- trailing comment no newline',
+			);
+			expect(out?.table).toBe("Cust");
+			expect(out?.text).toBe('SELECT "No_" FROM dbo."Cust"');
+		});
+
+		test("probe: an unterminated /* before the FROM clause truncates before it, safely", () => {
+			// The comment swallows everything from its start to end-of-input,
+			// including the FROM clause -- table is unresolved, but nothing
+			// leaks and truncated is correctly set.
+			const out = redactSqlForSink(
+				'SELECT "No_" /* comment never closes FROM dbo."CRONUS$Cust"',
+			);
+			expect(out?.truncated).toBe(true);
+			expect(out?.table).toBeNull();
+			expect(out?.text).not.toContain("CRONUS");
+		});
+
+		test("probe: an unterminated /* after the FROM clause keeps the table, still truncated", () => {
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM dbo."CRONUS$Cust" /* comment never closes',
+			);
+			expect(out?.truncated).toBe(true);
+			expect(out?.table).toBe("Cust");
+			expect(out?.text).toBe('SELECT "No_" FROM dbo."Cust"');
+		});
+
+		test("probe: truncation mid-literal is flagged truncated (not a tokenizer failure)", () => {
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM dbo."CRONUS$Cust" WHERE "Name"=\'Acme Lt',
+			);
+			expect(out?.truncated).toBe(true);
+			expect(out?.text).not.toContain("Acme");
+		});
+
+		test("probe: truncation mid-identifier fails CLOSED instead (distinct from mid-literal)", () => {
+			// tokenize()'s own doc comment draws this line deliberately: an
+			// unterminated quoted/bracketed identifier is "genuinely
+			// unparseable" (null), never treated as the truncation-boundary
+			// case reserved for an unterminated string literal/block comment.
+			const out = redactSqlForSink('SELECT "No_" FROM dbo."CRONUS$Cu');
+			expect(out).toBeNull();
+		});
+
+		test("probe: an escaped '' inside a literal is fully blanked", () => {
+			const out = redactSqlForSink(
+				'SELECT "No_" FROM dbo."CRONUS$Cust" WHERE "Name"=\'it\'\'s Acme Ltd\'',
+			);
+			expect(out?.text).toBe('SELECT "No_" FROM dbo."Cust" WHERE "Name"=\'?\'');
+			expect(out?.text).not.toContain("Acme");
+		});
+
+		test("probe: a lowercase n'...' string literal is still recognized and blanked", () => {
+			// tokenize() only special-cases an uppercase "N" prefix, but a
+			// bare `'` alone already starts the SAME literal-scanning branch
+			// regardless of what (if anything) precedes it -- the lowercase
+			// "n" just passes through as an ordinary character, not a leak,
+			// since it carries no customer data on its own.
+			const out = redactSqlForSink(
+				`SELECT "No_" FROM dbo."CRONUS$Cust" WHERE "Name"=n'Acme'`,
+			);
+			expect(out?.text).toBe(`SELECT "No_" FROM dbo."Cust" WHERE "Name"=n'?'`);
+			expect(out?.text).not.toContain("Acme");
+		});
+
+		test("probe: a double-quoted identifier containing a bare ' fails CLOSED by design", () => {
+			// C6's sawSwallowedClauseText treats a stray `'` inside a
+			// double-quoted identifier as foreign to it (only an embedded `"`
+			// via the `""` escape is legitimate there) -- a deliberately
+			// conservative fail-closed bias, not a bug, since that shape is
+			// indistinguishable from an identifier scan that swallowed past a
+			// string literal's boundary.
+			const out = redactSqlForSink(`SELECT "O'Brien" FROM dbo."CRONUS$Cust"`);
+			expect(out).toBeNull();
+		});
+
+		test("probe: a subquery FROM fails CLOSED (table-resolution mismatch, not a crash)", () => {
+			// Our tokenizer's own table-ref tracking latches onto the FIRST
+			// ident following any FROM/INTO/UPDATE/MERGE keyword, including
+			// one inside a subquery's SELECT list -- parseSqlTable's own
+			// regex-based capture resolves a DIFFERENT (garbage) value for
+			// the same statement, and the existing tableRefLogical-vs-table
+			// cross-check fails the whole statement closed on that
+			// disagreement. No leak, no crash -- subqueries are simply not a
+			// shape this redactor resolves correctly, so it declines to
+			// guess.
+			const out = redactSqlForSink(
+				'SELECT "a" FROM (SELECT "b" FROM dbo."CRONUS$T") x',
+			);
+			expect(out).toBeNull();
+		});
+
+		test("probe: a CTE (WITH ...) is not a classified operation — fails closed", () => {
+			// SQL_PREFIX_RE (src/core/sql-node.ts) only recognizes a
+			// statement starting with SELECT/INSERT/UPDATE/DELETE/MERGE; a
+			// CTE's leading "WITH" doesn't match, so classifySqlOperation
+			// buckets it as "OTHER" before any tokenizing/redaction happens.
+			const out = redactSqlForSink(
+				'WITH cte AS (SELECT "a" FROM dbo."CRONUS$T") SELECT "a" FROM cte',
 			);
 			expect(out).toBeNull();
 		});
