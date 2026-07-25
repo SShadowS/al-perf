@@ -124,6 +124,27 @@ interface TokenizeResult {
  *    counting quote characters (which a stray apostrophe inside a block or
  *    line comment would miscount).
  */
+/**
+ * True when a scanned identifier value shows signs of having swallowed
+ * clause text past an unmatched delimiter, rather than being a real
+ * identifier: a bare FROM/WHERE/SELECT keyword, a literal newline, or a
+ * quote character that could only appear by scanning across a string
+ * literal's boundary or into another quoted region (which one depends on
+ * the delimiter — a bracket identifier should never legitimately contain
+ * EITHER quote char; a double-quoted identifier can legitimately contain an
+ * embedded `"` via the `""` escape, so only a stray `'` is foreign to it).
+ * An identifier that swallowed clause text is not an identifier — the
+ * caller fails the whole statement closed rather than echo it, literal
+ * values included.
+ */
+function sawSwallowedClauseText(value: string, foreignQuotes: RegExp): boolean {
+	return (
+		foreignQuotes.test(value) ||
+		/[\r\n]/.test(value) ||
+		/\b(?:FROM|WHERE|SELECT)\b/i.test(value)
+	);
+}
+
 function tokenize(sql: string): TokenizeResult | null {
 	const tokens: Token[] = [];
 	let i = 0;
@@ -144,6 +165,7 @@ function tokenize(sql: string): TokenizeResult | null {
 				j = close + 1;
 				break;
 			}
+			if (sawSwallowedClauseText(value, /'/)) return null;
 			tokens.push({ kind: "ident", value, quote: '"' });
 			i = j;
 		} else if (c === "[") {
@@ -161,6 +183,7 @@ function tokenize(sql: string): TokenizeResult | null {
 				j = close + 1;
 				break;
 			}
+			if (sawSwallowedClauseText(value, /["']/)) return null;
 			tokens.push({ kind: "ident", value, quote: "[" });
 			i = j;
 		} else if (c === "'" || (c === "N" && sql[i + 1] === "'")) {

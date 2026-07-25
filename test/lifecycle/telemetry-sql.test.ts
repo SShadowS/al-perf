@@ -317,4 +317,29 @@ describe("redactSqlForSink", () => {
 		);
 		expect(embeddedCompany).toBeNull();
 	});
+
+	test("C6: fails CLOSED on an unmatched [ or \" that swallows clause text, not just by luck", () => {
+		// Before the fix, an unmatched `[` or `"` scanned forward to the FIRST
+		// unrelated close character it found (here, a `]` or `"` that's really
+		// part of a string literal or a later clause) and echoed everything in
+		// between as one "identifier" -- literal values included. The
+		// pre-existing "fails CLOSED" test at the top of this describe block
+		// only happens to pass because its input has no second `"` anywhere;
+		// these inputs DO have a second delimiter, so a naive re-check of that
+		// same property would wrongly call them safe.
+		const bracketSwallowsLiteral = redactSqlForSink(
+			`SELECT [a FROM dbo."ACMECORP" WHERE "N"='Secret]'`,
+		);
+		expect(bracketSwallowsLiteral).toBeNull();
+
+		const bracketSwallowsStatement = redactSqlForSink(
+			"SELECT [a FROM dbo.\"CRONUS$Cust\" WHERE \"N\"=@0 AND [b]",
+		);
+		expect(bracketSwallowsStatement).toBeNull();
+
+		const quoteSwallowsStatement = redactSqlForSink(
+			'SELECT "a FROM dbo."CRONUS$Cust" WHERE "Name"=@0',
+		);
+		expect(quoteSwallowsStatement).toBeNull();
+	});
 });
