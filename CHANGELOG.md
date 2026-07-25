@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Telemetry SQL evidence.** RT0005 slow-statement rows attach to telemetry findings as measured, threshold-gated evidence, and RT0018's `sqlExecutes`/`sqlRowsRead` ride along on the same findings. Statement text is redacted at ingest — company and database names never leave the adapter.
+- **Per-signal availability.** A failed signal query no longer aborts the pull; it is recorded, reported in the digest, and marks the window incomplete so findings for that signal cannot resolve on data that was never fetched.
+
+### Fixed
+
+- **`pull-telemetry` could not work against real telemetry.** It read `customDimensions.executionTimeInMs`, an alias that came back non-null on 0 of 17,045 RT0018 rows and 6 of 15,957 RT0005 rows measured against a live environment — every real pull threw. It now reads the `executionTime` .NET timespan field BC actually populates.
+- **RT0005 findings carried a stack header as their method name.** The fallback took the first line of `alStackTrace`, which is `AppObjectType: …`, not a method. RT0005 findings now parse the real AL frame. Existing RT0005 findings, if any, re-file once under corrected identities.
+
 ## 3.0.0 — 2026-07-12
 
 The release that turns al-perf from a profile analyzer into a performance observability platform. A profile analyzer answers "why was this run slow?" and forgets. This release adds a **finding lifecycle engine**: findings get a stable identity, are tracked across runs, and are driven out to the places you already look — GitHub, Azure DevOps, App Insights telemetry.

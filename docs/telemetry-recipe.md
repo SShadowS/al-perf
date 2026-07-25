@@ -621,3 +621,124 @@ replaced by the parent flag shown above — put `--config` before the
 subcommand: `lifecycle --config <path> sync`. The default path and the
 file's meaning are unchanged; only its position on the command line moved,
 and it now applies to every subcommand that reads the file, not just `sync`.
+
+## 13. SQL evidence on telemetry findings
+
+RT0005 (long-running SQL) and RT0018 (long-running AL, BC v22.0+) can attach
+*measured* SQL detail to a telemetry finding, alongside the routine-level
+`maxDurationMs`/`count` every telemetry finding already carries. This is a
+different provenance from the `--source`-correlated SQL evidence a profile
+finding carries: a profile's evidence is a **sampled** estimate
+(`provenance: "sampled-estimate"`) built from hit counts on a sampling
+profile; a telemetry finding's evidence is **measured** — real execution
+counts and durations App Insights actually recorded
+(`provenance: "measured-threshold-gated"`). Every renderer (terminal,
+markdown, HTML, JSON) narrows on this discriminant and never lets the two
+provenances' wording cross — a telemetry statement line never says "sampled"
+and a profile statement line never says "measured" or "ran N times".
+
+### What it looks like
+
+A finding whose routine issued slow SQL carries a `sqlEvidence` object
+shaped like:
+
+```json
+{
+	"provenance": "measured-threshold-gated",
+	"attribution": "telemetry-stack",
+	"totalMeasuredMs": 4200,
+	"totalOccurrences": 12,
+	"threshold": { "minMs": 750, "maxMs": 750 },
+	"statements": [
+		{
+			"text": "SELECT \"No_\" FROM \"Sales Header\" WHERE ... (+2 more)",
+			"operation": "SELECT",
+			"table": "Sales Header",
+			"extensionAppId": null,
+			"occurrences": 12,
+			"measuredTotalMs": 4200,
+			"truncated": false
+		}
+	]
+}
+```
+
+`totalMeasuredMs`/`totalOccurrences` are full-set totals; `statements` is
+capped to the top 5 by `measuredTotalMs` for display, same cap as the
+profile side. `sqlRank` (a separate field on the finding, never `impact`)
+is set to `totalMeasuredMs * 1000` — microseconds, the same unit a profile
+finding's `sqlRank` uses (`totalSampledCostUs`) — so `--sort sql` / MCP
+`sort:"sql"` order telemetry and profile findings against each other
+correctly with a bare numeric comparator, no unit conversion needed at sort
+time.
+
+RT0018 findings additionally carry `sqlExecutes`/`sqlRowsRead` (measured
+statement count and rows read for the routine) folded into the finding's
+evidence text as `Measured: N SQL statement(s), M row(s) read`. These are
+**BC v22.0+ only** — on an older platform version, or a router that never
+saw the field, both are simply **absent, never `0`**: a finding with no
+`Measured:` line means "this environment doesn't report the counter," not
+"zero statements ran." Never treat their absence as a clean result.
+
+### Threshold-gated: absence of evidence is not evidence of absence
+
+RT0005 only emits a trace once a statement's duration crosses BC's own
+per-row `longRunningThreshold` (`customDimensions.longRunningThreshold`,
+carried through as `sqlEvidence.threshold`). That threshold is
+environment-specific, not a al-perf constant — read the per-row value, don't
+hardcode one. A finding with no `sqlEvidence` at all means nothing crossed
+the threshold in the pulled window, not that the routine ran no SQL.
+
+`clientType` (§9) scopes this further: evidence is joined to a signal by
+`(routine, clientType)`, deliberately strict — SQL measured in one client
+session must not annotate another session's finding. On an environment
+where `clientType` is populated (commonly the case — every field is
+populated on 100% of rows once BC starts stamping it), a routine that runs
+under several client types will show evidence for the sessions that actually
+crossed the threshold and none for the others; that is a routine, expected
+non-match, not a coverage gap.
+
+### Redaction: statement text is safe to store, the table name is not incidental
+
+Every statement is redacted before it's ever persisted
+(`redactSqlForSink`, `src/lifecycle/telemetry-sql.ts`): the company/database
+prefix is stripped from every table reference, literal values are dropped
+entirely, and named columns collapse to a count (`(+N more)`). What
+survives — operation, **logical table name**, column count, extension app
+id — is retained **deliberately**: it's schema shape, not customer data, and
+it's exactly what makes a `record-op-in-loop`-style finding actionable
+("`SELECT` against `Sales Header`", not "`SELECT` against
+`CRONUS$Sales Header$a1b2c3d4`"). A statement the tokenizer can't safely
+parse (including one BC truncated mid-token at its own 8192-character
+emission cap) is dropped whole rather than partially redacted — fails
+closed, not "best effort".
+
+### Window completeness: a failed signal vs. a failed enrichment query
+
+A telemetry pull reports a `signalAvailability` entry per query it ran.
+Two different failures read very differently:
+
+- **A failed RT0018 or RT0005 signal query** marks that window's run
+  `incompleteInvocations > 0` — `evaluateRun` skips the absence pass
+  entirely for it, so a signal outage can never be misread as "this finding
+  is gone now" and falsely resolve it.
+- **A failed `"RT0005 statements"` query** — the enrichment query that
+  attaches SQL evidence on top of an already-identified RT0005 signal — does
+  **not** mark the window incomplete. Losing evidence enrichment is not the
+  same as losing the underlying finding; letting it suppress the absence
+  pass would needlessly delay resolving problems that are actually fixed.
+
+`lifecycle digest` surfaces whichever signals failed (by id, not by pull-wide
+row counts — see below) as one advisory line:
+
+```
+> Signals unavailable this window: RT0005 statements — absence not counted for them.
+```
+
+Two things this line deliberately does NOT do: it never renders an
+availability entry's `rows`/`unmatchedRows` counters as if they described
+just this tenant (one pull's `signalAvailability` array is shared across
+every tenant/group it produced, so those two integers are pull-wide, not
+tenant-scoped), and it never implies findings went unobserved when the
+failed entry is the `"RT0005 statements"` enrichment query specifically —
+only a failed RT0018/RT0005 signal query carries that implication.
