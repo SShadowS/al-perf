@@ -181,8 +181,15 @@ export function parseTimespanMs(value: string): number {
  * `stackTrace` carried through via `any()` (not grouped on) so the TS
  * normalizer can still fall back to it when `alMethod` is empty. Non-RT0005
  * signals also aggregate `sqlExecutes`/`sqlRowsRead` (RT0018, BC v22.0+;
- * absent on older rows — `sum(toint(...))` over an absent column yields
- * null, which `asOptionalCount` treats as unknown, never 0).
+ * absent on older rows). These are guarded with `iff(countif(isnotnull(...))
+ * == 0, real(null), ...)` rather than a bare `sum(toint(...))`: Kusto's
+ * aggregates fold over the empty set, so `sum()` of an all-null column
+ * returns `0`, not `null` (the opposite of SQL) — verified against live
+ * telemetry (RT0005 groups, which never carry these columns, summed to a
+ * real `0`). An unguarded `sum()` would hand `asOptionalCount` a real `0` for
+ * an environment that has never emitted these counters (BC < v22.0), minting
+ * a false "confirmed zero SQL statements" for exactly the rows this field
+ * exists to mark unknown.
  *
  * `clientType` (D5) always rides the extend + summarize by-key, independent
  * of `--client-types` — it's carried through to every emitted signal so the
@@ -233,18 +240,29 @@ export function buildKqlQuery(
 		const list = clientTypes.map((ct) => `"${ct}"`).join(", ");
 		lines.push(`| where clientType in (${list})`);
 	}
-	lines.push(
-		isSqlSignal
-			? "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)"
-			: "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace), sqlExecutes = sum(toint(customDimensions.sqlExecutes)), sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
-		isSqlSignal
-			? split
+	if (isSqlSignal) {
+		lines.push(
+			"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)",
+			split
 				? "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType, aadTenantId, environmentName"
-				: "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType"
-			: split
+				: "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType",
+		);
+	} else {
+		lines.push(
+			"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace),",
+			// sum() over an all-null column returns 0 in Kusto (fold-over-empty-set
+			// — the opposite of SQL's sum(NULL) = NULL), so this guards explicitly:
+			// countif(isnotnull(...)) == 0 means the column was never present in the
+			// group, and the aggregate reports real(null) (unknown) rather than a
+			// false 0. todouble(...) on the sum branch is required — KQL rejects an
+			// iff() whose two branches are real vs long.
+			"    sqlExecutes = iff(countif(isnotnull(customDimensions.sqlExecutes)) == 0, real(null), todouble(sum(toint(customDimensions.sqlExecutes)))),",
+			"    sqlRowsRead = iff(countif(isnotnull(customDimensions.sqlRowsRead)) == 0, real(null), todouble(sum(toint(customDimensions.sqlRowsRead))))",
+			split
 				? "    by appId, appName, objectType, objectId, objectName, methodName, clientType, aadTenantId, environmentName"
 				: "    by appId, appName, objectType, objectId, objectName, methodName, clientType",
-	);
+		);
+	}
 	return lines.join("\n");
 }
 

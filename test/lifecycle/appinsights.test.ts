@@ -110,7 +110,7 @@ describe("buildKqlQuery — RT0005 stack grouping / RT0018 SQL counters (Task 8)
 		);
 	});
 
-	it("RT0018 keeps its existing grouping and gains SQL counters", () => {
+	it("RT0018 keeps its existing grouping and gains guarded SQL counters", () => {
 		const kql = buildKqlQuery(
 			"RT0018",
 			"2026-07-25T00:00:00.000Z",
@@ -119,10 +119,57 @@ describe("buildKqlQuery — RT0005 stack grouping / RT0018 SQL counters (Task 8)
 		);
 		expect(kql).toContain("stackTrace = any(stackTrace)");
 		expect(kql).toContain(
-			"sqlExecutes = sum(toint(customDimensions.sqlExecutes))",
+			"sqlExecutes = iff(countif(isnotnull(customDimensions.sqlExecutes)) == 0, real(null), todouble(sum(toint(customDimensions.sqlExecutes))))",
 		);
 		expect(kql).toContain(
-			"sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
+			"sqlRowsRead = iff(countif(isnotnull(customDimensions.sqlRowsRead)) == 0, real(null), todouble(sum(toint(customDimensions.sqlRowsRead))))",
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Fix Round 1: Kusto's sum() over an all-null column folds to 0, not null (the
+// opposite of SQL) — verified against live telemetry (RT0005 groups, which
+// never carry sqlExecutes/sqlRowsRead, summed to a real 0). An unguarded
+// sum(toint(...)) would hand asOptionalCount a real 0 for BC < v22.0 rows,
+// minting a false "confirmed zero SQL statements". The iff/countif guard
+// fixes that; these tests pin the guard is present, not just the bare sum().
+// ---------------------------------------------------------------------------
+
+describe("buildKqlQuery — RT0018 SQL counter null-safety guard (Fix Round 1)", () => {
+	it("both counters are guarded with countif(isnotnull(...)) == 0, not a bare sum()", () => {
+		const kql = buildKqlQuery(
+			"RT0018",
+			"2026-07-25T00:00:00.000Z",
+			undefined,
+			false,
+		);
+		const guardOccurrences = kql.match(/countif\(isnotnull\(/g) ?? [];
+		expect(guardOccurrences).toHaveLength(2);
+		expect(kql).toContain("countif(isnotnull(customDimensions.sqlExecutes))");
+		expect(kql).toContain("countif(isnotnull(customDimensions.sqlRowsRead))");
+		expect(kql).not.toContain("sqlExecutes = sum(toint(");
+		expect(kql).not.toContain("sqlRowsRead = sum(toint(");
+	});
+
+	it("the guard only fires when the counter is absent on EVERY row (== 0), so a group with partial presence still sums the present rows", () => {
+		const kql = buildKqlQuery(
+			"RT0018",
+			"2026-07-25T00:00:00.000Z",
+			undefined,
+			false,
+		);
+		// `== 0` means "the column was null on every row in the group" -- NOT
+		// e.g. "< count()", which would incorrectly null out a group where the
+		// counter is present on only SOME rows. Kusto's sum() already skips
+		// individual nulls within a non-empty set (same as SQL); only the
+		// ALL-null fold-to-0 case needs this guard, so a mixed-presence group
+		// falls through to the real sum() branch unaffected.
+		expect(kql).toContain(
+			"iff(countif(isnotnull(customDimensions.sqlExecutes)) == 0, real(null), todouble(sum(toint(customDimensions.sqlExecutes))))",
+		);
+		expect(kql).toContain(
+			"iff(countif(isnotnull(customDimensions.sqlRowsRead)) == 0, real(null), todouble(sum(toint(customDimensions.sqlRowsRead))))",
 		);
 	});
 });
@@ -169,11 +216,12 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 
 	// RT0005 and RT0018 diverge here (Task 8): RT0005 groups by stackTrace and
 	// has no SQL-counter aggregates; RT0018 keeps the any()-carried stackTrace
-	// and gains sqlExecutes/sqlRowsRead. Both share the Gate-0 duration fix
+	// and gains sqlExecutes/sqlRowsRead, guarded against Kusto's sum()-over-
+	// all-null == 0 behavior (Fix Round 1). Both share the Gate-0 duration fix
 	// (executionTime timespan, not the absent executionTimeInMs alias).
 	function expectedKql(signalId: string): string {
 		const isSqlSignal = signalId === "RT0005";
-		return [
+		const lines = [
 			"traces",
 			"| where timestamp > datetime(2026-01-01T08:00:00.000Z)",
 			`| where customDimensions.eventId == "${signalId}"`,
@@ -186,13 +234,21 @@ describe("pullTelemetry — non-split snapshot pin (telemetry-multitenant plan T
 			"         stackTrace = tostring(customDimensions.alStackTrace),",
 			"         clientType = tostring(customDimensions.clientType),",
 			"         ms = toreal(totimespan(customDimensions.executionTime)) / 10000",
-			isSqlSignal
-				? "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)"
-				: "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace), sqlExecutes = sum(toint(customDimensions.sqlExecutes)), sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
-			isSqlSignal
-				? "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType"
-				: "    by appId, appName, objectType, objectId, objectName, methodName, clientType",
-		].join("\n");
+		];
+		if (isSqlSignal) {
+			lines.push(
+				"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)",
+				"    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType",
+			);
+		} else {
+			lines.push(
+				"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace),",
+				"    sqlExecutes = iff(countif(isnotnull(customDimensions.sqlExecutes)) == 0, real(null), todouble(sum(toint(customDimensions.sqlExecutes)))),",
+				"    sqlRowsRead = iff(countif(isnotnull(customDimensions.sqlRowsRead)) == 0, real(null), todouble(sum(toint(customDimensions.sqlRowsRead))))",
+				"    by appId, appName, objectType, objectId, objectName, methodName, clientType",
+			);
+		}
+		return lines.join("\n");
 	}
 
 	it("generated KQL for both default signals is byte-identical to the pre-refactor shape", async () => {
