@@ -1153,6 +1153,16 @@ export async function pullTelemetrySplit(
 					unmatchedRows += attachEvidenceToSignals(acc.signals, statementRows);
 				}
 			}
+			// Fix Round 3: a statementsByGroupKey entry whose (aadTenantId,
+			// environmentName) key has NO signal group at all is never passed to
+			// attachEvidenceToSignals above — the loop only iterates
+			// groupsByKey — so those rows would otherwise go uncounted. This
+			// happens for real: an orphan tenant with statements but no signals,
+			// or an environmentName present on one query's rows but not the
+			// other's (the exact case this round exists to make visible).
+			for (const [key, statementRows] of statementsByGroupKey) {
+				if (!groupsByKey.has(key)) unmatchedRows += statementRows.length;
+			}
 			if (unmatchedRows > 0) {
 				console.error(
 					`pull-telemetry: ${unmatchedRows} RT0005 statement row(s) matched no signal (routine/clientType mismatch) — SQL evidence coverage may be incomplete`,

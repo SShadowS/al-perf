@@ -1755,6 +1755,118 @@ describe("pullTelemetrySplit — statement evidence join (behavior 7, Task 9)", 
 		);
 		expect(avail?.truncated).toBe(false);
 	});
+
+	// -------------------------------------------------------------------
+	// Fix Round 3 (IMPORTANT): in split mode, attachEvidenceToSignals only
+	// ever gets called for keys present in groupsByKey — a statement-row
+	// group whose (aadTenantId, environmentName) key has NO signal group at
+	// all is never passed in, so its rows were invisible to unmatchedRows
+	// too. Two constructed scenarios, both previously reporting
+	// unmatchedRows=0 while evidence was silently lost.
+	// -------------------------------------------------------------------
+
+	it("counts statement rows belonging to a tenant that produced no signals at all (orphan group)", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(
+					statementTableResponse([
+						makeStatementRow({
+							aadTenantId: TENANT_X,
+							environmentName: "PROD",
+							sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+						}),
+						// TENANT_Y has statement rows but no signal rows at all --
+						// no group is ever formed for it in groupsByKey.
+						makeStatementRow({
+							aadTenantId: TENANT_Y,
+							environmentName: "PROD",
+							sqlStatement: 'SELECT "b" FROM dbo."CRONUS$T2"',
+						}),
+						makeStatementRow({
+							aadTenantId: TENANT_Y,
+							environmentName: "PROD",
+							sqlStatement: 'SELECT "c" FROM dbo."CRONUS$T3"',
+						}),
+					]),
+				);
+			}
+			return okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+				]),
+			);
+		}) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0005"],
+				tenantMap: { [TENANT_X]: "tenant-a", [TENANT_Y]: "tenant-b" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(1); // only tenant-a has a signal group
+		const a = result.groups.find((g) => g.tenant === "tenant-a");
+		expect(a?.batch.signals[0]?.sqlEvidence?.statements[0]?.table).toBe(
+			"Sales Header",
+		);
+		const avail = a?.batch.signalAvailability?.find(
+			(x) => x.signalId === "RT0005 statements",
+		);
+		expect(avail?.rows).toBe(3);
+		expect(avail?.unmatchedRows).toBe(2); // tenant Y's 2 orphaned rows
+	});
+
+	it("counts a statement row whose environmentName differs from the signal query's row for the same tenant", async () => {
+		const fetchImpl = (async (url: string) => {
+			const decoded = decodeURIComponent(url);
+			if (decoded.includes("top-nested")) {
+				return okResponse(
+					statementTableResponse([
+						makeStatementRow({
+							aadTenantId: TENANT_X,
+							// Absent -> null, differs from the signal row's "PROD" below,
+							// so the two land in DIFFERENT split groups.
+							environmentName: "",
+							sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+						}),
+					]),
+				);
+			}
+			return okResponse(
+				splitPrimaryTableResponse([
+					makeSplitRow({ aadTenantId: TENANT_X, environmentName: "PROD" }),
+				]),
+			);
+		}) as typeof fetch;
+
+		const result = await pullTelemetrySplit(
+			{
+				appId: APP_ID,
+				signals: ["RT0005"],
+				tenantMap: { [TENANT_X]: "tenant-a" },
+				unmappedTenantPolicy: "skip",
+				fleetTenant: "fleet",
+			},
+			fetchImpl,
+		);
+
+		expect(result.groups).toHaveLength(1);
+		const a = result.groups[0];
+		// The groups genuinely never matched -- no evidence, correctly.
+		expect(a.batch.signals[0]?.sqlEvidence).toBeUndefined();
+		const avail = a.batch.signalAvailability?.find(
+			(x) => x.signalId === "RT0005 statements",
+		);
+		expect(avail?.rows).toBe(1);
+		// Before the fix this silently reported 0 -- exactly the case this
+		// round exists to make visible.
+		expect(avail?.unmatchedRows).toBe(1);
+	});
 });
 
 // ---------------------------------------------------------------------------
