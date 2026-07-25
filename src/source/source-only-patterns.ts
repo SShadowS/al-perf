@@ -11,6 +11,7 @@ import {
 	loopEvidencePhrase,
 	loopLocationPhrase,
 } from "./implicit-loop.js";
+import { isKnownNonRecordOp } from "./source-patterns.js";
 
 /**
  * Format a member label for use in involvedMethods arrays.
@@ -70,7 +71,10 @@ export function detectNestedLoops(index: SourceIndex): DetectedPattern[] {
  */
 export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 	const FIND_OPS = new Set(["FindSet", "FindFirst", "FindLast"]);
-	const FILTER_OPS = new Set(["SetRange", "SetFilter"]);
+	// SetView belongs here and SetCurrentKey does not: SetView applies a filter
+	// group (it is how a caller-supplied filter string reaches the record),
+	// while SetCurrentKey only picks the sort order and restricts nothing.
+	const FILTER_OPS = new Set(["SetRange", "SetFilter", "SetView"]);
 	const patterns: DetectedPattern[] = [];
 
 	for (const obj of index.objects.values()) {
@@ -96,6 +100,11 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 
 			for (const op of findOps) {
 				const varLower = op.recordVariable?.toLowerCase() ?? "";
+				// FIND_OPS matches method NAMES, and RecordRef has FindSet/
+				// FindFirst/FindLast too — its filters live on FieldRef, so
+				// "add SetRange" is the wrong API. Fails open on an unresolved
+				// receiver, so implicit Rec and object-level globals still report.
+				if (isKnownNonRecordOp(op, member.features.variables)) continue;
 				if (
 					varLower &&
 					!filteredVars.has(varLower) &&

@@ -225,6 +225,7 @@ export type RecordOpType =
 	| "SetLoadFields"
 	| "SetRange"
 	| "SetFilter"
+	| "SetView"
 	| "Reset"
 	| "Next"
 	| "Count"

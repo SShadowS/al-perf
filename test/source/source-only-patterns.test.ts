@@ -65,6 +65,38 @@ describe("detectUnfilteredFindSet", () => {
 		expect(falsePositive).toBeUndefined();
 	});
 
+	test("does not flag FindSet with preceding SetView", async () => {
+		// SetView applies a filter group the same way SetRange does — it is how
+		// a caller-supplied filter string reaches the record.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnfilteredFindSet(index);
+		const falsePositive = patterns.find((p) =>
+			p.involvedMethods.some((m) => m.includes("FilteredBySetView")),
+		);
+		expect(falsePositive).toBeUndefined();
+	});
+
+	test("does not flag a RecordRef find — its filters live on FieldRef", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnfilteredFindSet(index);
+		const falsePositive = patterns.find((p) =>
+			p.involvedMethods.some((m) =>
+				m.includes("RecordRefFindIsNotAnUnfilteredFindSet"),
+			),
+		);
+		expect(falsePositive).toBeUndefined();
+	});
+
+	test("still flags a FindSet preceded only by SetCurrentKey", async () => {
+		// SetCurrentKey picks the sort order and restricts nothing, so the read
+		// is still the whole table.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnfilteredFindSet(index).filter((p) =>
+			p.involvedMethods.some((m) => m.includes("SetCurrentKeyIsNotAFilter")),
+		);
+		expect(patterns).toHaveLength(1);
+	});
+
 	test("does not flag FindSet with preceding SetFilter", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectUnfilteredFindSet(index);
