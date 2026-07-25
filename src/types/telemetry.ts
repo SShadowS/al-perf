@@ -11,6 +11,22 @@ import type { TelemetrySqlEvidence } from "./patterns.js";
 /** The telemetry-batch schemaVersion this consumer is pinned to. */
 export const TELEMETRY_BATCH_SCHEMA_VERSION = 1;
 
+/**
+ * The statement-level RT0005 enrichment query's own availability/error label
+ * — distinct from the plain `"RT0005"` signalId the aggregate query reports
+ * under, so a `signalAvailability.find(a => a.signalId === "RT0005")` lookup
+ * can never silently pick up (or be shadowed by) the statement query's own
+ * outcome, and vice versa.
+ *
+ * Lives here, not in `src/lifecycle/appinsights.ts` (its origin and the only
+ * producer of it), so that consumers of the parsed wire contract — the
+ * parser (`src/core/telemetry-parser.ts`), the digest renderer
+ * (`src/lifecycle/digest.ts`) — depend on the wire-format module rather than
+ * the KQL/HTTP adapter. `appinsights.ts` re-exports it for its own call
+ * sites and any external importer that still reaches for it there.
+ */
+export const STATEMENT_QUERY_LABEL = "RT0005 statements";
+
 /** One aggregated signal row — already aggregated per routine by the adapter. */
 export interface TelemetrySignal {
 	/** BC telemetry event id, e.g. "RT0018", "RT0005". Unknown ids are accepted. */

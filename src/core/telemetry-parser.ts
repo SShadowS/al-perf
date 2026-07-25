@@ -7,7 +7,6 @@
 // synthesizing a stub `AnalysisResult` that `evaluateRun` (lifecycle/evaluate.ts)
 // can consume directly. The stub never reaches formatters.
 
-import { STATEMENT_QUERY_LABEL } from "../lifecycle/appinsights.js";
 import type { LifecycleConfig } from "../lifecycle/config.js";
 import {
 	computeTelemetryFingerprint,
@@ -22,6 +21,7 @@ import type {
 	TelemetrySqlStatementEvidence,
 } from "../types/patterns.js";
 import {
+	STATEMENT_QUERY_LABEL,
 	TELEMETRY_BATCH_SCHEMA_VERSION,
 	type TelemetryBatchDocument,
 	type TelemetrySignal,
@@ -761,10 +761,10 @@ export function parseTelemetryBatch(
 	// wants to see every query that failed, enrichment included.
 	//
 	// `failedSignalQueries` drives meta.incompleteInvocations below, and
-	// EXCLUDES the statement query (STATEMENT_QUERY_LABEL, imported from
-	// appinsights.ts — the producer's own constant, not a second copy of the
-	// literal, so a rename on one side can't silently break this gate). §9's
-	// incompleteness rule exists so a failed SIGNAL query cannot falsely
+	// EXCLUDES the statement query (STATEMENT_QUERY_LABEL, from
+	// types/telemetry.ts — the wire contract's own constant, not a second copy
+	// of the literal, so a rename on one side can't silently break this gate).
+	// §9's incompleteness rule exists so a failed SIGNAL query cannot falsely
 	// resolve findings — absent signal data means routines genuinely went
 	// unobserved. The statement query is enrichment: its failure does not
 	// mean those routines went unobserved, so letting it suppress the absence
