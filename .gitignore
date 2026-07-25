@@ -30,3 +30,10 @@ test/fixtures/batch-recorded/
 
 # Local secrets
 .env
+
+# Local scratch from AI-assisted sessions: multi-model review transcripts,
+# pi delegate state, run logs. These hold quoted source and demo SQL, so they
+# stay local — an accidental `git add -A` must not publish them.
+.panel/
+.pi/
+logs/
