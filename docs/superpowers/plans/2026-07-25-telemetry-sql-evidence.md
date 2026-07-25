@@ -339,8 +339,12 @@ and a test pinning that the collision is actually prevented:
 
 ```ts
 	test("a separator inside a field cannot collide two different routines", () => {
-		const a = telemetryRoutineKey("abc", "X|CodeUnit", 80, "Foo");
-		const b = telemetryRoutineKey("abc|X", "CodeUnit", 80, "Foo");
+		// Both object types are unrecognized by canonicalObjectType (so neither
+		// gets case-canonicalized) and both appIds are already lowercase (so
+		// normalizeAppGuid is a no-op) — otherwise those normalizers mask the
+		// collision and the test passes against a "|" join too, proving nothing.
+		const a = telemetryRoutineKey("abc", "x|customtype", 80, "OnRun");
+		const b = telemetryRoutineKey("abc|x", "customtype", 80, "OnRun");
 		expect(a).not.toBe(b);
 	});
 ```
