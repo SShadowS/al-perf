@@ -5,7 +5,12 @@ export interface AppBreakdown {
 	selfTimePercent: number;
 	totalTime: number;
 	nodeCount: number;
-	methods: string[];
+	/**
+	 * Deliberately NO `methods` list. Every consumer that ever wanted one
+	 * strips it: the MCP wrapper, the deep AI payload, and `mergeAppBreakdowns`
+	 * (which has always emitted `[]`). No formatter and no web UI ever read it.
+	 * `objectBreakdown[].methods` is the list that has real consumers.
+	 */
 }
 
 export interface ObjectBreakdown {

@@ -37,6 +37,19 @@ describe("aggregateByApp", () => {
 			expect(apps[i - 1].selfTime).toBeGreaterThanOrEqual(apps[i].selfTime);
 		}
 	});
+
+	test("carries totals only — no per-app method list", async () => {
+		// Nothing reads it: no formatter, no MCP tool (stripped), no deep AI
+		// payload (stripped), not the web UI, and the batch merge has always
+		// emitted `methods: []`. It is 79 KB of a 639 KB /api/analyze response
+		// on a captured profile, built by a linear `includes()` per node.
+		const processed = processProfile(
+			await parseProfile(`${FIXTURES}/sampling-minimal.alcpuprofile`),
+		);
+		for (const app of aggregateByApp(processed)) {
+			expect((app as Record<string, unknown>).methods).toBeUndefined();
+		}
+	});
 });
 
 describe("aggregateByMethod", () => {

@@ -359,7 +359,6 @@ function mergeAppBreakdowns(results: AnalysisResult[]): AppBreakdown[] {
 			...entry,
 			selfTimePercent:
 				totalSelfTime > 0 ? (entry.selfTime / totalSelfTime) * 100 : 0,
-			methods: [],
 		}))
 		.sort((a, b) => b.selfTime - a.selfTime);
 }

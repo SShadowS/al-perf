@@ -42,7 +42,6 @@ export function aggregateByApp(profile: ProcessedProfile): AppBreakdown[] {
 				selfTimePercent: 0,
 				totalTime: 0,
 				nodeCount: 0,
-				methods: [],
 			};
 			map.set(appName, entry);
 		}
@@ -50,11 +49,6 @@ export function aggregateByApp(profile: ProcessedProfile): AppBreakdown[] {
 		entry.selfTime += node.selfTime;
 		entry.totalTime += node.totalTime;
 		entry.nodeCount += 1;
-
-		const methodName = node.callFrame.functionName;
-		if (!entry.methods.includes(methodName)) {
-			entry.methods.push(methodName);
-		}
 	}
 
 	// Calculate percentages

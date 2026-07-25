@@ -174,17 +174,10 @@ export function buildDeepPayload(
 	// Always strip tableBreakdown from AI payload — adds noise without value
 	delete analysis.tableBreakdown;
 
-	// Same reasoning, larger: each appBreakdown row carries that app's FULL
-	// method list, which on a captured profile was 79,335 of the payload's
-	// 127,300 characters — 62%, roughly 20k tokens of method names billed on
-	// every --deep call and waded through by the model. The app rows' totals
-	// stay; the methods that matter are already in `hotspots`, bounded by
-	// `top`, with their times attached.
-	if (Array.isArray(analysis.appBreakdown)) {
-		analysis.appBreakdown = analysis.appBreakdown.map(
-			({ methods: _methods, ...rest }) => rest,
-		) as typeof analysis.appBreakdown;
-	}
+	// `appBreakdown[].methods` used to be stripped right here — each row
+	// carried that app's FULL method list, 79,335 of the payload's 127,300
+	// characters. `AppBreakdown` no longer has the field at all, so there is
+	// nothing left to strip.
 
 	const topMethods =
 		payloadConfig?.callTreeTop ?? config.deep.adjacencyTopMethods;
