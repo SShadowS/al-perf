@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import { relative } from "path";
-import type { Node as SyntaxNode } from "web-tree-sitter";
+import type { Node as SyntaxNode, Tree } from "web-tree-sitter";
 import type {
 	ALFileInfo,
 	DangerousCallInfo,
@@ -1414,6 +1414,27 @@ export async function indexALFile(
 
 	const sourceLines = source.split("\n");
 	const tree = await parseALSource(source);
+	try {
+		return indexParsedTree(tree, source, sourceLines, absolutePath, baseDir);
+	} finally {
+		// A web-tree-sitter Tree holds WASM heap memory that is released ONLY by
+		// an explicit delete(). Every parsed file leaked its tree, so the heap
+		// grew until it faulted: indexing a large workspace died with
+		// "Out of bounds memory access" and then Aborted() at roughly ten
+		// thousand files — well inside the size of a real BC solution with its
+		// dependencies. Nothing returned from here holds a SyntaxNode; the
+		// indexed structures carry line/column numbers and plain strings only.
+		tree.delete();
+	}
+}
+
+function indexParsedTree(
+	tree: Tree,
+	source: string,
+	sourceLines: string[],
+	absolutePath: string,
+	baseDir: string,
+): ObjectInfo | null {
 	const root = tree.rootNode;
 
 	const declNode = findObjectDeclaration(root);
@@ -1592,10 +1613,24 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
 		triggers: new Map(),
 		objects: new Map(),
 		eventCatalog: { publishers: [], subscribers: [] },
+		failedFiles: [],
 	};
 
 	for (const filePath of alFiles) {
-		const objectInfo = await indexALFile(filePath, dirPath);
+		// One unreadable or unparseable file must not cost the other ten
+		// thousand. A tree-sitter WASM fault propagates as a thrown
+		// RuntimeError, and without this the whole index was lost to it — the
+		// caller saw `Aborted()` and no results at all.
+		let objectInfo: ObjectInfo | null;
+		try {
+			objectInfo = await indexALFile(filePath, dirPath);
+		} catch (err) {
+			index.failedFiles.push({
+				path: relative(dirPath, filePath).replace(/\\/g, "/"),
+				reason: err instanceof Error ? err.message : String(err),
+			});
+			continue;
+		}
 		if (!objectInfo) continue;
 
 		index.files.push(objectInfo.file);

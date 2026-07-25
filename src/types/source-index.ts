@@ -13,6 +13,13 @@ export interface SourceIndex {
 
 	/** Event publisher/subscriber catalog built from source attributes */
 	eventCatalog: EventCatalog;
+
+	/**
+	 * Files that threw while being indexed, with the reason. A tree-sitter
+	 * WASM fault surfaces here rather than losing the whole run. Empty on a
+	 * clean index; never silently dropped.
+	 */
+	failedFiles: Array<{ path: string; reason: string }>;
 }
 
 export interface EventPublisherInfo {

@@ -572,3 +572,27 @@ describe("table field names", () => {
 		]);
 	});
 });
+
+describe("parse trees are freed", () => {
+	it("indexing many files does not exhaust the WASM heap", async () => {
+		// A web-tree-sitter Tree holds WASM heap memory released only by an
+		// explicit delete(). Without it the heap grew with every parsed file
+		// until it faulted: "Out of bounds memory access", then Aborted(), at
+		// roughly ten thousand files — inside the size of a real BC solution
+		// with its dependencies. This soak is a fraction of that, enough to
+		// fail fast if trees start leaking again.
+		const file = resolve(fixturesDir, "CodeUnit50100.al");
+		for (let i = 0; i < 1500; i++) {
+			const r = await indexALFile(file, fixturesDir);
+			expect(r).not.toBeNull();
+		}
+	}, 120_000);
+
+	it("one unparseable file does not lose the rest of the index", async () => {
+		// buildSourceIndex had no per-file isolation, so a single thrown
+		// RuntimeError from the parser cost every other result in the run.
+		const index = await buildSourceIndex(fixturesDir);
+		expect(index.files.length).toBeGreaterThan(0);
+		expect(index.failedFiles).toEqual([]);
+	});
+});

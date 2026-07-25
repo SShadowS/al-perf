@@ -12,6 +12,8 @@ import type { DetectedPattern } from "../../types/patterns.js";
 
 export interface SourceAnalysisResult {
 	files: number;
+	/** Files that threw while indexing — reported, never silently dropped. */
+	failedFiles?: Array<{ path: string; reason: string }>;
 	objects: Array<{
 		objectType: string;
 		objectName: string;
@@ -162,6 +164,9 @@ export function registerAnalyzeSourceCommand(program: Command) {
 
 			const result: SourceAnalysisResult = {
 				files: index.files.length,
+				...(index.failedFiles.length > 0
+					? { failedFiles: index.failedFiles }
+					: {}),
 				objects: objectSummaries,
 				findings: allFindings,
 				tableClusters,

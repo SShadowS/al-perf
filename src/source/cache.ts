@@ -133,6 +133,9 @@ function deserializeIndex(serialized: SerializedIndex): SourceIndex {
 		objects: new Map(serialized.objects),
 		procedures: new Map(serialized.procedures),
 		triggers: new Map(serialized.triggers),
+		// A cached index was written from a successful run; failures are a
+		// property of the run, not of the cache.
+		failedFiles: [],
 		eventCatalog: serialized.eventCatalog ?? {
 			publishers: [],
 			subscribers: [],
