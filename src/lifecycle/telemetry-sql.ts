@@ -49,7 +49,7 @@ export function parseAlStackFrame(stack: string): string | null {
  * is that RT0005 statements must also annotate the RT0018 finding for the same
  * routine.
  *
- * The separator is the ASCII unit separator (U+001F), the same as fingerprint.ts:237,
+ * The separator is the ASCII unit separator (`\u001f`), the same as fingerprint.ts:237,
  * to prevent field-boundary collisions (see test regression for pipe-collision).
  */
 export function telemetryRoutineKey(
@@ -63,5 +63,5 @@ export function telemetryRoutineKey(
 		canonicalObjectType(objectType),
 		String(objectId),
 		normalizeTriggerName(methodName).toLowerCase(),
-	].join("");
+	].join("\u001f");
 }

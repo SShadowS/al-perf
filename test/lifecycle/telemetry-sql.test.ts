@@ -91,12 +91,15 @@ describe("telemetryRoutineKey", () => {
 
 	test("regression: unit separator prevents pipe-based collisions", () => {
 		// If the separator were `"|"`, these two genuinely different routines
-		// would collide: the first has objectType="X|Codeunit", the second has
-		// appId="...X" and objectType="Codeunit". The unit separator ()
+		// would collide: routine1 has objectType="x|customtype", routine2 has
+		// appId="abc|x" and objectType="customtype". Both types are unrecognized
+		// by canonicalObjectType, so they pass through unchanged; both appIds
+		// are lowercase, so normalizeAppGuid is a no-op. Under `"|"` join, both
+		// produce "abc|x|customtype|80|onrun". The unit separator ("\u001f")
 		// cannot occur in AL identifiers, GUIDs, or paths, so field boundaries
-		// are preserved.
-		const routine1 = telemetryRoutineKey("abc", "X|Codeunit", 80, "OnRun");
-		const routine2 = telemetryRoutineKey("abc|X", "Codeunit", 80, "OnRun");
+		// are preserved and they produce different keys.
+		const routine1 = telemetryRoutineKey("abc", "x|customtype", 80, "OnRun");
+		const routine2 = telemetryRoutineKey("abc|x", "customtype", 80, "OnRun");
 		expect(routine1).not.toBe(routine2);
 	});
 });
