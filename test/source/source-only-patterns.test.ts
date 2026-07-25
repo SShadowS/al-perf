@@ -320,6 +320,38 @@ describe("external-call-in-loop", () => {
 		expect(patterns).toHaveLength(4);
 	});
 
+	test("rates a Sleep in a retry-backoff loop as info, not critical", async () => {
+		// `repeat ... until Success or (RetryCount >= MaxRetries)` terminates on
+		// a predicate, not on running out of rows. The delay is deliberate.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const f = detectExternalCallInLoop(index).find((p) =>
+			p.involvedMethods.some((m) => m.includes("SleepInRetryBackoff")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.severity).toBe("info");
+		expect(f!.suggestion).not.toMatch(/remove sleep/i);
+	});
+
+	test("rates a Sleep in a while-condition throttle as info", async () => {
+		const index = await buildSourceIndex("test/fixtures/source");
+		const f = detectExternalCallInLoop(index).find((p) =>
+			p.involvedMethods.some((m) => m.includes("SleepInThrottleLoop")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.severity).toBe("info");
+	});
+
+	test("keeps critical for a Sleep in a data-driven loop", async () => {
+		// `for i := 1 to 10` is bounded by data, not by a condition the body is
+		// waiting on — the delay really does multiply by the iteration count.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const f = detectExternalCallInLoop(index).find((p) =>
+			p.involvedMethods.some((m) => m.includes("SleepInLoop")),
+		);
+		expect(f).toBeDefined();
+		expect(f!.severity).toBe("critical");
+	});
+
 	test("flags a bare Sleep() inside a loop", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectExternalCallInLoop(index);

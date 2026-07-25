@@ -1,5 +1,5 @@
 import { sortPatterns } from "../core/patterns.js";
-import type { DetectedPattern } from "../types/patterns.js";
+import type { DetectedPattern, PatternSeverity } from "../types/patterns.js";
 import type {
 	ObjectInfo,
 	ProcedureInfo,
@@ -267,6 +267,49 @@ export function detectDangerousCallsInLoop(
  * deferred, pinned by a negative test (see indexer.ts's `buildVariableTypeMap`
  * doc comment and CLAUDE.md).
  */
+/**
+ * Whether the loop enclosing `line` terminates on the DATA running out rather
+ * than on a condition the body is waiting to change.
+ *
+ * `for`/`foreach` are bounded by a range or collection, and a `repeat` that
+ * ends on `X.Next() = 0` is walking a record set — a delay inside any of them
+ * really does multiply by the row count. A `while <predicate>` (or a `repeat`
+ * ending on a predicate: `until Success or (RetryCount >= MaxRetries)`) is a
+ * WAIT loop: it spins until something changes, and the delay is the mechanism
+ * rather than a per-row cost. Telling that author to hoist the Sleep out
+ * deletes their backoff or their throttle.
+ *
+ * An implicit loop (a per-row trigger, no syntactic loop at all) counts as
+ * data-driven: the platform runs it once per row by contract.
+ */
+function isDataDrivenLoopAt(
+	member: ProcedureInfo | TriggerInfo,
+	line: number,
+): boolean {
+	let innermost:
+		| { lineStart: number; lineEnd: number; type: string }
+		| undefined;
+	for (const loop of member.features.loops) {
+		if (line < loop.lineStart || line > loop.lineEnd) continue;
+		if (
+			innermost === undefined ||
+			loop.lineEnd - loop.lineStart < innermost.lineEnd - innermost.lineStart
+		) {
+			innermost = loop;
+		}
+	}
+	if (innermost === undefined) return true; // implicit (per-row trigger) loop
+	if (innermost.type === "for" || innermost.type === "foreach") return true;
+	if (innermost.type === "while") return false;
+	// repeat: data-driven only when it is walking a record set.
+	return member.features.recordOps.some(
+		(op) =>
+			op.type === "Next" &&
+			op.line >= innermost.lineStart &&
+			op.line <= innermost.lineEnd,
+	);
+}
+
 export function detectExternalCallInLoop(
 	index: SourceIndex,
 ): DetectedPattern[] {
@@ -277,23 +320,33 @@ export function detectExternalCallInLoop(
 		for (const member of members) {
 			for (const call of member.features.externalCallsInLoops) {
 				if (!call.insideLoop) continue;
-				const severity = downgradePageImplicitLoop("critical", call);
-				const costPhrase =
-					call.type === "Sleep"
+				// A Sleep in a wait loop IS the wait — see isDataDrivenLoopAt.
+				// Still reported, so the delay stays visible, but at info: the
+				// critical rating and the "remove it" advice are both wrong for
+				// a backoff or a throttle.
+				const isDeliberateWait =
+					call.type === "Sleep" && !isDataDrivenLoopAt(member, call.line);
+				const severity: PatternSeverity = isDeliberateWait
+					? "info"
+					: downgradePageImplicitLoop("critical", call);
+				const costPhrase = isDeliberateWait
+					? "The loop terminates on a condition rather than on running out of rows, so this delay is a deliberate wait — a backoff or a throttle — not a per-row cost"
+					: call.type === "Sleep"
 						? "Each iteration blocks for the full delay, multiplying total run time by the iteration count"
 						: "Each iteration is a separate network round-trip";
 				patterns.push({
 					id: "external-call-in-loop",
 					severity,
 					title: `${call.type}() inside loop in ${member.name}`,
-					description: `${call.type}() ${loopLocationPhrase(call, call.line, member.file)} in ${obj.objectType} ${obj.objectName} (${obj.objectId}). ${costPhrase} — latency dominates everything else in the profile.`,
+					description: `${call.type}() ${loopLocationPhrase(call, call.line, member.file)} in ${obj.objectType} ${obj.objectName} (${obj.objectId}). ${costPhrase}${isDeliberateWait ? "." : " — latency dominates everything else in the profile."}`,
 					impact: 0,
 					involvedMethods: [
 						`${member.name} (${obj.objectType} ${obj.objectId})`,
 					],
 					evidence: `${call.type}() at line ${call.line}, column ${call.column} — ${loopEvidencePhrase(call)}`,
-					suggestion:
-						call.type === "Sleep"
+					suggestion: isDeliberateWait
+						? "Confirm the wait is bounded — an unbounded retry or throttle loop can block a session indefinitely. If it is bounded, nothing needs changing here."
+						: call.type === "Sleep"
 							? "Remove Sleep() from the loop, or hoist it outside — a fixed delay per iteration multiplies directly by the iteration count."
 							: "Hoist the call outside the loop, or batch the payload into a single request — N iterations means N round-trips, and network latency dominates everything else in the profile.",
 				});

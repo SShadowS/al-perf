@@ -116,4 +116,41 @@ codeunit 50300 "Dangerous Patterns"
         for i := 1 to 10 do
             Client.Constructor();
     end;
+
+    procedure SleepInRetryBackoff(): Boolean
+    var
+        RetryCount: Integer;
+        MaxRetries: Integer;
+        Success: Boolean;
+    begin
+        // A repeat whose exit condition is a predicate rather than
+        // `X.Next() = 0` is a WAIT loop: it spins until something changes and
+        // the delay is the mechanism, not a per-row cost. Telling the author
+        // to hoist this Sleep out of the loop removes the backoff.
+        MaxRetries := 3;
+        repeat
+            RetryCount += 1;
+            Success := SendWithRetry();
+            if (not Success) and (RetryCount < MaxRetries) then
+                Sleep(1000 * RetryCount);
+        until Success or (RetryCount >= MaxRetries);
+        exit(Success);
+    end;
+
+    procedure SleepInThrottleLoop()
+    var
+        Customer: Record Customer;
+    begin
+        // Same class, other spelling: a `while <condition>` throttle that waits
+        // for a rate window to clear.
+        while Customer.Count >= 10 do begin
+            Customer.SetFilter("Date Filter", '>=%1', 0D);
+            Sleep(5000);
+        end;
+    end;
+
+    local procedure SendWithRetry(): Boolean
+    begin
+        exit(true);
+    end;
 }
