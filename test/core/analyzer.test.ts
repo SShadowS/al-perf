@@ -591,3 +591,31 @@ describe("healthScore — repetition of one pattern is one problem", () => {
 		);
 	});
 });
+
+describe("summary one-liner must not carry raw SQL or customer names", () => {
+	test("a SQL-node top method is named by operation and table", async () => {
+		// summary.oneLiner leads every output format — terminal, markdown, HTML,
+		// JSON, and the MCP analyze_profile response. When the hottest method is
+		// a SQL node, its functionName IS the statement, so the headline of the
+		// whole report was 1,000+ characters of SQL containing
+		// dbo."CRONUS Danmark A_S$Matched Order Line$...". That is the customer's
+		// company name in the first line a reader sees and copies.
+		const result = await analyzeProfile(
+			"test/fixtures/batch-recorded/profile-3.alcpuprofile",
+		);
+		const line = result.summary.oneLiner;
+
+		expect(line).not.toContain("CRONUS");
+		expect(line).not.toContain("dbo.");
+		expect(line).not.toMatch(/SELECT .*FROM/i);
+		// A "one-liner" should read as one line.
+		expect(line.length).toBeLessThan(160);
+	});
+
+	test("a normal method still names the method", async () => {
+		const result = await analyzeProfile(
+			"test/fixtures/sampling-minimal.alcpuprofile",
+		);
+		expect(result.summary.oneLiner).toMatch(/profile,/);
+	});
+});

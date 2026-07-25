@@ -41,7 +41,7 @@ import { parseProfile } from "./parser.js";
 // Re-exported for callers (e.g. tests) that previously imported normalizeAppGuid from analyzer.
 export { normalizeAppGuid };
 
-import { runDetectors, sortPatterns } from "./patterns.js";
+import { displaySqlName, runDetectors, sortPatterns } from "./patterns.js";
 import { isIdleNode, processProfile } from "./processor.js";
 import { buildTableBreakdown } from "./table-view.js";
 import { annotateEstimatedSavings } from "./what-if.js";
@@ -395,7 +395,9 @@ export async function analyzeProfile(
 	const topMethod =
 		nonIdleMethods.length > 0 && nonIdleMethods[0].selfTimePercent > 0
 			? {
-					name: nonIdleMethods[0].functionName,
+					// Redacted: when the hottest method is a SQL node its name IS the
+					// statement, and this leads every output format.
+					name: displaySqlName(nonIdleMethods[0].functionName),
 					object: `${nonIdleMethods[0].objectType} ${nonIdleMethods[0].objectId}`,
 					percent: parseFloat(nonIdleMethods[0].selfTimePercent.toFixed(1)),
 				}

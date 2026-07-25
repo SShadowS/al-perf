@@ -4,7 +4,11 @@ import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import { aggregateByMethod } from "./aggregator.js";
 import { isSqlStatement } from "./display-utils.js";
 import { isIdleNode } from "./processor.js";
-import { classifySqlOperation, isSqlNode, parseSqlTable } from "./sql-node.js";
+import {
+	classifySqlOperation,
+	isSqlFunctionName,
+	parseSqlTable,
+} from "./sql-node.js";
 
 /**
  * A node's name as it may appear in HUMAN-FACING finding text — title,
@@ -29,13 +33,22 @@ import { classifySqlOperation, isSqlNode, parseSqlTable } from "./sql-node.js";
  * severity, state, patternId, fingerprint, appName and evidence only.
  */
 export function displayFunctionName(node: ProcessedNode): string {
-	const name = node.callFrame.functionName;
+	return displaySqlName(node.callFrame.functionName);
+}
+
+/**
+ * The same redaction keyed off a function NAME alone, for callers holding an
+ * aggregated `MethodBreakdown` rather than a `ProcessedNode` — the summary
+ * one-liner, which leads every output format and every MCP analyze_profile
+ * response.
+ */
+export function displaySqlName(name: string): string {
 	// Deliberately the BROADER of the codebase's two SQL recognizers.
 	// `isSqlNode` matches SELECT/INSERT/UPDATE/DELETE/MERGE only, and BC also
 	// emits `IF EXISTS(SELECT ...)`, `EXEC ...` and `BEGIN ...` nodes — one of
 	// which slipped through this guard carrying a company-qualified table.
 	// Redaction must be gated on the widest recognizer, not the narrowest.
-	if (!isSqlStatement(name) && !isSqlNode(node)) return name;
+	if (!isSqlStatement(name) && !isSqlFunctionName(name)) return name;
 	const { table } = parseSqlTable(name);
 	const operation = classifySqlOperation(name);
 	// `classifySqlOperation` returns OTHER for the forms it has no case for;
