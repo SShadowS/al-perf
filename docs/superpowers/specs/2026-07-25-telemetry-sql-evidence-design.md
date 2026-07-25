@@ -487,6 +487,36 @@ dimension Gate 0 finds missing on a given tenant.
 - Overlapping pull windows (a cron shorter than `--since`, default `1h`, `appinsights.ts:36`)
   re-observe the same statements. This already affects `count` today; evidence makes it more visible.
 
+## 14. Follow-ups left open at implementation (2026-07-25)
+
+The layer shipped on 2026-07-25 (65 commits, merged to local master at `45978c4`).
+Three things were deliberately deferred, with rulings, and none blocks use:
+
+1. **`signalAvailability` is not persisted, so `lifecycle digest` cannot render it.**
+   §9 says the array "stays on the batch for the CLI, JSON and the digest"; the
+   digest option exists, is tested, and no caller populates it, because
+   availability is per-pull while `digest` reads the store. Closing it needs a
+   per-tenant snapshot in the store plus a write path in the ingest/evaluate path
+   and a read in the digest command — a schema change, out of the implementation
+   plan's scope. **§9 is not complete until this lands.** Availability is visible
+   today in the pull command's output and in a finding's evidence text.
+2. **Two redaction residuals leak a server or database name**, both requiring a
+   cross-database or linked-server reference in a non-first table position: a
+   joiner carrying two or more bare words (`server.MyDb.dbo."T"`), and a fully
+   bare qualifier (`mydb.dbo."T"`, structurally invisible because only quoted
+   ident tokens are dropped). BC reaches each tenant database over its own
+   connection and emits the two-part `dbo."COMPANY$Table"` form, so its runtime
+   cannot produce either for tenant data. The second closes with one added guard
+   at the leftover scan (fail closed on two or more bare segments before a quoted
+   name). A third residual of the same class — a quoted identifier that is
+   customer data but carries no `$` — is documented at `redactSqlForSink`, along
+   with the invariant the redactor actually relies on.
+3. **Smaller carries:** the adapter can emit a `clientType` the parser's
+   `^[A-Za-z]+$` rejects, costing the whole window on one bad row (pre-existing,
+   not observed on measured data); and the non-split statement tests use the
+   split-mode column fixture, which is the same shape-fidelity assumption that
+   produced the NaN defect during implementation.
+
 ## 14. Risks
 
 - **Gate 0 invalidates part of the design.** If `alStackTrace` has no parseable frame grammar on real
