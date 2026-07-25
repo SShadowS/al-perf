@@ -1034,6 +1034,57 @@ describe("responsibility 9: SQL evidence on patterns (Task 10)", () => {
 		);
 	});
 
+	// Fix Round 1 (CRITICAL): the test above manufactures an empty sqlEvidence
+	// object to force the note-attachment gate open, which never exercises the
+	// REAL shape a statement-query failure produces. attachEvidenceToSignals
+	// (telemetry-sql.ts) only sets `signal.sqlEvidence` when at least one
+	// statement row matched — so when the statement query itself fails, no
+	// rows exist and sqlEvidence stays undefined on every signal in the
+	// window. The note must still surface in that case, or a failed query is
+	// silently indistinguishable from "no slow SQL" in the persisted string.
+	test("a failed RT0005 statements query surfaces its note even when the signal carries no sqlEvidence at all (the real no-match shape)", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "timeout",
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns[0]?.sqlEvidence).toBeUndefined();
+		expect(parsed.result.patterns[0]?.evidence).toContain(
+			"RT0005 statements (timeout)",
+		);
+	});
+
+	test("a merged pattern surfaces the failed-query note even when no constituent carries sqlEvidence", () => {
+		const doc = batch(
+			[
+				signal({ signalId: "RT0005", clientType: "Background" }),
+				signal({ signalId: "RT0005", clientType: "WebClient" }),
+			],
+			{
+				signalAvailability: [
+					{
+						signalId: "RT0005 statements",
+						queried: true,
+						rows: 0,
+						error: "timeout",
+					},
+				],
+			},
+		);
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		expect(parsed.result.patterns).toHaveLength(1); // same fingerprint merge
+		expect(parsed.result.patterns[0]?.sqlEvidence).toBeUndefined();
+		expect(parsed.result.patterns[0]?.evidence).toContain(
+			"RT0005 statements (timeout)",
+		);
+	});
+
 	// Load-bearing (brief point 2): rows/unmatchedRows are pull-wide, not
 	// per-tenant, and must never be rendered as tenant-specific counts.
 	test("rows and unmatchedRows never appear in the evidence note (pull-wide, not per-tenant)", () => {

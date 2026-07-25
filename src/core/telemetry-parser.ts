@@ -7,6 +7,7 @@
 // synthesizing a stub `AnalysisResult` that `evaluateRun` (lifecycle/evaluate.ts)
 // can consume directly. The stub never reaches formatters.
 
+import { STATEMENT_QUERY_LABEL } from "../lifecycle/appinsights.js";
 import type { LifecycleConfig } from "../lifecycle/config.js";
 import {
 	computeTelemetryFingerprint,
@@ -530,6 +531,16 @@ function buildSinglePattern(
 	if (counts) extras.push(counts);
 	if (s.sqlEvidence) {
 		extras.push(renderEvidenceSqlBlock(s.sqlEvidence, availabilityNote));
+	} else if (availabilityNote) {
+		// No evidence to attach the note to, but a failed query still needs to
+		// say so: §9 requires a finding may claim "no slow SQL" only when the
+		// signal was queried without error — otherwise it must name the actual
+		// reason. Without this branch, a statement-query failure (which leaves
+		// sqlEvidence undefined on every signal in the window, since
+		// attachEvidenceToSignals only sets it when a row actually matched)
+		// would drop the note entirely, and meta.incompleteInvocations never
+		// reaches an issue body.
+		extras.push(availabilityNote);
 	}
 
 	return {
@@ -659,6 +670,12 @@ function buildMergedPattern(
 	const mergedSqlEvidence = mergeEvidence(group);
 	if (mergedSqlEvidence) {
 		extras.push(renderEvidenceSqlBlock(mergedSqlEvidence, availabilityNote));
+	} else if (availabilityNote) {
+		// Same rationale as buildSinglePattern: no merged evidence to attach the
+		// note to (e.g. the statement query failed, so no constituent carries
+		// sqlEvidence), but a failed query must still say so somewhere in the
+		// persisted string.
+		extras.push(availabilityNote);
 	}
 
 	return {
@@ -744,19 +761,20 @@ export function parseTelemetryBatch(
 	// wants to see every query that failed, enrichment included.
 	//
 	// `failedSignalQueries` drives meta.incompleteInvocations below, and
-	// EXCLUDES the statement query (STATEMENT_LABEL). §9's incompleteness
-	// rule exists so a failed SIGNAL query cannot falsely resolve findings —
-	// absent signal data means routines genuinely went unobserved. The
-	// statement query is enrichment: its failure does not mean those routines
-	// went unobserved, so letting it suppress the absence pass would
-	// needlessly delay resolving findings that are actually fixed. Do not
-	// collapse these two sets back together.
-	const STATEMENT_LABEL = "RT0005 statements";
+	// EXCLUDES the statement query (STATEMENT_QUERY_LABEL, imported from
+	// appinsights.ts — the producer's own constant, not a second copy of the
+	// literal, so a rename on one side can't silently break this gate). §9's
+	// incompleteness rule exists so a failed SIGNAL query cannot falsely
+	// resolve findings — absent signal data means routines genuinely went
+	// unobserved. The statement query is enrichment: its failure does not
+	// mean those routines went unobserved, so letting it suppress the absence
+	// pass would needlessly delay resolving findings that are actually
+	// fixed. Do not collapse these two sets back together.
 	const failedSignals = (signalAvailability ?? []).filter(
 		(a) => a.error !== undefined,
 	);
 	const failedSignalQueries = failedSignals.filter(
-		(a) => a.signalId !== STATEMENT_LABEL,
+		(a) => a.signalId !== STATEMENT_QUERY_LABEL,
 	);
 	// Note text: signalId + error only. Never rows/unmatchedRows — those two
 	// integers are PULL-WIDE (every group emitted from one pull carries the

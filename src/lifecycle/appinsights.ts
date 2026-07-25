@@ -53,8 +53,13 @@ const SIGNAL_ID_RE = /^[A-Za-z0-9_]+$/;
  * statement query's own outcome, and vice versa. Reused as both the
  * runKqlQuery error-message label and the signalAvailability entry's
  * signalId, so the two always agree.
+ *
+ * Exported (Task 10, Fix Round 1) so telemetry-parser.ts's incompleteness
+ * gating imports this SAME constant instead of carrying its own copy of the
+ * literal — a rename here previously could silently break that gate with no
+ * test failure on either side.
  */
-const STATEMENT_QUERY_LABEL = "RT0005 statements";
+export const STATEMENT_QUERY_LABEL = "RT0005 statements";
 
 /**
  * The App Insights v1 Analytics REST API (`/v1/apps/{id}/query`, used here)
