@@ -30,7 +30,11 @@ import {
 	loadLifecycleConfigFile,
 	mergeLifecycleConfig,
 } from "../../lifecycle/config-file.js";
-import { buildDigest, renderDigestMarkdown } from "../../lifecycle/digest.js";
+import {
+	buildDigest,
+	type DigestOptions,
+	renderDigestMarkdown,
+} from "../../lifecycle/digest.js";
 import {
 	applyIdentityUpgrades,
 	type EvaluationOutcome,
@@ -845,6 +849,15 @@ export function createLifecycleCommand(): Command {
 						claimTtlMinutes: lifecycleConfig.captureRequests.claimTtlMinutes,
 						maxPending: lifecycleConfig.captureRequests.maxPending,
 					},
+					// Signal health is stored per tenant, so there is nothing
+					// coherent to report without one: a fleet-wide digest would
+					// have to merge snapshots from different pull windows.
+					signalAvailability:
+						tenant === undefined
+							? undefined
+							: (store.getSignalAvailability(
+									tenant,
+								) as DigestOptions["signalAvailability"]),
 				});
 				process.stdout.write(
 					opts.format === "json"

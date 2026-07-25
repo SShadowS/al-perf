@@ -471,13 +471,26 @@ function logicalIdentifier(raw: string): string | null {
  * changing anything below:** customer identity only ever appears inside a
  * `$`-bearing identifier (`Company$Table[$guid]`, stripped by
  * `logicalIdentifier`) or a string literal (blanked). Every code path here
- * assumes that. **Known residual:** a quoted identifier that IS customer
- * data but carries no `$` — e.g. a table alias `AS "CRONUS Danmark A_S"` —
- * survives verbatim; BC generates aliases as object-id numbers in practice,
- * so this is not load-bearing today, but it IS a hole in the invariant
- * above, not covered by it. If BC ever emits a customer-derived, `$`-free
- * quoted identifier anywhere in RT0005 statement text, this function does
- * not catch it.
+ * assumes that.
+ *
+ * **Closed since:** a bare multi-part qualifier (`mydb.dbo."T"`,
+ * `srv.mydb.dbo."T"`) used to carry a database or linked-server name past
+ * both leftover scans in any non-first table position — a join's or a
+ * subquery's reference, which no cross-check looks at. Two or more bare
+ * segments before a quoted name now fail the whole statement closed.
+ *
+ * **Known residual:** a quoted identifier that IS customer data but carries
+ * no `$` — e.g. a table alias `AS "CRONUS Danmark A_S"` — survives verbatim.
+ * It IS a hole in the invariant above, not covered by it. Measured against
+ * the captured BC SQL in this repo's fixtures: zero `AS "..."` alias forms
+ * appear at all, and the company name shows up only inside `$`-bearing
+ * identifiers (`dbo."CRONUS Danmark A_S$Sales Header"`), which
+ * `logicalIdentifier` strips. Deliberately not closed: no discriminator
+ * separates a customer-derived quoted name from a legitimate one (BC field
+ * names carry spaces too), and blanking alias identifiers would leave every
+ * `alias."column"` reference in the statement dangling. If BC ever emits a
+ * customer-derived, `$`-free quoted identifier in RT0005 statement text,
+ * this function does not catch it.
  */
 export function redactSqlForSink(sql: string): RedactedStatement | null {
 	const result = tokenize(sql);

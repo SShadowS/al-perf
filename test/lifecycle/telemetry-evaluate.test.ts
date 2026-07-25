@@ -18,6 +18,11 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LifecycleConfig } from "../../src/lifecycle/config.js";
+import {
+	buildDigest,
+	type DigestOptions,
+	renderDigestMarkdown,
+} from "../../src/lifecycle/digest.js";
 import { evaluateRun, type RunMetadata } from "../../src/lifecycle/evaluate.js";
 import { processEventsForSinks } from "../../src/lifecycle/sinks/triggers.js";
 import type { LifecycleSinksConfig } from "../../src/lifecycle/sinks/types.js";
@@ -412,5 +417,166 @@ describe("evaluateTelemetryBatch — sink-path SQL evidence redaction pin (F8)",
 		expect(details).not.toContain(database);
 		expect(details).not.toContain("```"); // plain text only — §8
 		store.close();
+	});
+});
+
+describe("signalAvailability persistence (spec §9)", () => {
+	const AVAIL = [
+		{ signalId: "RT0018", queried: true, rows: 120, unmatchedRows: 0 },
+		{
+			signalId: "RT0005 statements",
+			queried: true,
+			rows: 0,
+			unmatchedRows: 0,
+			error: "query timed out",
+		},
+		{
+			signalId: "RT0005",
+			queried: true,
+			rows: 90,
+			unmatchedRows: 3,
+			truncated: true,
+		},
+	];
+
+	test("a telemetry pull records its availability for the tenant", () => {
+		const store = new LifecycleStore(":memory:");
+		try {
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], { signalAvailability: AVAIL }),
+				runArgs("batch-avail-1"),
+			);
+			expect(store.getSignalAvailability("t1")).toEqual(AVAIL);
+		} finally {
+			store.close();
+		}
+	});
+
+	test("a later window replaces an earlier one", () => {
+		const store = new LifecycleStore(":memory:");
+		try {
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], { signalAvailability: AVAIL }),
+				runArgs("batch-avail-a"),
+			);
+			const later = [
+				{ signalId: "RT0018", queried: true, rows: 5, unmatchedRows: 0 },
+			];
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], {
+					signalAvailability: later,
+					windowEnd: "2026-07-11T02:00:00.000Z",
+				}),
+				runArgs("batch-avail-b"),
+			);
+			expect(store.getSignalAvailability("t1")).toEqual(later);
+		} finally {
+			store.close();
+		}
+	});
+
+	test("an out-of-order (older) pull does not clobber the newest availability", () => {
+		// Pulls are cron-driven and can land out of order. The digest must
+		// describe the most recent window, not whichever batch arrived last.
+		const store = new LifecycleStore(":memory:");
+		try {
+			const newest = [
+				{ signalId: "RT0018", queried: true, rows: 7, unmatchedRows: 0 },
+			];
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], {
+					signalAvailability: newest,
+					windowEnd: "2026-07-11T05:00:00.000Z",
+				}),
+				runArgs("batch-avail-new"),
+			);
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], {
+					signalAvailability: AVAIL,
+					windowEnd: "2026-07-11T01:00:00.000Z",
+				}),
+				runArgs("batch-avail-old"),
+			);
+			expect(store.getSignalAvailability("t1")).toEqual(newest);
+		} finally {
+			store.close();
+		}
+	});
+
+	test("tenants are isolated, and a tenant with no pull has none", () => {
+		const store = new LifecycleStore(":memory:");
+		try {
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], { signalAvailability: AVAIL }),
+				runArgs("batch-avail-iso"),
+			);
+			expect(store.getSignalAvailability("other")).toBeUndefined();
+		} finally {
+			store.close();
+		}
+	});
+
+	test("a batch carrying no availability leaves the last known one alone", () => {
+		// A pull that reports nothing is not evidence the signals became
+		// healthy — it is a producer that does not emit the field.
+		const store = new LifecycleStore(":memory:");
+		try {
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], { signalAvailability: AVAIL }),
+				runArgs("batch-avail-keep-1"),
+			);
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], { windowEnd: "2026-07-11T03:00:00.000Z" }),
+				runArgs("batch-avail-keep-2"),
+			);
+			expect(store.getSignalAvailability("t1")).toEqual(AVAIL);
+		} finally {
+			store.close();
+		}
+	});
+});
+
+describe("signalAvailability reaches the digest (spec §9 end to end)", () => {
+	test("a failed signal recorded by a pull renders in that tenant's digest", () => {
+		// The whole point of persisting it: buildDigest reads the STORE, while
+		// availability is a per-pull fact. Before this, DigestOptions.
+		// signalAvailability existed and was tested, but no caller ever
+		// populated it, so the section could never render in practice.
+		const store = new LifecycleStore(":memory:");
+		try {
+			evaluateTelemetryBatch(
+				store,
+				batch([signal()], {
+					signalAvailability: [
+						{
+							signalId: "RT0005",
+							queried: true,
+							rows: 0,
+							error: "query timed out",
+						},
+					],
+				}),
+				runArgs("batch-digest-1"),
+			);
+			const digest = buildDigest(store, {
+				tenant: "t1",
+				signalAvailability: store.getSignalAvailability(
+					"t1",
+				) as DigestOptions["signalAvailability"],
+			});
+			expect(digest.unavailable).toHaveLength(1);
+			expect(digest.unavailable[0].signalId).toBe("RT0005");
+			expect(renderDigestMarkdown(digest)).toMatch(/unavailable/i);
+		} finally {
+			store.close();
+		}
 	});
 });

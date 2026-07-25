@@ -490,32 +490,48 @@ dimension Gate 0 finds missing on a given tenant.
 ## 14. Follow-ups left open at implementation (2026-07-25)
 
 The layer shipped on 2026-07-25 (65 commits, merged to local master at `45978c4`).
-Three things were deliberately deferred, with rulings, and none blocks use:
+Three things were deliberately deferred, with rulings, and none blocked use.
+**All three were closed later the same day**; the original rulings are kept below
+with their resolutions.
 
-1. **`signalAvailability` is not persisted, so `lifecycle digest` cannot render it.**
-   §9 says the array "stays on the batch for the CLI, JSON and the digest"; the
-   digest option exists, is tested, and no caller populates it, because
-   availability is per-pull while `digest` reads the store. Closing it needs a
-   per-tenant snapshot in the store plus a write path in the ingest/evaluate path
-   and a read in the digest command — a schema change, out of the implementation
-   plan's scope. **§9 is not complete until this lands.** Availability is visible
-   today in the pull command's output and in a finding's evidence text.
-2. **Two redaction residuals leak a server or database name**, both requiring a
-   cross-database or linked-server reference in a non-first table position: a
-   joiner carrying two or more bare words (`server.MyDb.dbo."T"`), and a fully
-   bare qualifier (`mydb.dbo."T"`, structurally invisible because only quoted
-   ident tokens are dropped). BC reaches each tenant database over its own
-   connection and emits the two-part `dbo."COMPANY$Table"` form, so its runtime
-   cannot produce either for tenant data. The second closes with one added guard
-   at the leftover scan (fail closed on two or more bare segments before a quoted
-   name). A third residual of the same class — a quoted identifier that is
-   customer data but carries no `$` — is documented at `redactSqlForSink`, along
+1. ~~**`signalAvailability` is not persisted, so `lifecycle digest` cannot render
+   it.**~~ **CLOSED.** §9 says the array "stays on the batch for the CLI, JSON and
+   the digest"; the digest option existed, was tested, and no caller populated it,
+   because availability is per-pull while `digest` reads the store.
+   Schema v8 adds a one-row-per-tenant `signal_availability` snapshot;
+   `evaluateTelemetryBatch` writes it after a successful evaluate (and only when
+   the batch actually carries the field — an absent array means the producer does
+   not emit it, not that failing signals recovered); the `digest` command reads it
+   for the requested tenant. An older `windowEnd` never overwrites a newer one,
+   since cron-driven pulls can land out of order. **§9 is now complete** — verified
+   end to end through the real CLI: `lifecycle telemetry` then `lifecycle digest`
+   renders both the unavailable and the truncated line.
+2. ~~**Two redaction residuals leak a server or database name**~~ **CLOSED**, both
+   by one guard. Both required a cross-database or linked-server reference in a
+   non-first table position: a joiner carrying two or more bare words
+   (`server.MyDb.dbo."T"`), and a fully bare qualifier (`mydb.dbo."T"`,
+   structurally invisible because only quoted ident tokens are dropped). BC
+   reaches each tenant database over its own connection and emits the two-part
+   `dbo."COMPANY$Table"` form, so its runtime cannot produce either for tenant
+   data. Two or more bare segments before a quoted or bracketed name now fail the
+   whole statement closed, in both the join and the subquery position; the
+   ordinary `dbo."T"` form and `alias."column"` pairs are unaffected.
+   A third residual of the same class — a quoted identifier that is customer data
+   but carries no `$` — remains open **deliberately**: no discriminator separates
+   a customer-derived quoted name from a legitimate one (BC field names carry
+   spaces too), and blanking alias identifiers would leave every `alias."column"`
+   reference dangling. Measured against the captured BC SQL in this repo's
+   fixtures, zero `AS "..."` alias forms appear at all and the company name shows
+   up only inside `$`-bearing identifiers. Documented at `redactSqlForSink` along
    with the invariant the redactor actually relies on.
-3. **Smaller carries:** the adapter can emit a `clientType` the parser's
-   `^[A-Za-z]+$` rejects, costing the whole window on one bad row (pre-existing,
-   not observed on measured data); and the non-split statement tests use the
-   split-mode column fixture, which is the same shape-fidelity assumption that
-   produced the NaN defect during implementation.
+3. **Smaller carries:** ~~the adapter can emit a `clientType` the parser's
+   `^[A-Za-z]+$` rejects, costing the whole window on one bad row~~ **CLOSED** —
+   `safeClientType` drops just the field at both normalizers, so the row's timing
+   and finding data survive and only the client-type dimension is lost (still not
+   observed on measured data; all five production values are letters-only). Still
+   open: the non-split statement tests use the split-mode column fixture, which is
+   the same shape-fidelity assumption that produced the NaN defect during
+   implementation.
 
 ## 14. Risks
 

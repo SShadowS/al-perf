@@ -266,6 +266,23 @@ export const LIFECYCLE_MIGRATIONS: string[][] = [
 		// reclaims). `captures health` surfaces it; nothing acts on it automatically.
 		`ALTER TABLE capture_requests ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0`,
 	],
+	[
+		// Purely additive — no table rebuild, no FK-toggle complications.
+		//
+		// The most recent telemetry pull's `signalAvailability` array, per
+		// tenant. `buildDigest` has consumed this since the SQL-evidence work
+		// (DigestOptions.signalAvailability) but nothing ever supplied it:
+		// availability is a per-PULL fact while the digest reads the store, so
+		// without somewhere to land it the digest's "signals unavailable"
+		// section could never render. One row per tenant, replaced when a
+		// newer window arrives — this is a snapshot of current health, not a
+		// history.
+		`CREATE TABLE IF NOT EXISTS signal_availability (
+			tenant TEXT NOT NULL PRIMARY KEY,
+			window_end TEXT NOT NULL,
+			payload TEXT NOT NULL
+		)`,
+	],
 ];
 
 export interface ExercisedApps {
@@ -1053,6 +1070,44 @@ export class LifecycleStore {
 			[note, at, by, findingId],
 		);
 		return res.changes > 0;
+	}
+
+	/**
+	 * Record a telemetry pull's `signalAvailability` as this tenant's current
+	 * signal health, keeping whichever snapshot describes the LATEST window.
+	 *
+	 * Pulls are cron-driven and can land out of order (a retried or backfilled
+	 * window arriving after a newer one), so "last write wins" would let a
+	 * stale snapshot describe the tenant. An older `windowEnd` is ignored.
+	 *
+	 * A pull that carries no availability at all must not call this: an absent
+	 * array means the producer does not emit the field, which is not evidence
+	 * that previously-failing signals recovered.
+	 */
+	recordSignalAvailability(
+		tenant: string,
+		windowEnd: string,
+		entries: unknown,
+	): void {
+		this.db.run(
+			`INSERT INTO signal_availability (tenant, window_end, payload)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(tenant) DO UPDATE SET
+			   window_end = excluded.window_end,
+			   payload = excluded.payload
+			 WHERE excluded.window_end >= signal_availability.window_end`,
+			[tenant, windowEnd, JSON.stringify(entries)],
+		);
+	}
+
+	/** This tenant's most recent `signalAvailability`, or undefined if none was ever recorded. */
+	getSignalAvailability(tenant: string): unknown {
+		const row = this.db
+			.query<{ payload: string }, [string]>(
+				"SELECT payload FROM signal_availability WHERE tenant = ?",
+			)
+			.get(tenant);
+		return row === null ? undefined : JSON.parse(row.payload);
 	}
 
 	recordOccurrence(o: {

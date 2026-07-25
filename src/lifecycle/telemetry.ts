@@ -16,6 +16,7 @@ import {
 	type RunMetadata,
 } from "./evaluate.js";
 import type { LifecycleStore } from "./store.js";
+import { normalizeTenantCode } from "./tenant.js";
 
 export function evaluateTelemetryBatch(
 	store: LifecycleStore,
@@ -28,10 +29,28 @@ export function evaluateTelemetryBatch(
 	// the run is then evaluated under.
 	const cfg: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, ...configPatch };
 	const parsed = parseTelemetryBatch(batchJson, cfg);
-	return evaluateRun(
+	const outcome = evaluateRun(
 		store,
 		parsed.result,
 		{ ...run, captureKind: "telemetry", captureTime: parsed.windowEnd },
 		configPatch,
 	);
+	// Signal health is a per-PULL fact, but `lifecycle digest` reads the store
+	// — so without landing it here the digest's "signals unavailable" section
+	// could never render, which is what spec §9 promises. Recorded AFTER a
+	// successful evaluate, so a batch that fails the state machine leaves no
+	// availability claim behind, and only when the batch actually carries the
+	// field: an absent array means the producer does not emit it, not that
+	// previously-failing signals recovered.
+	//
+	// `run.tenant` is normalized the same way evaluateRun normalizes it, so
+	// the digest's `--tenant` lookup finds this row.
+	if (parsed.signalAvailability !== undefined) {
+		store.recordSignalAvailability(
+			normalizeTenantCode(run.tenant),
+			parsed.windowEnd,
+			parsed.signalAvailability,
+		);
+	}
+	return outcome;
 }
