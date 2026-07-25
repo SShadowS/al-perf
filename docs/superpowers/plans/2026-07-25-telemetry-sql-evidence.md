@@ -500,6 +500,18 @@ describe("redactSqlForSink", () => {
 		expect(out?.text).not.toContain("Acme");
 	});
 
+	test("strips the company from an aliased FROM while keeping alias-qualified columns", () => {
+		// The shape Gate 0 found in real RT0005 rows: the company-prefixed
+		// physical name is in the FROM clause, and the projection references a
+		// numeric table alias.
+		const out = redactSqlForSink(
+			'SELECT TOP (1) "50102"."timestamp","50102"."Store No_" FROM dbo."CRONUS$Sample Table$aa11bb22-cc33-dd44-ee55-ff6677889900" "50102" WITH(READUNCOMMITTED)',
+		);
+		expect(out?.text).not.toContain("CRONUS");
+		expect(out?.table).toBe("Sample Table");
+		expect(out?.extensionAppId).toBe("aa11bb22-cc33-dd44-ee55-ff6677889900");
+	});
+
 	test("keeps a system table's bracket name", () => {
 		const out = redactSqlForSink('SELECT [Metadata] FROM dbo.[Application Object Metadata]');
 		expect(out?.table).toBe("Application Object Metadata");
@@ -1064,7 +1076,34 @@ Export `buildKqlQuery` and `normalizeTable` for the test if they are module-priv
 Run: `bun test test/lifecycle/appinsights.test.ts`
 Expected: FAIL on all three, plus the existing snapshot test.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3a: Fix the duration extraction (BOTH signals) — Gate 0 found this broken**
+
+Gate 0 measured `customDimensions.executionTimeInMs` as non-null on **0 of 17,045** RT0018 rows and
+**6 of 15,957** RT0005 rows. `buildKqlQuery` reads exactly that column
+(`src/lifecycle/appinsights.ts:197-198`), so `max(ms)` is null and `asDurationMs` throws — the
+shipped puller cannot work against real telemetry. Replace the `ms` extend for every signal:
+
+```ts
+	// executionTime is a .NET timespan ("00:11:06.3140000"); ticks/10000 = ms.
+	// The executionTimeInMs alias is absent on effectively every real row
+	// (Gate 0: 0/17,045 RT0018, 6/15,957 RT0005), which is why the shipped
+	// query returned nulls and asDurationMs threw.
+	"         ms = toreal(totimespan(customDimensions.executionTime)) / 10000,",
+```
+
+Add a test pinning it, since this is the failure that made the whole path unusable:
+
+```ts
+test("derives ms from the executionTime timespan, not the absent executionTimeInMs alias", () => {
+	for (const signalId of ["RT0005", "RT0018"]) {
+		const kql = buildKqlQuery(signalId, "2026-07-25T00:00:00.000Z", undefined, false);
+		expect(kql).toContain("totimespan(customDimensions.executionTime)");
+		expect(kql).not.toContain("executionTimeInMs");
+	}
+});
+```
+
+- [ ] **Step 3b: Implement the grouping change**
 
 In `buildKqlQuery`, make the RT0005 shape distinct:
 
@@ -1208,8 +1247,10 @@ function buildStatementKqlQuery(sinceIso: string, split: boolean): string {
 		"         alObjectId = toint(customDimensions.alObjectId),",
 		"         alStackTrace = tostring(customDimensions.alStackTrace),",
 		"         sqlStatement = tostring(customDimensions.sqlStatement),",
-		"         thresholdMs = todouble(customDimensions.longRunningThreshold),",
-		"         ms = todouble(customDimensions.executionTimeInMs),",
+		// Both are .NET timespans; the *InMs aliases are absent on real rows
+		// (Gate 0). RT0005's threshold measured a uniform 750ms.
+		"         thresholdMs = toreal(totimespan(customDimensions.longRunningThreshold)) / 10000,",
+		"         ms = toreal(totimespan(customDimensions.executionTime)) / 10000,",
 		split
 			? "         aadTenantId = tostring(customDimensions.aadTenantId),\n         environmentName = tostring(customDimensions.environmentName)"
 			: "",

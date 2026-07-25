@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-25
 **Revision:** 3
-**Status:** design approved; blocked on Gate 0 (live telemetry probe) before a plan is written
+**Status:** design approved; **Gate 0 PASSED 2026-07-25** on live BC telemetry (see the research doc's Gate 0 section) — implementation unblocked, with one shipped-code prerequisite (§1)
 **Scope:** project 2 of 2 — the telemetry-side counterpart to the shipped profile-side SQL evidence
 layer v1 (`docs/superpowers/specs/2026-07-16-sql-evidence-layer-design.md`). Profile-side behavior
 is untouched by this design.
@@ -79,6 +79,24 @@ fetch mock.
 Nothing is built until one discovery query against live App Insights answers the following, with the
 answers recorded in the research doc. Revision 1 assumed field names the documentation does not
 support; this gate exists so that never happens twice.
+
+**Gate 0 ran on 2026-07-25 and PASSED** (7-day window: RT0005 15,987 rows / 841 distinct stacks,
+RT0018 17,073 / 1,381). Answers are in the research doc; the redacted probe output is committed at
+`test/fixtures/telemetry/rt0005-probe.json`. Three results changed this design:
+
+- **`executionTimeInMs` is effectively absent** — non-null on 0 of 17,045 RT0018 rows and 6 of
+  15,957 RT0005 rows — and the shipped puller reads it, so `asDurationMs` throws and
+  `lifecycle pull-telemetry` cannot have worked against real telemetry. **Fixing the duration
+  extraction to `toreal(totimespan(customDimensions.executionTime))/10000` (100% non-null, both
+  signals) is a prerequisite of this work, not a side effect.**
+- **`longRunningThreshold` is present on 100% of rows** as a timespan, uniform per signal (RT0005
+  750 ms, RT0018 1000 ms). §5's `threshold` will in practice always be populated from the adapter;
+  it stays optional only for third-party producers.
+- **Statements alias-qualify their columns** (`"50102"."Store No_" FROM dbo."COMPANY$Table$guid" "50102"`),
+  so §6's redactor must handle an aliased FROM with alias references in the projection.
+
+The stack grammar, `alMethod`'s absence from RT0005, RT0018's SQL counters, and stack fragmentation
+(~19 RT0005 rows per distinct stack) all matched the design's assumptions.
 
 | Question | Why it blocks |
 |---|---|
@@ -419,8 +437,9 @@ dimension Gate 0 finds missing on a given tenant.
 - **Redaction corpus:** 3-part database-qualified name; `Company$Table`; `Company$Table$guid`;
   `[System Table]` and a `]]`-escaped bracket identifier; a multi-table `JOIN`; a subquery and a CTE;
   `MERGE … USING`; a statement truncated mid-literal (unclosed quote); `N'…'` and `0x…` literals; a
-  comment-bearing statement; a 47-column `SELECT`; and one input the tokenizer cannot parse, which
-  must be dropped rather than half-redacted.
+  comment-bearing statement; a 47-column `SELECT`; an aliased FROM with alias-qualified columns (the
+  shape Gate 0 found in real rows); and one input the tokenizer cannot parse, which must be dropped
+  rather than half-redacted.
 - **Sink-path pin:** a telemetry finding's persisted `evidence` string contains the redacted
   statements, no company or database name, and no markdown — asserted at the `occurrences.details`
   boundary, the last point before an external tracker.
