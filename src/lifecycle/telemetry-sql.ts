@@ -815,6 +815,21 @@ export interface StatementRow {
 	occurrences: number;
 	measuredTotalMs: number;
 	thresholdMs?: number;
+	/**
+	 * Fix Round 1: the aggregate SIGNAL query groups BY clientType, so a
+	 * routine with several clientType constituents (Background, WebClient, …)
+	 * mints one TelemetrySignal per constituent. Without this dimension, every
+	 * constituent would match the SAME statement rows and a later summing
+	 * merge (Task 10) would double- (or N-)count occurrences/measuredTotalMs.
+	 * `undefined` — never `""` — when the column is absent/empty, matching
+	 * TelemetrySignal.clientType's own convention.
+	 */
+	clientType?: string;
+}
+
+/** Routine key + clientType, joined so a Map key never collides across BOTH dimensions at once (same separator convention as telemetryRoutineKey itself). */
+function evidenceKey(routineKey: string, clientType: string | undefined): string {
+	return `${routineKey}\u001f${clientType ?? ""}`;
 }
 
 /**
@@ -822,7 +837,8 @@ export interface StatementRow {
  * and RT0005 alike, since `telemetryRoutineKey` omits signalId by design
  * (§4.1: a key that carried it could only ever reach an RT0005 finding, and
  * the whole point is that RT0005's own statements should also annotate the
- * RT0018 finding for the same routine).
+ * RT0018 finding for the same routine). Also scoped by clientType (Fix Round
+ * 1) — see `evidenceKey`'s doc comment and `StatementRow.clientType`'s.
  *
  * Call this ONCE PER SPLIT GROUP, never over a fleet-wide row set — appinsights.ts's
  * pullTelemetrySplit groups both signals and statement rows by
@@ -835,13 +851,17 @@ export interface StatementRow {
  * new array — the caller (appinsights.ts) already holds the exact array
  * reference that ends up as `TelemetryBatchDocument.signals`, so mutating it
  * here is what makes evidence visible on the batch without appinsights.ts
- * having to thread a rebuilt array back through.
+ * having to thread a rebuilt array back through. Every signal gets its OWN
+ * copies of the statement/threshold objects (Fix Round 1, minor) — two
+ * signals sharing a key would otherwise share object references, so a later
+ * mutation of one signal's evidence (e.g. a renderer) could silently leak
+ * into the other's.
  */
 export function attachEvidenceToSignals(
 	signals: TelemetrySignal[],
 	rows: readonly StatementRow[],
 ): void {
-	const byRoutine = new Map<string, TelemetrySqlStatementEvidence[]>();
+	const byKey = new Map<string, TelemetrySqlStatementEvidence[]>();
 	const thresholds = new Map<string, { minMs: number; maxMs: number }>();
 
 	for (const row of rows) {
@@ -850,13 +870,14 @@ export function attachEvidenceToSignals(
 		const redacted = redactSqlForSink(row.sqlStatement);
 		if (!redacted) continue; // fail closed — never emit half-redacted text
 
-		const key = telemetryRoutineKey(
+		const routineKey = telemetryRoutineKey(
 			row.appId,
 			row.objectType,
 			row.objectId,
 			method,
 		);
-		const list = byRoutine.get(key) ?? [];
+		const key = evidenceKey(routineKey, row.clientType);
+		const list = byKey.get(key) ?? [];
 		list.push({
 			text: redacted.text,
 			operation: redacted.operation,
@@ -866,7 +887,7 @@ export function attachEvidenceToSignals(
 			measuredTotalMs: row.measuredTotalMs,
 			truncated: redacted.truncated,
 		});
-		byRoutine.set(key, list);
+		byKey.set(key, list);
 
 		if (row.thresholdMs !== undefined) {
 			const t = thresholds.get(key);
@@ -878,22 +899,26 @@ export function attachEvidenceToSignals(
 	}
 
 	for (const signal of signals) {
-		const key = telemetryRoutineKey(
+		const routineKey = telemetryRoutineKey(
 			signal.appId,
 			signal.objectType,
 			signal.objectId,
 			signal.methodName,
 		);
-		const statements = byRoutine.get(key);
+		const key = evidenceKey(routineKey, signal.clientType);
+		const statements = byKey.get(key);
 		if (!statements || statements.length === 0) continue;
 		statements.sort((a, b) => b.measuredTotalMs - a.measuredTotalMs);
+		const threshold = thresholds.get(key);
 		signal.sqlEvidence = {
-			statements: statements.slice(0, 5),
+			// Per-signal copies — never share statement/threshold objects
+			// across signals, even when they resolve to the same key.
+			statements: statements.slice(0, 5).map((s) => ({ ...s })),
 			totalMeasuredMs: statements.reduce((n, s) => n + s.measuredTotalMs, 0),
 			totalOccurrences: statements.reduce((n, s) => n + s.occurrences, 0),
 			provenance: "measured-threshold-gated",
 			attribution: "telemetry-stack",
-			threshold: thresholds.get(key),
+			threshold: threshold ? { ...threshold } : undefined,
 		};
 	}
 }

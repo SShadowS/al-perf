@@ -1220,10 +1220,19 @@ describe("attachEvidenceToSignals", () => {
 	test("threshold min/max is computed across the routine's rows", () => {
 		const signals = [signal()];
 		attachEvidenceToSignals(signals, [
-			statementRow({ thresholdMs: 750, sqlStatement: 'SELECT "a" FROM dbo."CRONUS$T"' }),
-			statementRow({ thresholdMs: 1000, sqlStatement: 'SELECT "b" FROM dbo."CRONUS$U"' }),
+			statementRow({
+				thresholdMs: 750,
+				sqlStatement: 'SELECT "a" FROM dbo."CRONUS$T"',
+			}),
+			statementRow({
+				thresholdMs: 1000,
+				sqlStatement: 'SELECT "b" FROM dbo."CRONUS$U"',
+			}),
 		]);
-		expect(signals[0].sqlEvidence?.threshold).toEqual({ minMs: 750, maxMs: 1000 });
+		expect(signals[0].sqlEvidence?.threshold).toEqual({
+			minMs: 750,
+			maxMs: 1000,
+		});
 	});
 
 	test("threshold is absent when no row for the routine carries one", () => {
@@ -1257,7 +1266,9 @@ describe("attachEvidenceToSignals", () => {
 	test("a row whose stack has no parseable AL frame is dropped (fail closed, no join key)", () => {
 		const signals = [signal()];
 		attachEvidenceToSignals(signals, [
-			statementRow({ stackTrace: "AppObjectType: CodeUnit\r\nAppObjectId: 80" }),
+			statementRow({
+				stackTrace: "AppObjectType: CodeUnit\r\nAppObjectId: 80",
+			}),
 		]);
 		expect(signals[0].sqlEvidence).toBeUndefined();
 	});
@@ -1268,7 +1279,8 @@ describe("attachEvidenceToSignals", () => {
 			// Same swallowed-FROM shape pinned in the redactSqlForSink suite
 			// above ("quoteSwallowsStatement") -- redactSqlForSink returns null.
 			statementRow({
-				sqlStatement: 'SELECT "a FROM dbo."CRONUS$Sales Header" WHERE "Name"=@0',
+				sqlStatement:
+					'SELECT "a FROM dbo."CRONUS$Sales Header" WHERE "Name"=@0',
 			}),
 		]);
 		expect(signals[0].sqlEvidence).toBeUndefined();
@@ -1288,5 +1300,85 @@ describe("attachEvidenceToSignals", () => {
 			}),
 		]);
 		expect(signals[0].sqlEvidence?.statements).toHaveLength(1);
+	});
+
+	// ---------------------------------------------------------------------
+	// Fix Round 1 (IMPORTANT): the aggregate SIGNAL query groups BY
+	// clientType, so a routine with several clientType constituents mints one
+	// TelemetrySignal per constituent. Without clientType in the join key,
+	// every constituent would match the SAME statement rows and a later
+	// summing merge (Task 10) would double-count.
+	// ---------------------------------------------------------------------
+
+	test("two signals for the same routine but different clientType each get only their OWN statement rows — no cross-contamination", () => {
+		const signals = [
+			signal({ signalId: "RT0018", clientType: "Background" }),
+			signal({ signalId: "RT0018", clientType: "WebClient" }),
+		];
+		attachEvidenceToSignals(signals, [
+			statementRow({
+				clientType: "Background",
+				sqlStatement: 'SELECT "a" FROM dbo."CRONUS$Sales Header"',
+				occurrences: 3,
+				measuredTotalMs: 2400,
+			}),
+			statementRow({
+				clientType: "WebClient",
+				sqlStatement: 'SELECT "b" FROM dbo."CRONUS$Item Ledger Entry"',
+				occurrences: 5,
+				measuredTotalMs: 1000,
+			}),
+		]);
+		const bg = signals[0].sqlEvidence;
+		const web = signals[1].sqlEvidence;
+		expect(bg?.statements).toHaveLength(1);
+		expect(bg?.statements[0]?.table).toBe("Sales Header");
+		expect(bg?.totalOccurrences).toBe(3);
+		expect(bg?.totalMeasuredMs).toBe(2400);
+		expect(web?.statements).toHaveLength(1);
+		expect(web?.statements[0]?.table).toBe("Item Ledger Entry");
+		expect(web?.totalOccurrences).toBe(5);
+		expect(web?.totalMeasuredMs).toBe(1000);
+	});
+
+	test("a statement row with no clientType only attaches to a signal with no clientType, not to a clientType-specific constituent", () => {
+		const signals = [
+			signal({ clientType: undefined }),
+			signal({ clientType: "Background" }),
+		];
+		attachEvidenceToSignals(signals, [statementRow({ clientType: undefined })]);
+		expect(signals[0].sqlEvidence?.statements).toHaveLength(1);
+		expect(signals[1].sqlEvidence).toBeUndefined();
+	});
+
+	test("a clientType-specific statement row does not attach to a signal with no clientType", () => {
+		const signals = [signal({ clientType: undefined })];
+		attachEvidenceToSignals(signals, [
+			statementRow({ clientType: "Background" }),
+		]);
+		expect(signals[0].sqlEvidence).toBeUndefined();
+	});
+
+	// ---------------------------------------------------------------------
+	// Fix Round 1, minor: every signal gets its OWN copies of the statement/
+	// threshold objects — two signals resolving to the same key must never
+	// share object references.
+	// ---------------------------------------------------------------------
+
+	test("two signals sharing a key get independent statement/threshold object copies, not shared references", () => {
+		const signals = [
+			signal({ signalId: "RT0018" }),
+			signal({ signalId: "RT0005" }),
+		];
+		attachEvidenceToSignals(signals, [statementRow()]);
+		const [a, b] = signals;
+		expect(a.sqlEvidence).not.toBe(b.sqlEvidence);
+		expect(a.sqlEvidence?.statements).not.toBe(b.sqlEvidence?.statements);
+		expect(a.sqlEvidence?.statements[0]).not.toBe(b.sqlEvidence?.statements[0]);
+		expect(a.sqlEvidence?.threshold).not.toBe(b.sqlEvidence?.threshold);
+
+		// Mutating one signal's evidence must never leak into the other's.
+		if (a.sqlEvidence) a.sqlEvidence.statements[0].text = "MUTATED";
+		expect(b.sqlEvidence?.statements[0]?.text).not.toBe("MUTATED");
 	});
 });
