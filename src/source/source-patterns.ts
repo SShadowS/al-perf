@@ -639,6 +639,10 @@ export function detectMissingSetLoadFields(
 
 			for (const op of findOps) {
 				if (isTemporaryOp(op, match.features.variables)) continue; // no SQL load on a temp record
+				// FIND_OPS matches method NAMES, and RecordRef/Query have
+				// FindFirst/FindSet too. Fails open on an unresolved receiver, so
+				// object-level globals and a page's implicit Rec keep reporting.
+				if (isKnownNonRecordOp(op, match.features.variables)) continue;
 				const recVarLower = op.recordVariable?.toLowerCase() ?? "";
 				const ops = opsByVar.get(recVarLower) ?? [];
 				// Covered if ANY restrictive (non-bare-reset) call precedes this find --

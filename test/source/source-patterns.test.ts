@@ -248,6 +248,20 @@ describe("detectMissingSetLoadFields", () => {
 			patterns.find((p) => p.id === "missing-setloadfields"),
 		).toBeDefined();
 	});
+
+	it("does not flag a RecordRef find — SetLoadFields there is a different API", () => {
+		// FIND_OPS matches method NAMES, and RecordRef has FindFirst too. Its
+		// fields are reached through FieldRef by number, so the suggestion this
+		// detector emits does not apply. The same guard the loop detectors use
+		// (isKnownNonRecordOp) resolves the receiver's declared type.
+		const method = makeMethod({
+			functionName: "RecordRefFindIsNotMissingSetLoadFields",
+			objectType: "Codeunit",
+			objectId: 50700,
+		});
+		const patterns = detectMissingSetLoadFields([method], sourceIndex);
+		expect(patterns).toHaveLength(0);
+	});
 });
 
 describe("missing-setloadfields — ordering", () => {

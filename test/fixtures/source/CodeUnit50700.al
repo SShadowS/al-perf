@@ -151,4 +151,20 @@ codeunit 50700 "Field Access Test"
                 Message('%1', SalesLine.Amount);
             until SalesLine.Next() = 0;
     end;
+
+    procedure RecordRefFindIsNotMissingSetLoadFields()
+    var
+        RecRef: RecordRef;
+        FldRef: FieldRef;
+    begin
+        // A RecordRef is not a Record. Its fields are reached through FieldRef
+        // by number, so "add SetLoadFields()" is advice for a different API
+        // shape. FIND_OPS matches the method NAME FindFirst, which RecordRef
+        // also has.
+        RecRef.Open(Database::Customer);
+        FldRef := RecRef.Field(1);
+        FldRef.SetRange('C001');
+        if RecRef.FindFirst() then
+            RecRef.Close();
+    end;
 }
