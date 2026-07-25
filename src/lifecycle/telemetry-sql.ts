@@ -130,10 +130,22 @@ function tokenize(sql: string): TokenizeResult | null {
 	while (i < sql.length) {
 		const c = sql[i];
 		if (c === '"') {
-			const end = sql.indexOf('"', i + 1);
-			if (end === -1) return null; // unterminated identifier
-			tokens.push({ kind: "ident", value: sql.slice(i + 1, end), quote: '"' });
-			i = end + 1;
+			let j = i + 1;
+			let value = "";
+			for (;;) {
+				const close = sql.indexOf('"', j);
+				if (close === -1) return null; // unterminated identifier
+				if (sql[close + 1] === '"') {
+					value += `${sql.slice(j, close)}"`;
+					j = close + 2;
+					continue;
+				}
+				value += sql.slice(j, close);
+				j = close + 1;
+				break;
+			}
+			tokens.push({ kind: "ident", value, quote: '"' });
+			i = j;
 		} else if (c === "[") {
 			let j = i + 1;
 			let value = "";
@@ -276,6 +288,8 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 	let columnCount: number | null = null;
 	let namedColumns = 0;
 	let seenFrom = false;
+	let expectTableRef = false;
+	let tableRefLogical: string | null = null;
 	for (const [idx, t] of tokens.entries()) {
 		if (t.kind === "literal") {
 			out += "'?'";
@@ -285,6 +299,10 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 			if (isDatabaseQualifier(tokens, idx)) continue; // drop the bare database name
 			const logical = logicalIdentifier(t.value);
 			if (logical === null) return null; // unrecognized shape -> fail closed
+			if (expectTableRef && tableRefLogical === null) {
+				tableRefLogical = logical; // first non-qualifier ident after FROM/INTO/UPDATE/MERGE
+				expectTableRef = false;
+			}
 			if (!seenFrom) {
 				namedColumns++;
 				if (namedColumns > MAX_NAMED_COLUMNS) continue;
@@ -294,6 +312,20 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		}
 		out += t.value;
 		if (/\bFROM\b\s*$/i.test(out)) seenFrom = true;
+		if (/\b(?:FROM|INTO|UPDATE|MERGE)\b\s*$/i.test(out)) expectTableRef = true;
+	}
+
+	// Our own escape-aware scan of the table reference can disagree with
+	// parseSqlTable's regex-based capture of the SAME reference — e.g. a ""
+	// or ]] escape it doesn't know about truncates its capture mid-identifier,
+	// silently keeping a company-name fragment as if it were the whole table
+	// (parseSqlTable is out of scope here; its own quote/bracket matching has
+	// no escape awareness at all). A disagreement is itself proof
+	// parseSqlTable's capture can't be trusted for this statement — fail the
+	// whole thing closed rather than emit two different "table names" for the
+	// same reference.
+	if (tableRefLogical !== null && table !== null && tableRefLogical !== table) {
+		return null;
 	}
 
 	// A bare (unquoted) identifier is only ever emitted as plain "other"

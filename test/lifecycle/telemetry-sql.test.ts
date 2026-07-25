@@ -235,11 +235,19 @@ describe("redactSqlForSink", () => {
 		expect(insertStatement?.text).not.toContain("SQLDATABASE");
 		expect(insertStatement?.text).not.toContain("CRONUS");
 
+		// A non-"dbo" bare schema: our own scan recognizes ANY bareword between
+		// dots as a qualifier joiner and correctly resolves the table to
+		// "Sales Header", but parseSqlTable's QUALIFIER only recognizes "dbo"
+		// as a bare schema (src/core/sql-node.ts) -- it mis-parses "myschema"
+		// into its bare-match fallback and disagrees with our own table name
+		// (see the C5 cross-check below). That disagreement is itself a
+		// signal parseSqlTable's capture can't be trusted here, so the whole
+		// statement fails closed rather than emit a `table` that might be a
+		// mis-parsed fragment.
 		const nonDboSchema = redactSqlForSink(
 			'SELECT "No_" FROM "SQLDATABASE".myschema."CRONUS$Sales Header"',
 		);
-		expect(nonDboSchema?.text).not.toContain("SQLDATABASE");
-		expect(nonDboSchema?.text).not.toContain("CRONUS");
+		expect(nonDboSchema).toBeNull();
 	});
 
 	test("C2: $-splits the table field even when the physical name is bracket-quoted", () => {
@@ -289,5 +297,24 @@ describe("redactSqlForSink", () => {
 		expect(
 			redactSqlForSink("INSERT INTO dbo.CRONUS$Sales_Line (a) VALUES (1)"),
 		).toBeNull();
+	});
+
+	test("C5: handles the \"\" escape inside a quoted identifier", () => {
+		// Before the fix the "" branch stopped scanning at the FIRST quote
+		// character, treating "CRONUS" as a complete (unescaped) identifier
+		// and leaking it -- both in `text` and in `table` (parseSqlTable has
+		// the same escape blind spot and mis-parses the same way, so its
+		// capture disagrees with our own correctly-scanned table name; that
+		// disagreement itself fails the whole statement closed rather than
+		// emit two different "table names" for the same reference).
+		const embeddedX = redactSqlForSink(
+			'SELECT "No_" FROM dbo."CRONUS""X$Sales Header" WHERE "Name"=\'Acme Ltd\'',
+		);
+		expect(embeddedX).toBeNull();
+
+		const embeddedCompany = redactSqlForSink(
+			'SELECT "a" FROM dbo."ACME HOLDING""$Sales Header"',
+		);
+		expect(embeddedCompany).toBeNull();
 	});
 });
