@@ -358,6 +358,42 @@ describe("digest — signal availability", () => {
 		const md = renderDigestMarkdown(digest);
 		expect(md).toContain("RT0005 statements");
 		expect(md).not.toMatch(/unobserved/i);
+		// F1 fix (final review): an enrichment-only failure must render its own
+		// "findings still counted" sentence, never the signal-failure wording.
+		expect(md).toContain(
+			"SQL evidence unavailable this window: RT0005 statements (findings still counted).",
+		);
+		expect(md).not.toContain("absence not counted");
+		store.close();
+	});
+
+	it("renders both sentences, correctly scoped, when a signal query AND the enrichment query both fail", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [
+				{
+					signalId: "RT0005",
+					queried: true,
+					rows: 0,
+					error: "500 Internal Server Error",
+				},
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "query timeout",
+				},
+			],
+		});
+		const md = renderDigestMarkdown(digest);
+		expect(md).toContain(
+			"Signals unavailable this window: RT0005 — absence not counted for them.",
+		);
+		expect(md).toContain(
+			"SQL evidence unavailable this window: RT0005 statements (findings still counted).",
+		);
 		store.close();
 	});
 

@@ -8,7 +8,10 @@
  * deliberately does not apply.
  */
 
-import type { TelemetryBatchDocument } from "../types/telemetry.js";
+import {
+	STATEMENT_QUERY_LABEL,
+	type TelemetryBatchDocument,
+} from "../types/telemetry.js";
 import type { FindingState } from "./states.js";
 import type {
 	CaptureQueueHealth,
@@ -248,16 +251,31 @@ export function renderDigestMarkdown(digest: DigestData): string {
 
 	// Advisory only, never a "findings might be missing" alarm on its own —
 	// see DigestOptions.signalAvailability for why rows/unmatchedRows never
-	// appear here and why an "RT0005 statements" failure must not read as
-	// findings going unobserved.
+	// appear here. A failed SIGNAL query and a failed "RT0005 statements"
+	// ENRICHMENT query get their own sentences (F1 fix, final review): only
+	// the former means findings went unobserved / absence isn't counted —
+	// the latter means SQL evidence is missing but findings still resolve
+	// normally, and must not read as "absence not counted for them".
 	const unavailable = digest.unavailable;
+	const unavailableSignalQueries = unavailable.filter(
+		(s) => s.signalId !== STATEMENT_QUERY_LABEL,
+	);
+	const unavailableEnrichmentQueries = unavailable.filter(
+		(s) => s.signalId === STATEMENT_QUERY_LABEL,
+	);
+	const unavailableLines: string[] = [];
+	if (unavailableSignalQueries.length > 0) {
+		unavailableLines.push(
+			`> Signals unavailable this window: ${unavailableSignalQueries.map((s) => s.signalId).join(", ")} — absence not counted for them.`,
+		);
+	}
+	if (unavailableEnrichmentQueries.length > 0) {
+		unavailableLines.push(
+			`> SQL evidence unavailable this window: ${unavailableEnrichmentQueries.map((s) => s.signalId).join(", ")} (findings still counted).`,
+		);
+	}
 	const unavailableBlock: string[] =
-		unavailable.length > 0
-			? [
-					`> Signals unavailable this window: ${unavailable.map((s) => s.signalId).join(", ")} — absence not counted for them.`,
-					"",
-				]
-			: [];
+		unavailableLines.length > 0 ? [...unavailableLines, ""] : [];
 
 	const header = [
 		"# al-perf Finding Digest",

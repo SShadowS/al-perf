@@ -776,15 +776,34 @@ export function parseTelemetryBatch(
 	const failedSignalQueries = failedSignals.filter(
 		(a) => a.signalId !== STATEMENT_QUERY_LABEL,
 	);
-	// Note text: signalId + error only. Never rows/unmatchedRows — those two
+	// Fix Round (final review, F1): the two failure kinds read very
+	// differently and must not share one sentence. A failed SIGNAL query
+	// (failedSignalQueries, above) is why incompleteInvocations is nonzero —
+	// absence genuinely isn't counted while it's down. A failed ENRICHMENT
+	// query (the STATEMENT_QUERY_LABEL entry) does NOT suppress the absence
+	// pass (see incompleteInvocations below) — findings still resolve
+	// normally, only the SQL evidence attached to them is missing. Wording
+	// note text: signalId + error only. Never rows/unmatchedRows — those two
 	// integers are PULL-WIDE (every group emitted from one pull carries the
 	// same signalAvailability array, so they may describe another tenant's
 	// rows) and must never be rendered as tenant-specific text or gate a
 	// per-tenant "clean" claim.
+	const failedEnrichmentQueries = failedSignals.filter(
+		(a) => a.signalId === STATEMENT_QUERY_LABEL,
+	);
+	const availabilityNoteParts: string[] = [];
+	if (failedSignalQueries.length > 0) {
+		availabilityNoteParts.push(
+			`Signal(s) unavailable this window: ${failedSignalQueries.map((a) => `${a.signalId} (${a.error})`).join("; ")} — absence not counted.`,
+		);
+	}
+	if (failedEnrichmentQueries.length > 0) {
+		availabilityNoteParts.push(
+			`SQL evidence unavailable this window: ${failedEnrichmentQueries.map((a) => `${a.signalId} (${a.error})`).join("; ")} (findings still counted).`,
+		);
+	}
 	const availabilityNote =
-		failedSignals.length > 0
-			? `Signal(s) unavailable this window: ${failedSignals.map((a) => `${a.signalId} (${a.error})`).join("; ")} — absence not counted.`
-			: null;
+		availabilityNoteParts.length > 0 ? availabilityNoteParts.join(" ") : null;
 
 	// Severity assignment (D3) happens per-signal, BEFORE the D4 merge below —
 	// each constituent's severity is resolved against its own clientType.

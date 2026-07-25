@@ -1113,6 +1113,76 @@ describe("responsibility 9: SQL evidence on patterns (Task 10)", () => {
 		expect(evidenceText).not.toMatch(/\b7\b/);
 	});
 
+	// F1 fix (final review): the enrichment query failing does NOT mean
+	// absence is uncounted — findings still resolve normally, only SQL
+	// evidence is missing. Pin the exact wording so it can never regress back
+	// to claiming "absence not counted" for this case.
+	test("an enrichment-only failure renders 'findings still counted', never 'absence not counted'", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "timeout",
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).toContain(
+			"SQL evidence unavailable this window: RT0005 statements (timeout) (findings still counted).",
+		);
+		expect(evidenceText).not.toContain("absence not counted");
+		expect(parsed.result.meta.incompleteInvocations ?? 0).toBe(0);
+	});
+
+	// A failed SIGNAL query (not enrichment) keeps the original wording:
+	// absence genuinely isn't counted while the signal is down.
+	test("a signal-query-only failure renders 'absence not counted', never 'findings still counted'", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{ signalId: "RT0005", queried: true, rows: 0, error: "500" },
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).toContain(
+			"Signal(s) unavailable this window: RT0005 (500) — absence not counted.",
+		);
+		expect(evidenceText).not.toContain("findings still counted");
+		expect(parsed.result.meta.incompleteInvocations ?? 0).toBeGreaterThan(0);
+	});
+
+	// Mixed case: a signal query AND the enrichment query both fail in the
+	// same window. Both sentences must appear, each correctly scoped — the
+	// enrichment wording must not get swallowed by, or contradict, the
+	// signal-failure wording.
+	test("a mixed signal-and-enrichment failure renders both sentences, correctly scoped", () => {
+		const doc = batch([signal({ signalId: "RT0005" })], {
+			signalAvailability: [
+				{ signalId: "RT0005", queried: true, rows: 0, error: "500" },
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "timeout",
+				},
+			],
+		});
+		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);
+		const evidenceText = parsed.result.patterns[0]?.evidence ?? "";
+		expect(evidenceText).toContain(
+			"Signal(s) unavailable this window: RT0005 (500) — absence not counted.",
+		);
+		expect(evidenceText).toContain(
+			"SQL evidence unavailable this window: RT0005 statements (timeout) (findings still counted).",
+		);
+		// The RT0005 signal failure marks the run incomplete; the enrichment
+		// failure alone would not have.
+		expect(parsed.result.meta.incompleteInvocations ?? 0).toBeGreaterThan(0);
+	});
+
 	test("counts line renders only the present field", () => {
 		const doc = batch([signal({ sqlExecutes: 12 })]);
 		const parsed = parseTelemetryBatch(doc, DEFAULT_LIFECYCLE_CONFIG);

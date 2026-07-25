@@ -728,17 +728,21 @@ Two different failures read very differently:
   same as losing the underlying finding; letting it suppress the absence
   pass would needlessly delay resolving problems that are actually fixed.
 
-`lifecycle digest` surfaces whichever signals failed (by id, not by pull-wide
-row counts — see below) as one advisory line:
+`lifecycle digest` and a finding's issue body (§8) both surface whichever
+signals failed (by id, not by pull-wide row counts — see below), each kind
+of failure in its own sentence:
 
 ```
-> Signals unavailable this window: RT0005 statements — absence not counted for them.
+> Signals unavailable this window: RT0005 — absence not counted for them.
+> SQL evidence unavailable this window: RT0005 statements (findings still counted).
 ```
 
-Two things this line deliberately does NOT do: it never renders an
-availability entry's `rows`/`unmatchedRows` counters as if they described
-just this tenant (one pull's `signalAvailability` array is shared across
-every tenant/group it produced, so those two integers are pull-wide, not
-tenant-scoped), and it never implies findings went unobserved when the
-failed entry is the `"RT0005 statements"` enrichment query specifically —
-only a failed RT0018/RT0005 signal query carries that implication.
+A window can produce either line, both (a signal query and the enrichment
+query both failed), or neither. Two things these lines deliberately do NOT
+do: they never render an availability entry's `rows`/`unmatchedRows`
+counters as if they described just this tenant (one pull's
+`signalAvailability` array is shared across every tenant/group it produced,
+so those two integers are pull-wide, not tenant-scoped), and the enrichment
+line never implies findings went unobserved — only the "Signals
+unavailable" line, driven by a failed RT0018/RT0005 signal query, carries
+that implication.
