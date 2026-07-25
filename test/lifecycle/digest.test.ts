@@ -312,3 +312,97 @@ describe("digest — capture queue", () => {
 		store.close();
 	});
 });
+
+describe("digest — signal availability", () => {
+	it("includes an unavailable-signals line when a signal query failed", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [
+				{ signalId: "RT0018", queried: true, rows: 40 },
+				{
+					signalId: "RT0005",
+					queried: true,
+					rows: 0,
+					error: "500 Internal Server Error",
+				},
+			],
+		});
+		expect(digest.unavailable).toHaveLength(1);
+		expect(digest.unavailable[0].signalId).toBe("RT0005");
+		const md = renderDigestMarkdown(digest);
+		expect(md).toMatch(/unavailable/i);
+		expect(md).toContain("RT0005");
+		expect(md).not.toContain("RT0018"); // only the FAILED signal is named
+		store.close();
+	});
+
+	it("reports a failed 'RT0005 statements' enrichment query as unavailable without implying findings went unobserved", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [
+				{
+					signalId: "RT0005 statements",
+					queried: true,
+					rows: 0,
+					error: "query timeout",
+				},
+			],
+		});
+		expect(digest.unavailable.map((s) => s.signalId)).toEqual([
+			"RT0005 statements",
+		]);
+		const md = renderDigestMarkdown(digest);
+		expect(md).toContain("RT0005 statements");
+		expect(md).not.toMatch(/unobserved/i);
+		store.close();
+	});
+
+	it("never renders pull-wide rows/unmatchedRows as tenant-specific text", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [
+				{
+					signalId: "RT0005",
+					queried: true,
+					rows: 9999,
+					unmatchedRows: 42,
+					error: "500 Internal Server Error",
+				},
+			],
+		});
+		const md = renderDigestMarkdown(digest);
+		expect(md).not.toContain("9999");
+		expect(md).not.toContain("42");
+		store.close();
+	});
+
+	it("renders NOTHING when every signal succeeded", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, {
+			tenant: "acme",
+			signalAvailability: [
+				{ signalId: "RT0018", queried: true, rows: 40 },
+				{ signalId: "RT0005", queried: true, rows: 12 },
+			],
+		});
+		expect(digest.unavailable).toEqual([]);
+		expect(renderDigestMarkdown(digest)).not.toMatch(/unavailable/i);
+		store.close();
+	});
+
+	it("renders NOTHING when the caller didn't supply availability data at all", () => {
+		const store = new LifecycleStore(":memory:");
+		seed(store, "new", { tenant: "acme" });
+		const digest = buildDigest(store, { tenant: "acme" });
+		expect(digest.unavailable).toEqual([]);
+		expect(renderDigestMarkdown(digest)).not.toMatch(/unavailable/i);
+		store.close();
+	});
+});

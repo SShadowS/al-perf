@@ -7,7 +7,10 @@ import {
 import { analyzeProfile, compareProfiles } from "../../../src/core/analyzer.js";
 import type { SqlActivityCorroboration } from "../../../src/output/types.js";
 import type { RegressionFusion } from "../../../src/semantic/regression-correlate.js";
-import type { SqlEvidence } from "../../../src/types/patterns.js";
+import type {
+	SqlEvidence,
+	TelemetrySqlEvidence,
+} from "../../../src/types/patterns.js";
 
 const FIXTURES = "test/fixtures";
 
@@ -183,6 +186,49 @@ describe("formatAnalysisJson — sqlActivity / sqlEvidence (Task 7)", () => {
 		const parsed = JSON.parse(formatAnalysisJson(result));
 		expect(parsed.patterns[0].sqlEvidence).toBeUndefined();
 		expect(parsed.patterns[0].sqlRank).toBeUndefined();
+	});
+});
+
+const SAMPLE_TELEMETRY_SQL_EVIDENCE: TelemetrySqlEvidence = {
+	statements: [
+		{
+			text: 'SELECT "No_" FROM "Sales Header"',
+			operation: "SELECT",
+			table: "Sales Header",
+			extensionAppId: null,
+			occurrences: 12,
+			measuredTotalMs: 4200,
+			truncated: false,
+		},
+	],
+	totalMeasuredMs: 4200,
+	totalOccurrences: 12,
+	provenance: "measured-threshold-gated",
+	attribution: "telemetry-stack",
+	threshold: { minMs: 750, maxMs: 750 },
+};
+
+describe("formatAnalysisJson — telemetry sqlEvidence carries no sampled fields (Task 11)", () => {
+	// The compiler can't help here: json.ts is a bare JSON.stringify
+	// passthrough, so a `ProfileSqlEvidence`-shaped field silently leaking
+	// through onto a telemetry evidence object would only ever show up at
+	// runtime — pin it explicitly.
+	test("json output for telemetry evidence carries no sampled fields", async () => {
+		const result = await analyzeProfile(
+			`${FIXTURES}/sampling-minimal.alcpuprofile`,
+		);
+		expect(result.patterns.length).toBeGreaterThan(0);
+		result.patterns[0].sqlEvidence = SAMPLE_TELEMETRY_SQL_EVIDENCE;
+		result.patterns[0].sqlRank =
+			SAMPLE_TELEMETRY_SQL_EVIDENCE.totalMeasuredMs * 1000;
+		const parsed = JSON.parse(formatAnalysisJson(result));
+		const e = parsed.patterns[0].sqlEvidence;
+		expect(e.provenance).toBe("measured-threshold-gated");
+		expect(e.totalMeasuredMs).toBe(4200);
+		expect(e.totalSampledCostUs).toBeUndefined();
+		expect(e.statements[0].sampledHitCount).toBeUndefined();
+		expect(e.statements[0].sampledCostUs).toBeUndefined();
+		expect(e.statements[0].measuredTotalMs).toBe(4200);
 	});
 });
 

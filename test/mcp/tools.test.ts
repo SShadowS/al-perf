@@ -7,6 +7,8 @@ import { join } from "path";
 import { analyzeProfile } from "../../src/core/analyzer.js";
 import { HistoryStore } from "../../src/history/store.js";
 import { createMcpServer } from "../../src/mcp/server.js";
+import { bySqlRankDesc } from "../../src/semantic/sql-evidence.js";
+import type { DetectedPattern } from "../../src/types/patterns.js";
 
 async function createTestClient(options?: {
 	defaultSourcePath?: string;
@@ -130,6 +132,39 @@ describe("MCP Tool: analyze_profile", () => {
 		expect(ranks).toEqual(sorted);
 		expect(ranks.some((r: number) => r > -1)).toBe(true);
 	}, 120000);
+
+	// Unit-level, no MCP client needed: pins that the SAME comparator both
+	// analyze.ts and mcp/server.ts import (src/semantic/sql-evidence.ts)
+	// orders a telemetry-provenance finding against a profile-provenance
+	// finding correctly, not just same-provenance findings against each
+	// other (the two tests above only ever sort profile-sourced sqlRanks).
+	// sqlRank is microseconds on both sides — telemetry sets
+	// totalMeasuredMs * 1000, profile sets totalSampledCostUs directly — so a
+	// bare numeric compare is unit-sound with no conversion in the comparator.
+	test('sort: "sql" orders telemetry and profile findings by one unit', () => {
+		const profileFinding: DetectedPattern = {
+			id: "calcfields-in-loop",
+			severity: "warning",
+			title: "profile finding",
+			description: "",
+			impact: 0,
+			involvedMethods: [],
+			evidence: "",
+			sqlRank: 750_000, // 750,000 sampled µs
+		};
+		const telemetryFinding: DetectedPattern = {
+			id: "telemetry-rt0005",
+			severity: "warning",
+			title: "telemetry finding",
+			description: "",
+			impact: 0,
+			involvedMethods: [],
+			evidence: "",
+			sqlRank: 1000 * 1000, // 1000ms measured -> 1,000,000 µs
+		};
+		const sorted = [profileFinding, telemetryFinding].sort(bySqlRankDesc);
+		expect(sorted[0]).toBe(telemetryFinding);
+	});
 });
 
 describe("MCP Tool: get_hotspots", () => {

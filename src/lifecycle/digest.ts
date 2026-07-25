@@ -8,12 +8,18 @@
  * deliberately does not apply.
  */
 
+import type { TelemetryBatchDocument } from "../types/telemetry.js";
 import type { FindingState } from "./states.js";
 import type {
 	CaptureQueueHealth,
 	FindingRow,
 	LifecycleStore,
 } from "./store.js";
+
+/** One entry from a telemetry pull's `signalAvailability` array (src/types/telemetry.ts). */
+export type SignalAvailabilityEntry = NonNullable<
+	TelemetryBatchDocument["signalAvailability"]
+>[number];
 
 export interface DigestOptions {
 	tenant?: string;
@@ -29,6 +35,26 @@ export interface DigestOptions {
 	 * is always null and nothing renders.
 	 */
 	captureRequests?: { claimTtlMinutes: number; maxPending: number };
+	/**
+	 * The `signalAvailability` array from this tenant's most recent telemetry
+	 * pull (the same shape `parseTelemetryBatch` validates off the wire — see
+	 * src/types/telemetry.ts). Absent (e.g. a tenant with no telemetry pull,
+	 * or a caller that hasn't been wired up yet) → `unavailable` is always
+	 * `[]` and nothing renders.
+	 *
+	 * Two rules this option's ONLY consumer (buildDigest, below) must respect:
+	 *  - `rows`/`unmatchedRows` on an entry are PULL-WIDE (the whole pull,
+	 *    which may span other tenants) — never rendered as tenant-specific
+	 *    text, never used to gate a per-tenant "clean" claim. Only a signal's
+	 *    own `error` (and, for future use, `queried`/`truncated`) may drive
+	 *    that.
+	 *  - The `"RT0005 statements"` entry is the enrichment query — its
+	 *    failure does NOT mark a run incomplete (evaluateRun's absence gate
+	 *    deliberately excludes it, telemetry-parser.ts's failedSignalQueries
+	 *    derivation). It IS reported here as unavailable, but the rendered
+	 *    line must not imply findings went unobserved because of it.
+	 */
+	signalAvailability?: TelemetryBatchDocument["signalAvailability"];
 }
 
 export interface DigestFindingEntry {
@@ -70,6 +96,15 @@ export interface DigestData {
 	 * renderDigestMarkdown.
 	 */
 	captureQueue: CaptureQueueHealth | null;
+	/**
+	 * Signals whose query failed on the pull described by
+	 * `DigestOptions.signalAvailability` (entries with `error` set) — always
+	 * `[]` when the caller didn't supply availability data, or every signal
+	 * succeeded. Rendered as one line naming just the signal ids; see
+	 * DigestOptions.signalAvailability for the pull-wide-fields and
+	 * enrichment-query caveats this must not violate.
+	 */
+	unavailable: SignalAvailabilityEntry[];
 }
 
 function toEntry(store: LifecycleStore, row: FindingRow): DigestFindingEntry {
@@ -136,6 +171,14 @@ export function buildDigest(
 		captureQueue = h ?? null;
 	}
 
+	// Only `error` drives this — never `rows`/`unmatchedRows` (pull-wide, see
+	// DigestOptions.signalAvailability). Includes the "RT0005 statements"
+	// entry when it failed; renderDigestMarkdown's wording must not imply
+	// findings went unobserved for that one (it's enrichment, not identity).
+	const unavailable = (opts?.signalAvailability ?? []).filter(
+		(s) => s.error !== undefined,
+	);
+
 	return {
 		generatedAt,
 		tenant: tenant ?? null,
@@ -149,6 +192,7 @@ export function buildDigest(
 			.listFindings({ tenant, needsTriage: true, limit })
 			.map((row) => toEntry(store, row)),
 		captureQueue,
+		unavailable,
 	};
 }
 
@@ -202,12 +246,26 @@ export function renderDigestMarkdown(digest: DigestData): string {
 			].filter((line) => line !== "")
 		: [];
 
+	// Advisory only, never a "findings might be missing" alarm on its own —
+	// see DigestOptions.signalAvailability for why rows/unmatchedRows never
+	// appear here and why an "RT0005 statements" failure must not read as
+	// findings going unobserved.
+	const unavailable = digest.unavailable;
+	const unavailableBlock: string[] =
+		unavailable.length > 0
+			? [
+					`> Signals unavailable this window: ${unavailable.map((s) => s.signalId).join(", ")} — absence not counted for them.`,
+					"",
+				]
+			: [];
+
 	const header = [
 		"# al-perf Finding Digest",
 		"",
 		`Generated: ${digest.generatedAt}${digest.tenant ? ` · tenant: ${digest.tenant}` : ""}${digest.since ? ` · since: ${digest.since}` : ""}`,
 		"",
 		...queueBlock,
+		...unavailableBlock,
 		`| new | open | regressed | improving | resolved | closed | needs-triage |`,
 		`|---|---|---|---|---|---|---|`,
 		`| ${t.new} | ${t.open} | ${t.regressed} | ${t.improving} | ${t.resolved} | ${t.closed} | ${t.needsTriage} |`,
