@@ -138,16 +138,31 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 					!filteredVars.has(varLower) &&
 					!tempVars.has(varLower)
 				) {
+					// Filters travel WITH a record variable in AL — by value as
+					// well as by reference — so a record PARAMETER arrives
+					// carrying whatever the caller filtered, and no member-local
+					// analysis can see it. 978 of 5,432 candidates on a
+					// 15,436-file corpus are on a parameter. Still reported (the
+					// caller may equally have filtered nothing) but not as a
+					// stated full table scan, which is a claim this detector
+					// cannot support there.
+					const fromCaller =
+						member.features.variables.find(
+							(v) => v.name.toLowerCase() === varLower,
+						)?.isParameter === true;
 					patterns.push({
 						id: "unfiltered-findset",
-						severity: "warning",
+						severity: fromCaller ? "info" : "warning",
 						title: `${op.type} without filters on ${op.recordVariable} in ${member.name}`,
-						description: `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter(). This queries all records in the table, which can be extremely slow on large tables.`,
+						description: fromCaller
+							? `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter() in this member. ${op.recordVariable} is a parameter, and filters travel with a record in AL, so the caller may already have filtered it — or may not have.`
+							: `${op.type}() on ${op.recordVariable} at line ${op.line} in ${member.file} has no preceding SetRange() or SetFilter(). This queries all records in the table, which can be extremely slow on large tables.`,
 						impact: 0,
 						involvedMethods: [memberLabel(member)],
-						evidence: `${op.type}() at line ${op.line} on ${op.recordVariable} with no SetRange/SetFilter`,
-						suggestion:
-							"Add SetRange() or SetFilter() before the record retrieval to limit the result set. Querying entire tables causes full table scans.",
+						evidence: `${op.type}() at line ${op.line} on ${op.recordVariable} with no SetRange/SetFilter${fromCaller ? " in this member (parameter — caller may have filtered it)" : ""}`,
+						suggestion: fromCaller
+							? `Check every caller of ${member.name}: if any passes ${op.recordVariable} unfiltered, this reads the whole table. Filtering inside the member instead makes the guarantee local.`
+							: "Add SetRange() or SetFilter() before the record retrieval to limit the result set. Querying entire tables causes full table scans.",
 					});
 				}
 			}

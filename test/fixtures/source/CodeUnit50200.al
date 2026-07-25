@@ -110,6 +110,19 @@ codeunit 50200 "Advanced Patterns"
         until SalesLine.Next() = 0;
     end;
 
+    procedure FindOnValueParameter(ParamLine: Record "Sales Line")
+    begin
+        // Filters travel WITH a record in AL, by value as well as by
+        // reference. The caller may have filtered this one already, and
+        // nothing in this member can see that.
+        if ParamLine.FindSet() then;
+    end;
+
+    procedure FindOnVarParameter(var ParamLine2: Record "Sales Line")
+    begin
+        if ParamLine2.FindSet() then;
+    end;
+
     [EventSubscriber(ObjectType::Table, Database::Customer, 'OnAfterModifyEvent', '', true, true)]
     local procedure OnAfterModifyCustomer(var Rec: Record Customer)
     var

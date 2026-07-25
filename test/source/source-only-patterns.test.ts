@@ -68,6 +68,35 @@ describe("detectUnfilteredFindSet", () => {
 		expect(match!.suggestion).toBeDefined();
 	});
 
+	test("downgrades a find on a record PARAMETER — the caller may have filtered it", async () => {
+		// Filters travel with a record variable in AL, by value as well as by
+		// reference, so `procedure P(SalesLine: Record "Sales Line")` doing
+		// `SalesLine.FindSet()` may be reading a filtered set the member cannot
+		// see. 978 of 5,432 candidates on a 15,436-file corpus are this shape.
+		// Still reported — the caller may equally have filtered nothing — but
+		// not as a stated full table scan.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectUnfilteredFindSet(index);
+		for (const name of ["FindOnValueParameter", "FindOnVarParameter"]) {
+			const p = patterns.find((x) =>
+				x.involvedMethods.some((m) => m.includes(name)),
+			);
+			expect(p).toBeDefined();
+			expect(p!.severity).toBe("info");
+			expect(p!.description).toMatch(/caller|parameter/i);
+		}
+	});
+
+	test("keeps warning for a find on a LOCAL record", async () => {
+		// A local is declared right here with no filters, so the full-table
+		// claim is one this detector can actually support.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const p = detectUnfilteredFindSet(index).find((x) =>
+			x.involvedMethods.some((m) => m.includes("UnfilteredQuery")),
+		);
+		expect(p!.severity).toBe("warning");
+	});
+
 	test("does not flag FindSet with preceding SetRange", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectUnfilteredFindSet(index);

@@ -185,6 +185,13 @@ export interface VariableInfo {
 	/** True if declared with 'temporary' keyword */
 	isTemporary: boolean;
 	/**
+	 * True when this is a PARAMETER rather than a local or object-level
+	 * declaration. A record parameter arrives carrying whatever filters the
+	 * caller set on it — filters travel with the record, by value as well as
+	 * by reference — so no member-local analysis can prove it is unfiltered.
+	 */
+	isParameter?: boolean;
+	/**
 	 * True when this is a `var` (by-reference) PARAMETER. Whatever the member
 	 * puts in it is handed back to the caller, which reads fields the member
 	 * itself never names — see `escapedRecordVariables`.

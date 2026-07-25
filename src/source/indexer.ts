@@ -968,7 +968,7 @@ function extractVariables(procedureNode: SyntaxNode): VariableInfo[] {
 		for (const param of child.namedChildren) {
 			if (param.type !== "parameter") continue;
 			const info = variableFromTypedNode(param);
-			if (info) variables.push(info);
+			if (info) variables.push({ ...info, isParameter: true });
 		}
 	}
 
