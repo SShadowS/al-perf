@@ -1123,8 +1123,10 @@ test("RT0005 groups by alStackTrace instead of collapsing with any()", () => {
 test("RT0018 keeps its existing grouping and gains SQL counters", () => {
 	const kql = buildKqlQuery("RT0018", "2026-07-25T00:00:00.000Z", undefined, false);
 	expect(kql).toContain("stackTrace = any(stackTrace)");
-	expect(kql).toContain("sqlExecutes = sum(toint(customDimensions.sqlExecutes))");
-	expect(kql).toContain("sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))");
+	// Guarded, not a plain sum(): KQL folds over the empty set, so an all-absent
+	// column sums to 0 and "unknown" would silently become "confirmed zero".
+	expect(kql).toContain("countif(isnotnull(customDimensions.sqlExecutes)) == 0");
+	expect(kql).toContain("countif(isnotnull(customDimensions.sqlRowsRead)) == 0");
 });
 
 test("a header-only stack no longer becomes the method name", () => {
@@ -1185,7 +1187,12 @@ In `buildKqlQuery`, make the RT0005 shape distinct:
 	lines.push(
 		isSqlSignal
 			? "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms)"
-			: "| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace), sqlExecutes = sum(toint(customDimensions.sqlExecutes)), sqlRowsRead = sum(toint(customDimensions.sqlRowsRead))",
+			: // KQL aggregates fold over the EMPTY SET: sum() of all-nulls is 0, not
+			// null — the opposite of SQL. Verified on live telemetry (RT0005 groups
+			// of 28/20/352 rows with the column absent returned 0). Without the
+			// countif guard, "absent" silently becomes a confirmed zero. todouble()
+			// is required or KQL rejects the iff on real-vs-long branches.
+			"| summarize count = count(), maxDurationMs = max(ms), avgDurationMs = avg(ms), stackTrace = any(stackTrace), sqlExecutes = iff(countif(isnotnull(customDimensions.sqlExecutes)) == 0, real(null), todouble(sum(toint(customDimensions.sqlExecutes)))), sqlRowsRead = iff(countif(isnotnull(customDimensions.sqlRowsRead)) == 0, real(null), todouble(sum(toint(customDimensions.sqlRowsRead))))",
 		isSqlSignal
 			? split
 				? "    by appId, appName, objectType, objectId, objectName, methodName, stackTrace, clientType, aadTenantId, environmentName"
