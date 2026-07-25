@@ -189,13 +189,20 @@ function tokenize(sql: string): TokenizeResult | null {
 }
 
 /**
- * True when the ident at `tokens[i]` is a raw database name in a 3-part
- * `"DB".dbo."Table"` reference — recognized by peeking past the `.dbo.`
- * joiner for a following identifier. Database names carry no `$`, so
- * `logicalIdentifier` alone would pass one through unredacted (it has
- * nothing to split on); this closes that gap. Mirrors the 3-part shape
- * parseSqlTable already resolves (src/core/sql-node.ts) — `dbo` is the only
- * bare schema this recognizes, same as there.
+ * True when the ident at `tokens[i]` is a leading qualifier segment in a
+ * multi-part `"DB"."dbo"."Table"` / `"DB".dbo."Table"` reference — recognized
+ * by peeking past the joiner for a following identifier. Database/server
+ * names carry no `$`, so `logicalIdentifier` alone would pass one through
+ * unredacted (it has nothing to split on); this closes that gap.
+ *
+ * The joiner between two idents can be a bare dot (when the next segment —
+ * e.g. `dbo` — is ITSELF quoted/bracketed and so arrives as its own `ident`
+ * token) or a dot-word-dot (when the next segment is a bare, unquoted word
+ * such as `dbo` or an arbitrary schema name). Mirrors the QUALIFIER regex in
+ * src/core/sql-node.ts, which strips ANY quoted/bracketed segment ahead of
+ * the final table name — not just the literal `dbo` spelling — so a
+ * server/database ident is dropped regardless of how the segment after it is
+ * quoted or spelled.
  */
 function isDatabaseQualifier(tokens: Token[], i: number): boolean {
 	let j = i + 1;
@@ -206,7 +213,10 @@ function isDatabaseQualifier(tokens: Token[], i: number): boolean {
 		joiner += tok.value;
 	}
 	const next = tokens[j];
-	return next?.kind === "ident" && /^\s*\.\s*dbo\s*\.\s*$/i.test(joiner);
+	return (
+		next?.kind === "ident" &&
+		/^\s*\.\s*(?:[A-Za-z_]\w*\s*\.\s*)?$/.test(joiner)
+	);
 }
 
 /**
@@ -269,9 +279,17 @@ export function redactSqlForSink(sql: string): RedactedStatement | null {
 		if (/\bFROM\b\s*$/i.test(out)) seenFrom = true;
 	}
 
-	// A dropped 3-part database identifier leaves a stray "." before "dbo";
-	// collapse it back to the 2-part shape.
-	out = out.replace(/(^|\s)\.(dbo)\b/gi, "$1$2");
+	// A dropped qualifier ident leaves a stray "." (or a run of them, for a
+	// chain of several dropped idents) before whatever follows it — a bare
+	// schema word like "dbo", or directly the final quoted/bracketed table
+	// name. Collapse the run to one dot, then drop that one dot too unless a
+	// bare word needs it as a separator before the table name.
+	out = out.replace(/\.{2,}/g, ".");
+	out = out.replace(
+		/(^|\s)\.(?:([A-Za-z_]\w*)\.)?(?=["[])/gi,
+		(_m, pre: string, word: string | undefined) =>
+			pre + (word ? `${word}.` : ""),
+	);
 
 	// Bare numbers and hex literals — the profile-side normalizer misses hex.
 	// Must run BEFORE the "+N more" marker below: that marker's own digits

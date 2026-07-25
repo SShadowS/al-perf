@@ -208,4 +208,37 @@ describe("redactSqlForSink", () => {
 		expect(out?.text).toContain("Sample Table");
 		expect(out?.text).not.toContain("aa11bb22");
 	});
+
+	test("C1: strips a quoted/bracketed database or server qualifier regardless of joiner spelling", () => {
+		const doubleQuotedDbo = redactSqlForSink(
+			'SELECT "No_" FROM "SQLDATABASE"."dbo"."CRONUS$Sales Header"',
+		);
+		expect(doubleQuotedDbo?.text).not.toContain("SQLDATABASE");
+		expect(doubleQuotedDbo?.text).not.toContain("CRONUS");
+
+		const bracketedDbo = redactSqlForSink(
+			"SELECT [No_] FROM [SQLDATABASE].[dbo].[CRONUS$Sales Header]",
+		);
+		expect(bracketedDbo?.text).not.toContain("SQLDATABASE");
+		expect(bracketedDbo?.text).not.toContain("CRONUS");
+
+		const serverDbDbo = redactSqlForSink(
+			'SELECT "a"  FROM "SRV"."SQLDATABASE".dbo."CRONUS$T"',
+		);
+		expect(serverDbDbo?.text).not.toContain("SRV");
+		expect(serverDbDbo?.text).not.toContain("SQLDATABASE");
+		expect(serverDbDbo?.text).not.toContain("CRONUS");
+
+		const insertStatement = redactSqlForSink(
+			'INSERT INTO "SQLDATABASE"."dbo"."CRONUS$Sales Line" ("a") VALUES (1)',
+		);
+		expect(insertStatement?.text).not.toContain("SQLDATABASE");
+		expect(insertStatement?.text).not.toContain("CRONUS");
+
+		const nonDboSchema = redactSqlForSink(
+			'SELECT "No_" FROM "SQLDATABASE".myschema."CRONUS$Sales Header"',
+		);
+		expect(nonDboSchema?.text).not.toContain("SQLDATABASE");
+		expect(nonDboSchema?.text).not.toContain("CRONUS");
+	});
 });
