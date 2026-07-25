@@ -398,6 +398,38 @@ function collectLoopNodes(node: SyntaxNode): SyntaxNode[] {
  * (`SomeRec.CalcFields(...)`). Without `context` (or outside an object with an
  * implicit record), only `member_expression` calls are collected.
  */
+/**
+ * The record VARIABLE a record op's receiver names, `null` when the receiver
+ * cannot be a record variable at all, or `""` when there is no receiver node.
+ *
+ * `PurchaseLine[Index].Modify()` — an array of records is ordinary AL — parses
+ * with a `subscript_expression` receiver whose text is `PurchaseLine[Index]`.
+ * That matches no declaration, so every gate that resolves the receiver
+ * (temporary, non-record, table name) failed open on it. The element and the
+ * array share one declaration, so the base identifier is the right answer.
+ *
+ * `Tok.AsObject().Get('id', Value)` has a CALL EXPRESSION receiver. AL has no
+ * record-returning expression to chain a Find/Get onto, so a receiver that is
+ * itself a call is always a JsonObject/JsonArray/List op — 130 of them were
+ * reported inside loops as "each iteration triggers a separate SQL query".
+ */
+function receiverVariableName(objNode: SyntaxNode | null): string | null {
+	if (!objNode) return "";
+	switch (objNode.type) {
+		case "identifier":
+		case "quoted_identifier":
+			return stripQuotes(objNode.text);
+		case "subscript_expression":
+			return receiverVariableName(objNode.namedChildren[0] ?? null);
+		case "call_expression":
+			return null;
+		default:
+			// Anything else keeps the pre-existing behaviour: the raw text, which
+			// simply fails to resolve and leaves every gate failing open.
+			return objNode.text;
+	}
+}
+
 function collectRecordOps(
 	node: SyntaxNode,
 	context?: ObjectContext,
@@ -494,11 +526,12 @@ function collectRecordOps(
 						funcNode.childForFieldName("member") ?? funcNode.namedChildren[1];
 					if (propNode) {
 						const methodName = stripQuotes(propNode.text);
-						if (RECORD_OPS.has(methodName.toLowerCase())) {
+						const receiver = receiverVariableName(objNode);
+						if (RECORD_OPS.has(methodName.toLowerCase()) && receiver !== null) {
 							ops.push({
 								node: n,
 								methodName,
-								recordVariable: objNode ? objNode.text : "",
+								recordVariable: receiver,
 								fieldArgument: extractFieldArgument(n, methodName),
 								allFieldArguments: extractAllFieldArguments(n, methodName),
 							});
@@ -540,15 +573,18 @@ function collectRecordOps(
 			// collectFieldAccesses). Migrated BC code is full of them.
 			const objNode = n.childForFieldName("object") ?? n.namedChildren[0];
 			const propNode = n.childForFieldName("member") ?? n.namedChildren[1];
-			ops.push({
-				node: n,
-				methodName: stripQuotes(propNode!.text),
-				recordVariable: objNode ? objNode.text : "",
-				// No argument list exists, so there are no field arguments to
-				// extract -- a paren-less call is by definition argument-less.
-				fieldArgument: undefined,
-				allFieldArguments: undefined,
-			});
+			const receiver = receiverVariableName(objNode);
+			if (receiver !== null) {
+				ops.push({
+					node: n,
+					methodName: stripQuotes(propNode!.text),
+					recordVariable: receiver,
+					// No argument list exists, so there are no field arguments to
+					// extract -- a paren-less call is by definition argument-less.
+					fieldArgument: undefined,
+					allFieldArguments: undefined,
+				});
+			}
 		}
 
 		for (const child of n.namedChildren) {
@@ -899,20 +935,50 @@ function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
  * concrete impact on `external-call-in-loop`.
  */
 /**
+ * The `record_type` a `type_specification` ultimately denotes, looking through
+ * `array_type` (which wraps another `type_specification`). Arrays of records
+ * are ordinary AL — `ProdBOMLine: array[10] of Record "Production BOM Line"`,
+ * and buffer arrays declared `temporary` — and are indistinguishable from a
+ * non-record type without this.
+ */
+function findRecordTypeNode(typeSpecNode: SyntaxNode): SyntaxNode | undefined {
+	for (const child of typeSpecNode.namedChildren) {
+		if (child.type === "record_type") return child;
+		if (child.type === "array_type") {
+			for (const inner of child.namedChildren) {
+				if (inner.type === "type_specification") {
+					const found = findRecordTypeNode(inner);
+					if (found) return found;
+				}
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
  * Build a `VariableInfo` from a node carrying an `identifier` and a
  * `type_specification` — the shape a `variable_declaration` and a `parameter`
  * share. Returns undefined when either part is missing.
  */
 function variableFromTypedNode(node: SyntaxNode): VariableInfo | undefined {
-	const nameNode = node.namedChildren.find((c) => c.type === "identifier");
+	// A QUOTED variable name (`"G/L Entry": Record "G/L Entry" temporary;`) is
+	// ordinary AL and parses as quoted_identifier. Matching only `identifier`
+	// dropped the declaration outright, so every gate that resolves a receiver
+	// — temporary, non-record, table name — failed open on that variable.
+	const nameNode = node.namedChildren.find(
+		(c) => c.type === "identifier" || c.type === "quoted_identifier",
+	);
 	const typeSpecNode = node.namedChildren.find(
 		(c) => c.type === "type_specification",
 	);
 	if (!nameNode || !typeSpecNode) return undefined;
 
-	const recordTypeNode = typeSpecNode.namedChildren.find(
-		(c) => c.type === "record_type",
-	);
+	// `array[5] of Record "Sales Line" temporary` nests the record_type one
+	// type_specification deeper, under array_type — so a direct-children-only
+	// search saw neither the table nor the `temporary`, and every op on a temp
+	// array buffer read as SQL.
+	const recordTypeNode = findRecordTypeNode(typeSpecNode);
 	const isTemporary =
 		recordTypeNode?.namedChildren.some((c) => c.type === "temporary_keyword") ??
 		false;
@@ -941,7 +1007,7 @@ function variableFromTypedNode(node: SyntaxNode): VariableInfo | undefined {
 		node.namedChildren.some((c) => c.type === "var_keyword");
 
 	return {
-		name: nameNode.text,
+		name: stripQuotes(nameNode.text),
 		typeStr: typeSpecNode.text,
 		isRecord,
 		tableName,

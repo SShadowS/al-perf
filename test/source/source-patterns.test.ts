@@ -1369,3 +1369,52 @@ describe("incomplete-setloadfields — primary key fields are always loaded", ()
 		expect(p[0].severity).toBe("critical");
 	});
 });
+
+describe("receiver resolution — indexed, quoted and expression receivers", () => {
+	function findingsFor(functionName: string) {
+		return runSourceDetectors(
+			syntheticMethodsFromIndex(sourceIndex).filter(
+				(m) => m.functionName === functionName && m.objectId === 50961,
+			),
+			sourceIndex,
+		);
+	}
+
+	it("does not bill an array of TEMPORARY records as SQL", () => {
+		// `TempBuffer[1].Insert()` parses with a subscript_expression receiver
+		// whose text is "TempBuffer[1]" — matching no declaration, so the
+		// temporary gate failed open and every element op read as a SQL write.
+		// 291 in-loop ops on a 15,436-file corpus have an indexed receiver.
+		const ids = findingsFor("InsertIntoTempArrayInLoop").map((p) => p.id);
+		expect(ids).not.toContain("insert-in-loop");
+		expect(ids).not.toContain("record-op-in-loop");
+	});
+
+	it("still bills an array of REAL records as SQL", () => {
+		const ids = findingsFor("InsertIntoRealArrayInLoop").map((p) => p.id);
+		expect(ids).toContain("insert-in-loop");
+	});
+
+	it("does not bill a quoted-name temporary variable as SQL", () => {
+		const ids = findingsFor("QuotedVariableNameInLoop").map((p) => p.id);
+		expect(ids).not.toContain("insert-in-loop");
+		expect(ids).not.toContain("record-op-in-loop");
+	});
+
+	it("does not treat a call-expression receiver as a record op", () => {
+		// `Tok.AsObject().Get('id', Value)` is a JsonObject lookup. AL has no
+		// record-returning expression to chain a Find/Get onto, so a receiver
+		// that is itself a call can never be a record. 130 such ops in loops on
+		// the corpus were reported as "a separate SQL query" per iteration.
+		expect(findingsFor("JsonGetInLoop")).toHaveLength(0);
+		// and nothing anywhere else in the file mistakes it for one either
+		expect(
+			runSourceDetectors(
+				syntheticMethodsFromIndex(sourceIndex),
+				sourceIndex,
+			).filter((p) =>
+				p.involvedMethods.some((m) => m.includes("JsonGetInLoop")),
+			),
+		).toHaveLength(0);
+	});
+});

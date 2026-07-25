@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(37);
-		expect(index.objects.size).toBe(37);
+		expect(index.files.length).toBe(38);
+		expect(index.objects.size).toBe(38);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -507,6 +507,32 @@ describe("record parameters", () => {
 		)!;
 		expect(source.isRecord).toBe(true);
 		expect(source.isTemporary).toBe(false);
+	});
+
+	it("resolves an array OF Record through to the table and its temp-ness", async () => {
+		// `array[5] of Record "Sales Line" temporary` nests the record_type one
+		// type_specification deeper, under array_type. Reading only the direct
+		// children left isRecord=false, tableName=undefined and
+		// isTemporary=false — so a temp array buffer's Insert in a loop was
+		// billed as a SQL INSERT per row. 291 in-loop ops on a 15,436-file
+		// corpus have an indexed receiver.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "CodeUnitArrays.al"),
+			fixturesDir,
+		))!;
+		const proc = result.procedures.find(
+			(p) => p.name === "InsertIntoTempArrayInLoop",
+		)!;
+		const temp = proc.features.variables.find((v) => v.name === "TempBuffer")!;
+		expect(temp.isRecord).toBe(true);
+		expect(temp.tableName).toBe("Sales Line");
+		expect(temp.isTemporary).toBe(true);
+
+		const real = result.procedures
+			.find((p) => p.name === "InsertIntoRealArrayInLoop")!
+			.features.variables.find((v) => v.name === "RealLine")!;
+		expect(real.isRecord).toBe(true);
+		expect(real.isTemporary).toBe(false);
 	});
 
 	it("keeps var-section declarations when a procedure has both", async () => {
