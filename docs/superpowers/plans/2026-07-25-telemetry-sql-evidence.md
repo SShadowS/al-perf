@@ -171,11 +171,53 @@ Expected: FAIL — `Cannot find module '../../src/lifecycle/telemetry-sql.js'`
  */
 const AL_FRAME_RE = /"[^"]*"\([A-Za-z]+\s+\d+\)\.([A-Za-z_][\w]*)/;
 
+const CALLSTACK_MARKER = "AL CallStack:";
+
 export function parseAlStackFrame(stack: string): string | null {
 	if (!stack) return null;
-	const match = AL_FRAME_RE.exec(stack);
+	// Anchor to the marker before matching. Unanchored, the first frame-shaped
+	// text ANYWHERE wins — a header value carrying a quote and parens would be
+	// picked over the real frame. Today's headers are plain `Key: Value`, so
+	// this is defense against a grammar that changes, not a live bug.
+	const idx = stack.indexOf(CALLSTACK_MARKER);
+	if (idx === -1) return null;
+	const match = AL_FRAME_RE.exec(stack.slice(idx));
 	return match ? match[1] : null;
 }
+```
+
+Pin the anchoring, and the four shapes that would otherwise ride on the regex
+untested:
+
+```ts
+	test("ignores frame-shaped text before the AL CallStack marker", () => {
+		const stack =
+			'AppObjectType: Table\r\n  AppObjectId: 50100\r\n  SomeHeader: "Fake Name"(Table 1).NotTheRealMethod\r\n  AL CallStack: "Sample Job"(Table 50100).Run line 60 - Sample Extension';
+		expect(parseAlStackFrame(stack)).toBe("Run");
+	});
+
+	test("handles object types beyond Table and CodeUnit", () => {
+		expect(
+			parseAlStackFrame('AL CallStack: "Sales Report"(Report 50200).OnPreReport line 3'),
+		).toBe("OnPreReport");
+	});
+
+	test("handles a method name with digits and underscores", () => {
+		expect(
+			parseAlStackFrame('AL CallStack: "Poster"(CodeUnit 50210).Post_Line2 line 9'),
+		).toBe("Post_Line2");
+	});
+
+	test("handles an object name containing a dot and parentheses", () => {
+		expect(
+			parseAlStackFrame('AL CallStack: "CTS-SYS Send (Daily) Tel."(CodeUnit 50300).Emit line 1'),
+		).toBe("Emit");
+	});
+
+	test("finds a frame on a later line when the marker line carries none", () => {
+		const stack = 'AL CallStack: \r\n"Sample Mgt."(CodeUnit 50101).RunJobs line 8 - Sample Extension';
+		expect(parseAlStackFrame(stack)).toBe("RunJobs");
+	});
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
