@@ -110,16 +110,24 @@ const AGGREGATION_CALC_TYPES = new Set<TableFieldInfo["calcFormulaType"]>([
  * FlowField type the tool has no evidence for is exactly the kind of
  * confident falsehood this detector's suggestion text exists to eliminate.
  *
- * Falls back to the table's full FlowField set only when the call's field
- * list is unknown — a bare `CalcFields();` with no arguments calculates
- * every FlowField on the record, so the table's full set genuinely is the
- * true answer there, not a guess.
+ * Falls back to the table's full FlowField set when the call's field list is
+ * unknown AND the root declaration was indexed — a bare `CalcFields();` with
+ * no arguments calculates every FlowField on the record, so the table's full
+ * set genuinely is the true answer there, but only if that set is the whole
+ * table's. On a fragment it is whatever the extensions happened to declare.
  *
- * Returns `undefined` when nothing can be resolved: the record variable
- * isn't a known Record, its table isn't in the index, or the named field(s)
- * don't match any indexed FlowField on that table. Callers must not assert
- * anything about the field's type when this is `undefined` — silence is the
- * honest answer, not a confident guess.
+ * Returns `undefined` when nothing can be resolved OR when what could be
+ * resolved is not enough to justify a downgrade:
+ *   - the record variable isn't a known Record, or has no table name
+ *   - its table isn't in the index at all
+ *   - two distinct roots declare that table name (`ambiguous`), so the merged
+ *     picture describes neither
+ *   - a bare `CalcFields()` on a table whose root was never indexed
+ *   - a named field list on such a table where some names did not resolve —
+ *     the ones that did not may be the expensive ones
+ * Callers must not assert anything about the field's type when this is
+ * `undefined` — silence is the honest answer, not a confident guess, and
+ * `calcFieldSeverity` maps it to the conservative `critical`.
  */
 function resolveCalcFields(
 	op: RecordOpInfo,

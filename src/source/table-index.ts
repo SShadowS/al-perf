@@ -5,14 +5,25 @@ import type {
 } from "../types/source-index.js";
 
 /**
+ * Codepoint order. `localeCompare` follows the host locale, which makes the
+ * merge order machine-dependent — see `buildTableIndex`'s note.
+ */
+function byPath(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
  * Build the resolved per-table picture: each root `table` declaration merged
  * with every indexed `tableextension` that extends it.
  *
  * Two ordered passes. Roots first and to completion, so `rootSeen` and
  * `ambiguous` never depend on the order extensions happen to arrive in.
  * Both passes sort their contributors, because `buildSourceIndex` inserts
- * objects in unsorted `Glob.scan` order — relative paths, so the result is
- * identical across machines where absolute paths would not be.
+ * objects in unsorted `Glob.scan` order — by RELATIVE path, so a workspace
+ * checked out at a different absolute path still merges identically, and by
+ * CODEPOINT rather than `localeCompare`, which follows the host locale:
+ * `"aa.al".localeCompare("z.al")` is -1 under `en` and +1 under `da`, so two
+ * machines with different locales would order the same roots differently.
  */
 export function buildTableIndex(
 	objects: Iterable<ObjectInfo>,
@@ -22,7 +33,7 @@ export function buildTableIndex(
 
 	const roots = all
 		.filter((o) => o.objectType === "Table")
-		.sort((a, b) => a.file.relativePath.localeCompare(b.file.relativePath));
+		.sort((a, b) => byPath(a.file.relativePath, b.file.relativePath));
 
 	for (const root of roots) {
 		const key = root.objectName.toLowerCase();
@@ -66,7 +77,7 @@ export function buildTableIndex(
 		.sort(
 			(a, b) =>
 				a.objectId - b.objectId ||
-				a.file.relativePath.localeCompare(b.file.relativePath),
+				byPath(a.file.relativePath, b.file.relativePath),
 		);
 
 	for (const ext of extensions) {
