@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { analyzeProfile } from "../../src/core/analyzer.js";
 import { formatAnalysisHtml } from "../../src/cli/formatters/html.js";
 import { formatAnalysisMarkdown } from "../../src/cli/formatters/markdown.js";
 import { formatAnalysisTerminal } from "../../src/cli/formatters/terminal.js";
+import { analyzeProfile } from "../../src/core/analyzer.js";
 
 /**
  * Field-level parity across formatters.

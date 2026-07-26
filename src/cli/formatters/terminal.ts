@@ -307,7 +307,9 @@ function renderPatterns(result: AnalysisResult): string {
 		);
 		lines.push(`    ${p.description}`);
 		if (p.involvedMethods.length > 0) {
-			lines.push(`    ${chalk.dim("Methods:")} ${p.involvedMethods.join(", ")}`);
+			lines.push(
+				`    ${chalk.dim("Methods:")} ${p.involvedMethods.join(", ")}`,
+			);
 		}
 		lines.push(`    Impact: ${formatTime(p.impact)}`);
 		if (p.estimatedSavings && p.estimatedSavings > 0) {
