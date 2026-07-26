@@ -1482,6 +1482,24 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(p[0].severity).toBe("critical");
 	});
 
+	it("hedges only the names actually in doubt, not the confirmed ones", () => {
+		// One governing SetLoadFields covering a confirmed extension field and
+		// an unconfirmable name used to say "these names could not be confirmed
+		// to be fields at all" about both.
+		const p = findings("ReadsConfirmedAndUnconfirmableOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toContain(
+			"somethingunseen could not be confirmed",
+		);
+		expect(p[0].description).not.toContain(
+			"orphan code could not be confirmed",
+		);
+		// both are still reported as missing from the load list
+		expect(p[0].evidence).toContain("orphan code");
+		expect(p[0].evidence).toContain("somethingunseen");
+	});
+
 	it("hedges an unconfirmable name on a fragment", () => {
 		const p = findings("ReadsUnknownNameOnFragmentAfterNarrowing");
 		expect(p).toHaveLength(1);

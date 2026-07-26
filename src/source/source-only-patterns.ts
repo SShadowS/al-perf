@@ -496,7 +496,21 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 						description: `${op.type}("${op.fieldArgument}", ...) on ${op.recordVariable} at line ${op.line} in ${member.file} filters on a field that is not the leading field of any key on table "${variable.tableName}". This may cause a full table scan.`,
 						impact: 0,
 						involvedMethods: [memberLabel(member)],
-						evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys.map((k) => k.key.name + "(" + k.key.fields.join(", ") + ")").join(", ")}`,
+						// Keys carry their contributor because an extension may
+						// legally reuse a base key's NAME. Without the tag the
+						// evidence renders one name twice with two different
+						// field lists and reads as a tool bug rather than as the
+						// legal AL shape it is.
+						evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys
+							.map(
+								(k) =>
+									`${k.key.name}(${k.key.fields.join(", ")})${
+										k.fromObjectId === tableObj.objectId
+											? ""
+											: ` [from extension ${k.fromObjectId}]`
+									}`,
+							)
+							.join(", ")}`,
 						suggestion: `Add a key starting with "${op.fieldArgument}" to table "${variable.tableName}", or restructure the query to filter on an existing key's leading field.`,
 					});
 				}

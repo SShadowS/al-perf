@@ -870,13 +870,22 @@ export function detectIncompleteSetLoadFields(
 					const allConfirmed =
 						confirmedFields !== undefined &&
 						missingFields.every((f) => confirmedFields.has(f));
+					// Name the names that are actually in doubt. The hedge used
+					// to say "these names could not be confirmed to be fields at
+					// all" about the WHOLE list, which is untrue as soon as one
+					// governing SetLoadFields covers a confirmed field and an
+					// unconfirmable one together — the confirmed one was
+					// confirmed.
+					const unconfirmed = missingFields.filter(
+						(f) => !confirmedFields?.has(f),
+					);
 					patterns.push({
 						id: "incomplete-setloadfields",
 						severity: allConfirmed ? "critical" : "warning",
 						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
 						description: allConfirmed
 							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`
-							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so these names could not be confirmed to be fields at all — a paren-less call to a table method reads identically here.`,
+							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so ${unconfirmed.join(", ")} could not be confirmed to be ${unconfirmed.length === 1 ? "a field" : "fields"} at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
 						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
