@@ -119,14 +119,21 @@ the minimal fixtures are `sampling-minimal` and `instrumentation-minimal`.
 Note the fixtures do NOT cover every real shape — see `isIdleNode`, where every
 fixture encoded `objectId: 0` and real sampling captures emit `-1`.
 
-### Pattern Detection### Pattern Detection
+### Pattern Detection
 
-Pattern detectors are composable functions with signature:
+Three categories (21 detectors), and they do NOT share a signature — each family takes what it can actually use, and only the first is the exported `PatternDetector` type:
+
 ```typescript
-type PatternDetector = (profile: ProcessedProfile, sourceIndex?: SourceIndex) => DetectedPattern[];
+// profile-only, src/types/patterns.ts — no source, ever
+type PatternDetector = (profile: ProcessedProfile) => DetectedPattern[];
+
+runDetectors(profile)                        // profile-only        (analyzer.ts:272)
+runSourceDetectors(methods, sourceIndex)     // source-correlated   (analyzer.ts:282)
+runSourceOnlyDetectors(sourceIndex)          // source-only         — NOT called by analyzeProfile
 ```
 
-Three categories (21 detectors):
+That last line is load-bearing: `analyzeProfile` runs the profile-only and source-correlated families and merges both into `result.patterns`, but never the source-only family. `nested-loops`, `unfiltered-findset`, `unindexed-filter`, `dangerous-call-in-loop`, `external-call-in-loop` and their siblings reach users through `analyze-source`, not through `analyze`. Anything reasoning over `result.patterns` sees 14 detectors, not 21.
+
 - **Profile-only** (7): single-method-dominance, high-hit-count, deep-call-stack, repeated-siblings, event-subscriber-hotspot, recursive-call, event-chain
 - **Source-correlated** (7): calcfields-in-loop (with CalcFormula severity graduation), modify-in-loop, insert-in-loop, delete-in-loop, record-op-in-loop, missing-setloadfields, incomplete-setloadfields
   - "Loop" here includes **implicit** loops, not just `repeat`/`for`/`foreach`/`while`: a `Report`/`XMLport`/`Page` `OnAfterGetRecord` trigger runs once per row by platform contract, even with no syntactic loop in the source. `PER_ROW_TRIGGERS` in `src/source/indexer.ts` promotes these trigger bodies to loop bodies (`OnPreDataItem`/`OnPostDataItem` and table triggers like `OnValidate`/`OnInsert`/`OnModify` are excluded — they run once, or once per operation, not once per row). Findings raised from an implicit loop say so explicitly in their evidence/description (`RecordOpInfo.implicitLoop`), and a Page-sourced implicit-loop finding is one severity level below the same finding on a Report/XMLport.
