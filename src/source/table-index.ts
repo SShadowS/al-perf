@@ -85,9 +85,17 @@ export function buildTableIndex(
 			tables.set(key, table);
 		}
 
-		// Fields union by name, first wins. The compiler already forbids an
-		// extension from redeclaring a base field name, so this never fires on
-		// compiling source — it is a defensive tie-break, not a semantic rule.
+		// Fields union by name, first wins — the ROOT's declaration wins over an
+		// extension's, and an earlier extension over a later one.
+		//
+		// Not a defensive tie-break: this branch fires 168 times on the BC base
+		// app. AL normally rejects an extension redeclaring a field the table
+		// already has, but the move-a-field-to-another-app idiom suppresses that
+		// with `MovedFrom` plus `#pragma warning disable AS0125`, so root and
+		// extension both carry it — `ReturnReasonExt` and `Return Reason` each
+		// declare `field(3; "Default Location Code")` with the same
+		// TableRelation. Without the dedup that is two fields and, downstream,
+		// two identical relation graph edges.
 		const seen = new Set(table.fields.map((f) => f.name.toLowerCase()));
 		for (const f of ext.fields as TableFieldInfo[]) {
 			if (seen.has(f.name.toLowerCase())) continue;
