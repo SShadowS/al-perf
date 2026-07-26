@@ -547,6 +547,29 @@ describe("record parameters", () => {
 	});
 });
 
+describe("extension objects", () => {
+	it("records the base object an extension extends", async () => {
+		// `tableextension 50905 "Implicit Rec Table Ext" extends Customer`.
+		// extractObjectName returns the first identifier in the declaration,
+		// which is the EXTENSION's name — the target sits after extends_keyword.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "ImplicitRecTableExtension.al"),
+			fixturesDir,
+		))!;
+		expect(result.objectType).toBe("TableExtension");
+		expect(result.objectName).toBe("Implicit Rec Table Ext");
+		expect(result.extendsTarget).toBe("Customer");
+	});
+
+	it("leaves extendsTarget undefined on a non-extension object", async () => {
+		const result = (await indexALFile(
+			resolve(fixturesDir, "Table50400.al"),
+			fixturesDir,
+		))!;
+		expect(result.extendsTarget).toBeUndefined();
+	});
+});
+
 describe("objects the index used to drop silently", () => {
 	it("indexes an object wrapped in a preprocessor conditional", async () => {
 		// findObjectDeclaration scanned only the root's direct children, but

@@ -79,6 +79,15 @@ export interface ObjectInfo {
 	 * in-memory buffer, so no operation on it reaches SQL.
 	 */
 	sourceTableTemporary?: boolean;
+	/**
+	 * The object this one extends, for `tableextension` / `pageextension` /
+	 * `reportextension` / `enumextension`. Quotes stripped. Undefined on a
+	 * root declaration and on an extension whose `extends` clause failed to
+	 * parse. Only TableExtension currently feeds a consumer (`buildTableIndex`);
+	 * the others are captured because it is one code path and the fact is the
+	 * enabling data for any future one.
+	 */
+	extendsTarget?: string;
 }
 
 export interface TableFieldInfo {

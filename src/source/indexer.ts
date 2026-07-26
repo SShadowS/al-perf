@@ -301,6 +301,26 @@ function extractObjectName(decl: SyntaxNode): string {
 }
 
 /**
+ * The object an `…extension` declaration extends. The target is the first
+ * identifier AFTER `extends_keyword` — `extractObjectName` returns the first
+ * one before it, which is the extension's own name.
+ */
+function extractExtendsTarget(decl: SyntaxNode): string | undefined {
+	let seenExtends = false;
+	for (const child of decl.namedChildren) {
+		if (child.type === "extends_keyword") {
+			seenExtends = true;
+			continue;
+		}
+		if (!seenExtends) continue;
+		if (child.type === "quoted_identifier" || child.type === "identifier") {
+			return stripQuotes(child.text);
+		}
+	}
+	return undefined;
+}
+
+/**
  * Extract procedure name from a procedure node.
  */
 function extractProcedureName(proc: SyntaxNode): string {
@@ -1675,6 +1695,9 @@ function indexParsedTree(
 		fields,
 		keys,
 		sourceTableTemporary: extractSourceTableTemporary(declNode),
+		...(extractExtendsTarget(declNode)
+			? { extendsTarget: extractExtendsTarget(declNode) }
+			: {}),
 	};
 }
 
