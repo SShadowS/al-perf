@@ -11,7 +11,7 @@ import {
 	loopEvidencePhrase,
 	loopLocationPhrase,
 } from "./implicit-loop.js";
-import { isKnownNonRecordOp } from "./source-patterns.js";
+import { isKnownNonRecordOp, isTemporaryOp } from "./source-patterns.js";
 
 /**
  * Format a member label for use in involvedMethods arrays.
@@ -119,12 +119,15 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 				}
 			}
 
-			// Collect temporary variable names
-			const tempVars = new Set<string>(
-				member.features.variables
-					.filter((v) => v.isTemporary)
-					.map((v) => v.name.toLowerCase()),
-			);
+			// Temp-ness is decided by the SHARED gate, not by a local scan of
+			// `var` declarations. `isTemporaryOp` also reads the owning
+			// object's `SourceTableTemporary` — a Page or Query with that set
+			// has an in-memory `Rec`, which has no `var` declaration anywhere
+			// for a local scan to find. Without it, every unfiltered find on
+			// such a page was reported as reading the whole table: 126 findings
+			// on one real corpus, 89 on another, describing SQL that never
+			// runs. The record-op detectors had this right; this one carried a
+			// second, weaker copy of the same idea.
 
 			for (const op of findOps) {
 				const varLower = op.recordVariable?.toLowerCase() ?? "";
@@ -133,11 +136,8 @@ export function detectUnfilteredFindSet(index: SourceIndex): DetectedPattern[] {
 				// "add SetRange" is the wrong API. Fails open on an unresolved
 				// receiver, so implicit Rec and object-level globals still report.
 				if (isKnownNonRecordOp(op, member.features.variables)) continue;
-				if (
-					varLower &&
-					!filteredVars.has(varLower) &&
-					!tempVars.has(varLower)
-				) {
+				if (isTemporaryOp(op, member.features.variables, obj)) continue;
+				if (varLower && !filteredVars.has(varLower)) {
 					// Filters travel WITH a record variable in AL — by value as
 					// well as by reference — so a record PARAMETER arrives
 					// carrying whatever the caller filtered, and no member-local

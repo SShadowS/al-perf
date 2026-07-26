@@ -27,4 +27,14 @@ page 50804 "Temp Source Page"
                 end;
             until GenJnlLine.Next() = 0;
     end;
+
+    procedure FirstBufferedVendor(): Code[20]
+    begin
+        // `Rec` here is an in-memory buffer — SourceTableTemporary = true — so
+        // this find reaches no SQL at all. Reporting it as an unfiltered read
+        // of the whole Vendor table describes a query that never runs.
+        if Rec.FindFirst() then
+            exit(Rec."No.");
+        exit('');
+    end;
 }
