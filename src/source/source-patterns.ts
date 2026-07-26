@@ -828,7 +828,24 @@ export function detectIncompleteSetLoadFields(
 				// with them. The primary key is the ROOT's first key and only
 				// ever the root's: an extension key is a secondary key by BC
 				// definition, so a fragment has no primary key to know.
-				const alwaysLoaded = new Set<string>(["systemid"]);
+				// Microsoft's partial-records FAQ: a field can be excluded from
+				// a load set only if it "isn't a FlowField, FlowFilter, Primary
+				// Key, Timestamp, SystemId, Audit Fields, or Blobs". Verified
+				// on BC 28 rather than taken on faith — reading
+				// SystemModifiedAt after SetLoadFields(Description) cost 1 SQL
+				// statement against a baseline of 1, where a genuinely
+				// unloaded field cost 4 (private/alwaysloaded-probe). These
+				// are name-based so they hold even for a table that is not in
+				// the index; Blobs are type-based and are handled with the
+				// FlowField guard below.
+				const alwaysLoaded = new Set<string>([
+					"systemid",
+					"timestamp",
+					"systemcreatedat",
+					"systemcreatedby",
+					"systemmodifiedat",
+					"systemmodifiedby",
+				]);
 				for (const f of table?.primaryKey?.fields ?? []) {
 					alwaysLoaded.add(f.toLowerCase());
 				}
@@ -863,10 +880,16 @@ export function detectIncompleteSetLoadFields(
 					// the no-`where` and negated shapes, and the next
 					// unrecognised formula shape would silently reopen this.
 					const confirmedClass = confirmed?.fieldClass?.toLowerCase();
+					// A Blob is always loaded too, and unlike the audit fields
+					// it can only be recognised by TYPE — it is a real declared
+					// field, so it resolves as confirmed and was reported as a
+					// forgotten one. 4 findings on each of two real corpora.
+					const isBlob = confirmed?.dataType?.toLowerCase() === "blob";
 					if (
 						confirmed?.calcFormulaType !== undefined ||
 						confirmedClass === "flowfilter" ||
-						confirmedClass === "flowfield"
+						confirmedClass === "flowfield" ||
+						isBlob
 					) {
 						continue;
 					}
