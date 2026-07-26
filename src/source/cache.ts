@@ -19,8 +19,13 @@ import type {
 	TriggerInfo,
 } from "../types/source-index.js";
 import { buildSourceIndex } from "./indexer.js";
+import { buildTableIndex } from "./table-index.js";
 
-const CACHE_VERSION = 3;
+// 4: ObjectInfo gained `extendsTarget`. A version-3 entry deserializes
+// objects without it, so `buildTableIndex` sees zero contributing
+// extensions and the whole merge silently vanishes on a cache hit while
+// the directory hash still matches.
+const CACHE_VERSION = 4;
 
 interface SerializedIndex {
 	files: ALFileInfo[];
@@ -44,6 +49,8 @@ interface SerializedObjectInfo {
 	triggers: TriggerInfo[];
 	fields: TableFieldInfo[];
 	keys: TableKeyInfo[];
+	sourceTableTemporary?: boolean;
+	extendsTarget?: string;
 }
 
 interface CacheEntry {
@@ -128,11 +135,15 @@ function serializeIndex(index: SourceIndex): SerializedIndex {
  * Deserialize a SerializedIndex back into a SourceIndex with proper Maps.
  */
 function deserializeIndex(serialized: SerializedIndex): SourceIndex {
+	const objects = new Map(serialized.objects);
 	return {
 		files: serialized.files,
-		objects: new Map(serialized.objects),
+		objects,
 		procedures: new Map(serialized.procedures),
 		triggers: new Map(serialized.triggers),
+		// Derived data, never serialized — rebuilt with the SAME builder
+		// buildSourceIndex uses, so a cache hit and a fresh build cannot drift.
+		tables: buildTableIndex(objects.values()),
 		// A cached index was written from a successful run; failures are a
 		// property of the run, not of the cache.
 		failedFiles: [],

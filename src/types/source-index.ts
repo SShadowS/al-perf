@@ -11,6 +11,13 @@ export interface SourceIndex {
 	/** Object info, keyed by "ObjectType_ObjectId" */
 	objects: Map<string, ObjectInfo>;
 
+	/**
+	 * Resolved per-table picture, keyed on the LOWERCASED table name — AL
+	 * identifiers are case-insensitive. Derived from `objects`; never
+	 * serialized, always rebuilt.
+	 */
+	tables: Map<string, ResolvedTable>;
+
 	/** Event publisher/subscriber catalog built from source attributes */
 	eventCatalog: EventCatalog;
 
@@ -79,6 +86,72 @@ export interface ObjectInfo {
 	 * in-memory buffer, so no operation on it reaches SQL.
 	 */
 	sourceTableTemporary?: boolean;
+	/**
+	 * The object this one extends, for `tableextension` / `pageextension` /
+	 * `reportextension` / `enumextension`. Quotes stripped. Read from the
+	 * grammar's `base_object` field, so it is undefined on a root
+	 * declaration, on an extension whose `extends` clause failed to parse,
+	 * and on `interface X extends Y` -- an interface's target lives on a
+	 * different field (`extends_interface`) and is not captured here. Only
+	 * TableExtension currently feeds a consumer (`buildTableIndex`); the
+	 * others are captured because it is one code path and the fact is the
+	 * enabling data for any future one.
+	 */
+	extendsTarget?: string;
+}
+
+/**
+ * One BC table as it exists at runtime: the root `table` declaration plus
+ * every indexed `tableextension` that extends it.
+ *
+ * Positive facts survive a fragment — a field present here IS a field.
+ * Negative facts do not: `rootSeen === false` means an absent field proves
+ * nothing, and even `rootSeen === true` cannot prove "no key leads with this
+ * field", because an extension may live in a dependency app that was never
+ * indexed. Nothing here closes the world.
+ */
+export interface ResolvedTable {
+	/**
+	 * As declared on the root. With no root, the `extendsTarget` text exactly
+	 * as written by the first contributor in (objectId, relative path) order.
+	 */
+	name: string;
+	/** The root's object id. Absent when no root declaration was indexed. */
+	objectId?: number;
+	/** Root's fields first, then each contributing extension's. */
+	fields: TableFieldInfo[];
+	/**
+	 * Every contributor's keys with provenance. NEVER deduplicated by key
+	 * name: a tableextension may legally reuse a base key's name, and
+	 * collapsing on it drops a real index.
+	 */
+	keys: Array<{ key: TableKeyInfo; fromObjectId: number; fromFile: string }>;
+	/**
+	 * The root `table` declaration was indexed. Does NOT mean every extension
+	 * was seen — that is not knowable.
+	 */
+	rootSeen: boolean;
+	/**
+	 * More than one distinct root declares this name. Namespaces make that
+	 * legal: `Dimension Set Entry` is table 480 in the Base Application and
+	 * 36950 in PowerBI Reports. Different tables, so nothing derived from a
+	 * merge of them means anything — every consumer treats an ambiguous entry
+	 * exactly as it treats an absent table.
+	 */
+	ambiguous: boolean;
+	/**
+	 * The root's FIRST key, and only ever the root's. Microsoft's table-keys
+	 * documentation: table extensions inherit the base primary key and any key
+	 * defined in an extension is a secondary key. BC always loads the primary
+	 * key, which is what `incomplete-setloadfields` needs this for.
+	 */
+	primaryKey?: TableKeyInfo;
+	/** Every object that contributed, for evidence text and provenance. */
+	sources: Array<{
+		objectType: "Table" | "TableExtension";
+		objectId: number;
+		file: string;
+	}>;
 }
 
 export interface TableFieldInfo {

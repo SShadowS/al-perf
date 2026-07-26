@@ -1,8 +1,8 @@
 import { sortPatterns } from "../core/patterns.js";
 import type { DetectedPattern, PatternSeverity } from "../types/patterns.js";
 import type {
-	ObjectInfo,
 	ProcedureInfo,
+	ResolvedTable,
 	SourceIndex,
 	TriggerInfo,
 } from "../types/source-index.js";
@@ -401,10 +401,10 @@ const IMPLICIT_REC_OBJECT_TYPES = new Set([
 ]);
 
 /** True if `field` is the leading (first) field of any key on `table`. */
-function isKeyLeadingField(table: ObjectInfo, field: string): boolean {
+function isKeyLeadingField(table: ResolvedTable, field: string): boolean {
 	const target = field.toLowerCase();
-	return (table.keys ?? []).some(
-		(key) => key.fields.length > 0 && key.fields[0].toLowerCase() === target,
+	return table.keys.some(
+		(k) => k.key.fields.length > 0 && k.key.fields[0].toLowerCase() === target,
 	);
 }
 
@@ -441,15 +441,24 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 				if (!variable?.isRecord || !variable.tableName || variable.isTemporary)
 					continue;
 
-				// Find the table in the source index
-				let tableObj: ObjectInfo | undefined;
-				for (const o of index.objects.values()) {
-					if (o.objectType === "Table" && o.objectName === variable.tableName) {
-						tableObj = o;
-						break;
-					}
-				}
-				if (!tableObj?.keys || tableObj.keys.length === 0) continue;
+				// The RESOLVED table: root declaration plus every indexed
+				// tableextension. Before this, an extension's keys and
+				// FlowFilter fields were invisible and each produced a false
+				// finding.
+				const resolved = variable.tableName
+					? index.tables.get(variable.tableName.toLowerCase())
+					: undefined;
+				// An ambiguous name is two different tables; neither answer is
+				// about the one in hand.
+				if (!resolved || resolved.ambiguous) continue;
+				// "Does NO key lead with this field" is a NEGATIVE claim, and a
+				// fragment cannot support it — an unseen root key could lead
+				// with it. Same skip as the empty-keys case below, so partner
+				// apps continue to get no unindexed-filter findings for base
+				// tables. This change does not improve that.
+				if (!resolved.rootSeen) continue;
+				const tableObj = resolved;
+				if (tableObj.keys.length === 0) continue;
 
 				// Fields that cannot produce the scan this detector warns about.
 				// A FlowFilter is not a table column at all — it parameterises
@@ -487,7 +496,7 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 						description: `${op.type}("${op.fieldArgument}", ...) on ${op.recordVariable} at line ${op.line} in ${member.file} filters on a field that is not the leading field of any key on table "${variable.tableName}". This may cause a full table scan.`,
 						impact: 0,
 						involvedMethods: [memberLabel(member)],
-						evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys.map((k) => k.name + "(" + k.fields.join(", ") + ")").join(", ")}`,
+						evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys.map((k) => k.key.name + "(" + k.key.fields.join(", ") + ")").join(", ")}`,
 						suggestion: `Add a key starting with "${op.fieldArgument}" to table "${variable.tableName}", or restructure the query to filter on an existing key's leading field.`,
 					});
 				}

@@ -20,6 +20,7 @@ import type {
 } from "../types/source-index.js";
 import type { ImplicitLoopAware } from "./implicit-loop.js";
 import { parseALSource } from "./parser-init.js";
+import { buildTableIndex } from "./table-index.js";
 
 const RECORD_OPS: Set<string> = new Set([
 	"findset",
@@ -298,6 +299,18 @@ function extractObjectName(decl: SyntaxNode): string {
 		}
 	}
 	return "";
+}
+
+/**
+ * The object an `…extension` declaration extends. The grammar names this
+ * child `base_object` on tableextension/pageextension/reportextension/
+ * enumextension. An `interface X extends Y` is deliberately NOT captured:
+ * its target is a different field (`extends_interface`), and nothing here
+ * consumes it.
+ */
+function extractExtendsTarget(decl: SyntaxNode): string | undefined {
+	const target = decl.childForFieldName("base_object")?.text;
+	return target ? stripQuotes(target) : undefined;
 }
 
 /**
@@ -1665,6 +1678,8 @@ function indexParsedTree(
 			? extractTableKeys(declNode)
 			: [];
 
+	const extendsTarget = extractExtendsTarget(declNode);
+
 	return {
 		objectType,
 		objectName,
@@ -1675,6 +1690,7 @@ function indexParsedTree(
 		fields,
 		keys,
 		sourceTableTemporary: extractSourceTableTemporary(declNode),
+		...(extendsTarget ? { extendsTarget } : {}),
 	};
 }
 
@@ -1721,6 +1737,7 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
 		procedures: new Map(),
 		triggers: new Map(),
 		objects: new Map(),
+		tables: new Map(),
 		eventCatalog: { publishers: [], subscribers: [] },
 		failedFiles: [],
 	};
@@ -1823,6 +1840,9 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
 			}
 		}
 	}
+
+	// Derived from `objects`, so it is built last, once, from the finished set.
+	index.tables = buildTableIndex(index.objects.values());
 
 	return index;
 }

@@ -604,6 +604,70 @@ describe("calcfields-in-loop — CalcSums gets actionable advice", () => {
 	});
 });
 
+describe("calcfields-in-loop — resolving fields through the merged table", () => {
+	function findings(functionName: string) {
+		return detectCalcFieldsInLoop(
+			[makeMethod({ functionName, objectType: "Codeunit", objectId: 50975 })],
+			sourceIndex,
+		);
+	}
+
+	it("graduates severity off an extension-declared FlowField when the root is seen", () => {
+		// "Ext Lookup" lives in tableextension 50971. Before the merge it did
+		// not resolve at all and every such finding took the conservative
+		// critical default.
+		const p = findings("CalcExtFlowFieldOnRootSeenTable");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].suggestion).toMatch(/Lookup/i);
+	});
+
+	it("keeps critical for a bare CalcFields() on a fragment", () => {
+		// The fallback is "every FlowField on the table"; on a fragment that is
+		// a claim about fields nobody has seen.
+		const p = findings("BareCalcFieldsOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+
+	it("keeps critical when only some called fields resolve on a fragment", () => {
+		// "Orphan Lookup" (not "Orphan Sum") resolves; "Unseen Base Total" does
+		// not. Deliberately a Lookup: if the resolved subset contained a Sum,
+		// calcFieldSeverity would land on critical anyway (Sum forces it),
+		// which would pass even with the allResolved fence deleted -- see the
+		// mutation-testing note below.
+		const p = findings("PartlyResolvedCalcFieldsOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+
+	it("keeps critical for a bare CalcFields() on a Lookup-only fragment", () => {
+		// "Merge Absent Lookup"'s only known FlowField is a Lookup -- no
+		// Sum/Count anywhere in the picture, so this is the case fence 1's own
+		// comment describes: an unseen root Sum is what actually runs, and the
+		// bare-call fallback must not downgrade on the Lookup alone.
+		const p = findings("BareCalcFieldsOnLookupOnlyFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+
+	it("treats an ambiguous table exactly as an absent one, even though the winning root's fields survive", () => {
+		// Two distinct roots both declare "Merge Ambig" (50973, 50974). The
+		// merged entry is marked ambiguous, but the winning root's fields
+		// (including this Lookup, added to 50973 only) are NOT empty -- so
+		// this is the one case the `resolved.length === 0` branch cannot also
+		// catch. Without the `|| table.ambiguous` fence, this would resolve
+		// the Lookup and downgrade to warning.
+		const p = findings("CalcFieldsOnAmbiguousFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+});
+
 describe("duplicate wrong-advice sites stay fixed", () => {
 	// Task 1 fixed four shipped copies of "use SetLoadFields() to pre-load the
 	// fields you need" -- SetLoadFields does not accept FlowFields, and
@@ -1367,6 +1431,75 @@ describe("incomplete-setloadfields — primary key fields are always loaded", ()
 		const p = detectIncompleteSetLoadFields([method], sourceIndex);
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
+	});
+});
+
+describe("incomplete-setloadfields — the merged table picture", () => {
+	function findings(functionName: string) {
+		return detectIncompleteSetLoadFields(
+			[makeMethod({ functionName, objectType: "Codeunit", objectId: 50976 })],
+			sourceIndex,
+		);
+	}
+
+	it("flags an extension-declared field at critical when the root is seen", () => {
+		const p = findings("ReadsExtensionFieldAfterNarrowing");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].description.toLowerCase()).toContain("ext code");
+	});
+
+	it("never reports a FlowField as a missing SetLoadFields entry", () => {
+		// SetLoadFields does not accept FlowFields — the suggestion would not
+		// compile.
+		expect(findings("ReadsExtensionFlowFieldAfterNarrowing")).toHaveLength(0);
+	});
+
+	it("never reports a FlowFilter as a missing SetLoadFields entry", () => {
+		// SetLoadFields does not accept FlowFilters either — the suggestion
+		// would not compile. Separate clause from the FlowField guard above,
+		// so it needs its own test: nothing else in the fixture corpus reads a
+		// FlowFilter after a SetLoadFields call.
+		expect(findings("ReadsExtensionFlowFilterAfterNarrowing")).toHaveLength(0);
+	});
+
+	it("does not flag the root's primary key", () => {
+		expect(findings("ReadsPrimaryKeyAfterNarrowing")).toHaveLength(0);
+	});
+
+	it("flags a confirmed extension field at critical even with no root", () => {
+		const p = findings("ReadsFragmentFieldAfterNarrowing");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+	});
+
+	it("hedges an unconfirmable name on a fragment", () => {
+		const p = findings("ReadsUnknownNameOnFragmentAfterNarrowing");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toMatch(
+			/could not be confirmed|not in the index|only .*fragment/i,
+		);
+		// The fragment-specific half of the wording, not just the shared
+		// "not in the index" suffix both branches emit.
+		expect(p[0].description).toContain("only known from its extensions");
+	});
+
+	it("treats an ambiguous table exactly as an absent one, even though the winning root's own field survives", () => {
+		// Two distinct roots both declare "Merge Ambig". The merged entry's
+		// `fields` still carries the winning root's "AlphaOnly" -- if the
+		// ambiguous check were dropped, that field would resolve and this
+		// would wrongly report critical instead of the hedged warning an
+		// unusable table gets.
+		const p = findings("ReadsAlphaOnlyOnAmbiguousTable");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toMatch(
+			/could not be confirmed|not in the index/i,
+		);
+		// Ambiguous is treated as ABSENT, not as a fragment — it must get the
+		// plain "not in the index" wording, not the fragment-specific phrase.
+		expect(p[0].description).not.toContain("only known from its extensions");
 	});
 });
 

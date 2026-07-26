@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(38);
-		expect(index.objects.size).toBe(38);
+		expect(index.files.length).toBe(47);
+		expect(index.objects.size).toBe(47);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -544,6 +544,39 @@ describe("record parameters", () => {
 		expect(
 			proc.features.variables.find((v) => v.name === "SalesLine"),
 		).toBeDefined();
+	});
+});
+
+describe("extension objects", () => {
+	it("records the base object an extension extends", async () => {
+		// `tableextension 50905 "Implicit Rec Table Ext" extends Customer`.
+		// extractObjectName returns the first identifier in the declaration,
+		// which is the EXTENSION's name — the target sits after extends_keyword.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "ImplicitRecTableExtension.al"),
+			fixturesDir,
+		))!;
+		expect(result.objectType).toBe("TableExtension");
+		expect(result.objectName).toBe("Implicit Rec Table Ext");
+		expect(result.extendsTarget).toBe("Customer");
+	});
+
+	it("leaves extendsTarget undefined on a non-extension object", async () => {
+		const result = (await indexALFile(
+			resolve(fixturesDir, "Table50400.al"),
+			fixturesDir,
+		))!;
+		expect(result.extendsTarget).toBeUndefined();
+	});
+
+	it("strips the quotes from a multi-word extends target", async () => {
+		// Nearly every real base table is multi-word and therefore quoted;
+		// `extends Customer` is the one shape where stripQuotes is a no-op.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "ImplicitRecPageExtension.al"),
+			fixturesDir,
+		))!;
+		expect(result.extendsTarget).toBe("Customer Card");
 	});
 });
 
