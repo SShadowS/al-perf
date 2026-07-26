@@ -446,7 +446,7 @@ describe("CalcField severity graduation", () => {
 		// The resolved field ("Total Amount") really is a Sum FlowField -- this
 		// is a known fact, not a guess, so the suggestion may assert it.
 		expect(patterns[0].suggestion).toContain(
-			"This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.",
+			"The field(s) calculated here are aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.",
 		);
 	});
 
@@ -460,7 +460,7 @@ describe("CalcField severity graduation", () => {
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].severity).toBe("warning");
 		expect(patterns[0].suggestion).toContain(
-			"This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.",
+			"The field(s) calculated here are Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.",
 		);
 	});
 
@@ -481,7 +481,7 @@ describe("CalcField severity graduation", () => {
 		// And the fact sentence must name the field actually called (Lookup),
 		// not the unrelated Sum/Count fields also on this table.
 		expect(patterns[0].suggestion).toContain(
-			"This table has Lookup FlowFields",
+			"The field(s) calculated here are Lookup FlowFields",
 		);
 		expect(patterns[0].suggestion).not.toContain("aggregation FlowFields");
 	});
@@ -544,7 +544,7 @@ describe("calcfields-in-loop — suggestion must be actionable", () => {
 		);
 		// The field never resolved (table not in the index) -- no "This table
 		// has ... FlowFields" claim may appear.
-		expect(s).not.toContain("This table has");
+		expect(s).not.toContain("The field(s) calculated here");
 	});
 
 	it("warns the user off SetLoadFields by name on the warning-severity branch too", () => {
@@ -628,7 +628,7 @@ describe("calcfields-in-loop — resolving fields through the merged table", () 
 		const p = findings("BareCalcFieldsOnFragment");
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
-		expect(p[0].suggestion).not.toMatch(/This table has/i);
+		expect(p[0].suggestion).not.toMatch(/The field\(s\) calculated here/i);
 	});
 
 	it("keeps critical when only some called fields resolve on a fragment", () => {
@@ -640,7 +640,7 @@ describe("calcfields-in-loop — resolving fields through the merged table", () 
 		const p = findings("PartlyResolvedCalcFieldsOnFragment");
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
-		expect(p[0].suggestion).not.toMatch(/This table has/i);
+		expect(p[0].suggestion).not.toMatch(/The field\(s\) calculated here/i);
 	});
 
 	it("keeps critical for a bare CalcFields() on a Lookup-only fragment", () => {
@@ -651,7 +651,7 @@ describe("calcfields-in-loop — resolving fields through the merged table", () 
 		const p = findings("BareCalcFieldsOnLookupOnlyFragment");
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
-		expect(p[0].suggestion).not.toMatch(/This table has/i);
+		expect(p[0].suggestion).not.toMatch(/The field\(s\) calculated here/i);
 	});
 
 	it("treats an ambiguous table exactly as an absent one, even though the winning root's fields survive", () => {
@@ -664,7 +664,7 @@ describe("calcfields-in-loop — resolving fields through the merged table", () 
 		const p = findings("CalcFieldsOnAmbiguousFragment");
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
-		expect(p[0].suggestion).not.toMatch(/This table has/i);
+		expect(p[0].suggestion).not.toMatch(/The field\(s\) calculated here/i);
 	});
 });
 
@@ -1455,6 +1455,15 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(findings("ReadsExtensionFlowFieldAfterNarrowing")).toHaveLength(0);
 	});
 
+	it("never reports an UNTYPED FlowField as a missing SetLoadFields entry", () => {
+		// A FlowField whose CalcFormula the extractor cannot type still is not
+		// a loadable column. Keying the guard only on `calcFormulaType` let 130
+		// corpus fields through; 4 remain untypeable even after the extractor
+		// learned the no-`where` and negated shapes, so the guard needs the
+		// FieldClass arm too.
+		expect(findings("ReadsUntypedFlowFieldAfterNarrowing")).toHaveLength(0);
+	});
+
 	it("never reports a FlowFilter as a missing SetLoadFields entry", () => {
 		// SetLoadFields does not accept FlowFilters either — the suggestion
 		// would not compile. Separate clause from the FlowField guard above,
@@ -1471,6 +1480,24 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		const p = findings("ReadsFragmentFieldAfterNarrowing");
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
+	});
+
+	it("hedges only the names actually in doubt, not the confirmed ones", () => {
+		// One governing SetLoadFields covering a confirmed extension field and
+		// an unconfirmable name used to say "these names could not be confirmed
+		// to be fields at all" about both.
+		const p = findings("ReadsConfirmedAndUnconfirmableOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toContain(
+			"somethingunseen could not be confirmed",
+		);
+		expect(p[0].description).not.toContain(
+			"orphan code could not be confirmed",
+		);
+		// both are still reported as missing from the load list
+		expect(p[0].evidence).toContain("orphan code");
+		expect(p[0].evidence).toContain("somethingunseen");
 	});
 
 	it("hedges an unconfirmable name on a fragment", () => {

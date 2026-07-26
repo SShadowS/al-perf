@@ -81,4 +81,29 @@ codeunit 50976 "SetLoadFields Merge Probe"
         if MergeBase.FindFirst() then
             Message('%1', MergeBase."Ext Date Filter");
     end;
+
+    procedure ReadsUntypedFlowFieldAfterNarrowing()
+    var
+        MergeBase: Record "Merge Base";
+    begin
+        // The FlowField's CalcFormula could not be typed, so `calcFormulaType`
+        // is undefined — but it is still a FlowField, and SetLoadFields still
+        // does not accept it.
+        MergeBase.SetLoadFields(Description);
+        if MergeBase.FindFirst() then
+            Message('%1', MergeBase."Ext Unresolved FlowField");
+    end;
+
+    procedure ReadsConfirmedAndUnconfirmableOnFragment()
+    var
+        Absent: Record "Merge Absent";
+    begin
+        // ONE governing SetLoadFields covers a confirmed extension field and a
+        // name nothing can confirm. The hedge must not claim both are in doubt.
+        Absent.SetLoadFields("Orphan Sum");
+        if Absent.FindFirst() then begin
+            Message('%1', Absent."Orphan Code");
+            Message('%1', Absent.SomethingUnseen);
+        end;
+    end;
 }

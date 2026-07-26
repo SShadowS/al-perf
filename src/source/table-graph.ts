@@ -19,9 +19,10 @@ export function buildTableRelationGraph(
 		if (table.ambiguous) continue;
 
 		// `fromTableId` is a required number and there is no root id to give
-		// when only extensions were indexed. 0 is what this index already uses
-		// for objects with no id of their own (Interface_0, ControlAddIn_0);
-		// the extension's own id would name the wrong object.
+		// when only extensions were indexed. 0 is this index's marker for an
+		// object with no id of its own — see `buildSourceIndex`'s object
+		// keying, which falls back to `Type_Name` for exactly those. The
+		// extension's own id would name the wrong object.
 		const fromTableId = table.objectId ?? 0;
 
 		for (const field of table.fields) {

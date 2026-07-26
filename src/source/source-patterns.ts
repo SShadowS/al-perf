@@ -110,16 +110,24 @@ const AGGREGATION_CALC_TYPES = new Set<TableFieldInfo["calcFormulaType"]>([
  * FlowField type the tool has no evidence for is exactly the kind of
  * confident falsehood this detector's suggestion text exists to eliminate.
  *
- * Falls back to the table's full FlowField set only when the call's field
- * list is unknown — a bare `CalcFields();` with no arguments calculates
- * every FlowField on the record, so the table's full set genuinely is the
- * true answer there, not a guess.
+ * Falls back to the table's full FlowField set when the call's field list is
+ * unknown AND the root declaration was indexed — a bare `CalcFields();` with
+ * no arguments calculates every FlowField on the record, so the table's full
+ * set genuinely is the true answer there, but only if that set is the whole
+ * table's. On a fragment it is whatever the extensions happened to declare.
  *
- * Returns `undefined` when nothing can be resolved: the record variable
- * isn't a known Record, its table isn't in the index, or the named field(s)
- * don't match any indexed FlowField on that table. Callers must not assert
- * anything about the field's type when this is `undefined` — silence is the
- * honest answer, not a confident guess.
+ * Returns `undefined` when nothing can be resolved OR when what could be
+ * resolved is not enough to justify a downgrade:
+ *   - the record variable isn't a known Record, or has no table name
+ *   - its table isn't in the index at all
+ *   - two distinct roots declare that table name (`ambiguous`), so the merged
+ *     picture describes neither
+ *   - a bare `CalcFields()` on a table whose root was never indexed
+ *   - a named field list on such a table where some names did not resolve —
+ *     the ones that did not may be the expensive ones
+ * Callers must not assert anything about the field's type when this is
+ * `undefined` — silence is the honest answer, not a confident guess, and
+ * `calcFieldSeverity` maps it to the conservative `critical`.
  */
 function resolveCalcFields(
 	op: RecordOpInfo,
@@ -186,19 +194,28 @@ function calcFieldSeverity(
 }
 
 /**
- * The factual "this table has ... FlowFields" clause of the suggestion.
+ * The factual clause of the suggestion, about THE FIELDS THIS CALL
+ * CALCULATES — never about the table.
+ *
+ * It used to say "This table has Lookup FlowFields", which is false whenever
+ * the table also has an aggregation FlowField nobody is calculating here.
+ * `Merge Base` in the fixtures is exactly that shape (`Base Total` is a Sum,
+ * `Ext Lookup` is a Lookup), and the sentence claimed the table had only
+ * Lookups. The severity beside it was already field-scoped — this makes the
+ * prose agree with it.
+ *
  * Must only ever be called with a resolved field list (see
  * `resolveCalcFields`) — never derived from severity alone, which can be a
  * conservative default rather than actual knowledge of the field's type.
  */
 function calcFieldFactSentence(resolved: TableFieldInfo[]): string {
 	if (resolved.some((f) => AGGREGATION_CALC_TYPES.has(f.calcFormulaType))) {
-		return "This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.";
+		return "The field(s) calculated here are aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.";
 	}
 	if (resolved.every((f) => f.calcFormulaType === "Exist")) {
-		return "This table has an Exist FlowField — cheaper than Sum/Count since SQL can short-circuit on the first matching row, but still one query per iteration.";
+		return "The field(s) calculated here are Exist FlowFields — cheaper than Sum/Count since SQL can short-circuit on the first matching row, but still one query per iteration.";
 	}
-	return "This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.";
+	return "The field(s) calculated here are Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.";
 }
 
 /**
@@ -824,9 +841,19 @@ export function detectIncompleteSetLoadFields(
 					// SetLoadFields accepts normal fields only. Telling someone
 					// to add a FlowField or a FlowFilter to the list produces
 					// code that does not compile.
+					//
+					// FieldClass is checked as well as calcFormulaType, not
+					// instead of it: a FlowField whose CalcFormula the extractor
+					// cannot type has no calcFormulaType at all, and keying the
+					// guard on that alone let 130 corpus fields through. Four
+					// remain untypeable even after `findCalcFormulaNode` learned
+					// the no-`where` and negated shapes, and the next
+					// unrecognised formula shape would silently reopen this.
+					const confirmedClass = confirmed?.fieldClass?.toLowerCase();
 					if (
 						confirmed?.calcFormulaType !== undefined ||
-						confirmed?.fieldClass?.toLowerCase() === "flowfilter"
+						confirmedClass === "flowfilter" ||
+						confirmedClass === "flowfield"
 					) {
 						continue;
 					}
@@ -851,13 +878,22 @@ export function detectIncompleteSetLoadFields(
 					const allConfirmed =
 						confirmedFields !== undefined &&
 						missingFields.every((f) => confirmedFields.has(f));
+					// Name the names that are actually in doubt. The hedge used
+					// to say "these names could not be confirmed to be fields at
+					// all" about the WHOLE list, which is untrue as soon as one
+					// governing SetLoadFields covers a confirmed field and an
+					// unconfirmable one together — the confirmed one was
+					// confirmed.
+					const unconfirmed = missingFields.filter(
+						(f) => !confirmedFields?.has(f),
+					);
 					patterns.push({
 						id: "incomplete-setloadfields",
 						severity: allConfirmed ? "critical" : "warning",
 						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
 						description: allConfirmed
 							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`
-							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so these names could not be confirmed to be fields at all — a paren-less call to a table method reads identically here.`,
+							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so ${unconfirmed.join(", ")} could not be confirmed to be ${unconfirmed.length === 1 ? "a field" : "fields"} at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
 						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,

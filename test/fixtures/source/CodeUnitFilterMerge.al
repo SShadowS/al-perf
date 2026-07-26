@@ -49,7 +49,7 @@ codeunit 50977 "Unindexed Filter Merge Probe"
         // TableMergeAmbigA.al / TableMergeAmbigB.al). The winning root's
         // fields and keys survive the merge and look plausible, but neither
         // answer is about the table actually in hand, so this must not be
-        // judged at all -- not flagged, not suppressed on real grounds.
+        // judged at all — not flagged, not suppressed on real grounds.
         Ambig.SetRange(AlphaOnly, 'X');
         if Ambig.FindSet() then;
     end;

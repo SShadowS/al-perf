@@ -24,8 +24,8 @@ describe("SourceIndexCache", () => {
 	test("cold cache builds index and stores it", async () => {
 		const cache = new SourceIndexCache(cacheDir);
 		const index = await cache.getOrBuild(fixturesDir);
-		expect(index.files.length).toBe(47);
-		expect(index.objects.size).toBe(47);
+		expect(index.files.length).toBe(48);
+		expect(index.objects.size).toBe(48);
 		expect(cache.has(fixturesDir)).toBe(true);
 	});
 
@@ -82,8 +82,21 @@ describe("SourceIndexCache", () => {
 			const p = resolve(cacheDir, f);
 			const entry = JSON.parse(readFileSync(p, "utf-8"));
 			entry.version = 3;
+			// A real version-3 entry predates `extendsTarget`, so strip it —
+			// otherwise the tampered file still carries valid v4 data and
+			// loading it looks identical to rebuilding.
+			for (const [, obj] of entry.index.objects) {
+				obj.extendsTarget = undefined;
+			}
 			writeFileSync(p, JSON.stringify(entry), "utf-8");
 		}
 		expect(cache.has(fixturesDir)).toBe(false);
+
+		// has() and getOrBuild() carry INDEPENDENT version checks, and the
+		// failure this guards — a cached run disagreeing with a fresh one —
+		// happens on the getOrBuild path. Asserting only has() would leave a
+		// loosened getOrBuild check green.
+		const rebuilt = await cache.getOrBuild(fixturesDir);
+		expect(rebuilt.tables.get("merge base")!.sources).toHaveLength(3);
 	});
 });

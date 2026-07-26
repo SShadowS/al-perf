@@ -445,19 +445,16 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 				// tableextension. Before this, an extension's keys and
 				// FlowFilter fields were invisible and each produced a false
 				// finding.
-				const resolved = variable.tableName
-					? index.tables.get(variable.tableName.toLowerCase())
-					: undefined;
+				const tableObj = index.tables.get(variable.tableName.toLowerCase());
 				// An ambiguous name is two different tables; neither answer is
 				// about the one in hand.
-				if (!resolved || resolved.ambiguous) continue;
+				if (!tableObj || tableObj.ambiguous) continue;
 				// "Does NO key lead with this field" is a NEGATIVE claim, and a
 				// fragment cannot support it — an unseen root key could lead
 				// with it. Same skip as the empty-keys case below, so partner
 				// apps continue to get no unindexed-filter findings for base
 				// tables. This change does not improve that.
-				if (!resolved.rootSeen) continue;
-				const tableObj = resolved;
+				if (!tableObj.rootSeen) continue;
 				if (tableObj.keys.length === 0) continue;
 
 				// Fields that cannot produce the scan this detector warns about.
@@ -496,7 +493,21 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 						description: `${op.type}("${op.fieldArgument}", ...) on ${op.recordVariable} at line ${op.line} in ${member.file} filters on a field that is not the leading field of any key on table "${variable.tableName}". This may cause a full table scan.`,
 						impact: 0,
 						involvedMethods: [memberLabel(member)],
-						evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys.map((k) => k.key.name + "(" + k.key.fields.join(", ") + ")").join(", ")}`,
+						// Keys carry their contributor because an extension may
+						// legally reuse a base key's NAME. Without the tag the
+						// evidence renders one name twice with two different
+						// field lists and reads as a tool bug rather than as the
+						// legal AL shape it is.
+						evidence: `${op.type}("${op.fieldArgument}") at line ${op.line}; keys: ${tableObj.keys
+							.map(
+								(k) =>
+									`${k.key.name}(${k.key.fields.join(", ")})${
+										k.fromObjectId === tableObj.objectId
+											? ""
+											: ` [from extension ${k.fromObjectId}]`
+									}`,
+							)
+							.join(", ")}`,
 						suggestion: `Add a key starting with "${op.fieldArgument}" to table "${variable.tableName}", or restructure the query to filter on an existing key's leading field.`,
 					});
 				}

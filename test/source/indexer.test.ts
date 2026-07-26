@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(47);
-		expect(index.objects.size).toBe(47);
+		expect(index.files.length).toBe(48);
+		expect(index.objects.size).toBe(48);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();
@@ -654,5 +654,64 @@ describe("parse trees are freed", () => {
 		const index = await buildSourceIndex(fixturesDir);
 		expect(index.files.length).toBeGreaterThan(0);
 		expect(index.failedFiles).toEqual([]);
+	});
+});
+
+describe("CalcFormula shapes the extractor used to drop", () => {
+	// 130 of 2,625 FlowFields on a 15,436-file corpus had FieldClass=FlowField
+	// with no resolved calcFormulaType, so every consumer treated them as
+	// "nothing known" — incomplete-setloadfields suggested adding them to a
+	// SetLoadFields list, which does not compile.
+	it("types a NEGATED aggregate", async () => {
+		// `CalcFormula = - sum(...)` — the leading minus leaves the property
+		// with no `value` field, so keying off it dropped the formula.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "TableMergeExt.al"),
+			fixturesDir,
+		))!;
+		const f = result.fields.find((x) => x.name === "Ext Negated Sum")!;
+		expect(f.fieldClass).toBe("FlowField");
+		expect(f.calcFormulaType).toBe("Sum");
+		expect(f.calcFormulaTable).toBe("Test Table");
+	});
+
+	it("types an aggregate with NO where clause", async () => {
+		// Without a `where` clause the grammar emits an ordinary
+		// call_expression, not an aggregate_formula.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "TableMergeExt.al"),
+			fixturesDir,
+		))!;
+		const f = result.fields.find((x) => x.name === "Ext Unfiltered Count")!;
+		expect(f.fieldClass).toBe("FlowField");
+		expect(f.calcFormulaType).toBe("Count");
+		expect(f.calcFormulaTable).toBe("Test Table");
+	});
+
+	it("still types a filtered aggregate and a Lookup", async () => {
+		const result = (await indexALFile(
+			resolve(fixturesDir, "TableMergeExt.al"),
+			fixturesDir,
+		))!;
+		expect(
+			result.fields.find((x) => x.name === "Ext Lookup")!.calcFormulaType,
+		).toBe("Lookup");
+		const base = (await indexALFile(
+			resolve(fixturesDir, "TableMergeBase.al"),
+			fixturesDir,
+		))!;
+		expect(
+			base.fields.find((x) => x.name === "Base Total")!.calcFormulaType,
+		).toBe("Sum");
+	});
+
+	it("leaves calcFormulaType undefined when there is no CalcFormula at all", async () => {
+		const result = (await indexALFile(
+			resolve(fixturesDir, "TableMergeExt.al"),
+			fixturesDir,
+		))!;
+		const f = result.fields.find((x) => x.name === "Ext Unresolved FlowField")!;
+		expect(f.fieldClass).toBe("FlowField");
+		expect(f.calcFormulaType).toBeUndefined();
 	});
 });

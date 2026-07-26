@@ -649,6 +649,23 @@ describe("unindexed-filter — the merged table picture", () => {
 		expect(p[0].severity).toBe("warning");
 	});
 
+	test("tags a key contributed by an extension in the evidence", async () => {
+		// An extension may legally reuse a base key's NAME, so the evidence can
+		// render the same name twice with different field lists. Untagged, that
+		// reads as a tool bug rather than as the legal AL shape it is.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const p = detectUnindexedFilters(index).find((x) =>
+			x.involvedMethods.some((m) =>
+				m.includes("FiltersOnUnindexedFieldOfRootSeenTable"),
+			),
+		);
+		expect(p).toBeDefined();
+		expect(p!.evidence).toContain("ByDate(Posting Date),");
+		expect(p!.evidence).toContain("ByDate(Ext Code) [from extension 50971]");
+		// the root's own keys carry no tag
+		expect(p!.evidence).not.toContain("PK(No.) [from");
+	});
+
 	test("skips a table whose root was never indexed", async () => {
 		// "Does NO key lead with this field" cannot be answered from a
 		// fragment: an unseen root key could lead with it.
