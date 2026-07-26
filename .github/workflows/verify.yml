@@ -39,7 +39,7 @@ jobs:
       # use and cached beside parser-init.ts. Keying on that file means a
       # bump to AL_GRAMMAR_VERSION invalidates the cache by itself.
       - name: Cache tree-sitter-al grammar
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             src/source/tree-sitter-al.wasm
