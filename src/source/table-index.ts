@@ -1,8 +1,4 @@
-import type {
-	ObjectInfo,
-	ResolvedTable,
-	TableFieldInfo,
-} from "../types/source-index.js";
+import type { ObjectInfo, ResolvedTable } from "../types/source-index.js";
 
 /**
  * Codepoint order. `localeCompare` follows the host locale, which makes the
@@ -108,7 +104,7 @@ export function buildTableIndex(
 		// TableRelation. Without the dedup that is two fields and, downstream,
 		// two identical relation graph edges.
 		const seen = new Set(table.fields.map((f) => f.name.toLowerCase()));
-		for (const f of ext.fields as TableFieldInfo[]) {
+		for (const f of ext.fields) {
 			if (seen.has(f.name.toLowerCase())) continue;
 			seen.add(f.name.toLowerCase());
 			table.fields.push(f);

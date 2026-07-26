@@ -445,19 +445,16 @@ export function detectUnindexedFilters(index: SourceIndex): DetectedPattern[] {
 				// tableextension. Before this, an extension's keys and
 				// FlowFilter fields were invisible and each produced a false
 				// finding.
-				const resolved = variable.tableName
-					? index.tables.get(variable.tableName.toLowerCase())
-					: undefined;
+				const tableObj = index.tables.get(variable.tableName.toLowerCase());
 				// An ambiguous name is two different tables; neither answer is
 				// about the one in hand.
-				if (!resolved || resolved.ambiguous) continue;
+				if (!tableObj || tableObj.ambiguous) continue;
 				// "Does NO key lead with this field" is a NEGATIVE claim, and a
 				// fragment cannot support it — an unseen root key could lead
 				// with it. Same skip as the empty-keys case below, so partner
 				// apps continue to get no unindexed-filter findings for base
 				// tables. This change does not improve that.
-				if (!resolved.rootSeen) continue;
-				const tableObj = resolved;
+				if (!tableObj.rootSeen) continue;
 				if (tableObj.keys.length === 0) continue;
 
 				// Fields that cannot produce the scan this detector warns about.
