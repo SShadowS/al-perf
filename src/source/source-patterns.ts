@@ -135,6 +135,7 @@ function resolveCalcFields(
 	op: RecordOpInfo,
 	variables: VariableInfo[],
 	index: SourceIndex,
+	owner?: ObjectInfo,
 ): TableFieldInfo[] | undefined {
 	const recordVariable = op.recordVariable;
 	if (!recordVariable) return undefined;
@@ -142,13 +143,21 @@ function resolveCalcFields(
 	const variable = variables.find(
 		(v) => v.name.toLowerCase() === recordVariable.toLowerCase(),
 	);
-	// NOTE (documented, not fixed — Issue 6): a Page/Report/XMLport's implicit
-	// `Rec` inside a per-row trigger has no `var` declaration, so it never
-	// appears in `variables` and this always falls through to `undefined`
-	// here. Fails safe (over-severe, never under-severe).
-	if (!variable?.isRecord || !variable.tableName) return undefined;
+	// A Page/Report/XMLport/Query's implicit `Rec` has no `var` declaration, so
+	// it never appears in `variables` -- this used to fall through to
+	// `undefined` and take the conservative `critical` on every CalcFields
+	// against an object's own record. The table IS knowable: it is the object's
+	// `SourceTable`. Resolving it can only REFINE the answer, never invent a
+	// finding, since the op was already detected either way.
+	const tableName =
+		variable?.isRecord && variable.tableName
+			? variable.tableName
+			: recordVariable.toLowerCase() === "rec"
+				? owner?.sourceTable
+				: undefined;
+	if (!tableName) return undefined;
 
-	const table = index.tables.get(variable.tableName.toLowerCase());
+	const table = index.tables.get(tableName.toLowerCase());
 	// An ambiguous name is two different tables; nothing read from it is about
 	// the one in hand.
 	if (!table || table.ambiguous) return undefined;
@@ -310,6 +319,7 @@ export function detectCalcFieldsInLoop(
 					op,
 					match.features.variables,
 					index,
+					ownerObject(match, index),
 				);
 				const severity = downgradePageImplicitLoop(
 					calcFieldSeverity(resolvedFields),

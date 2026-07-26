@@ -1,4 +1,7 @@
-import type { MethodBreakdown } from "../types/aggregated.js";
+import { formatMethodBreakdownRef } from "./method-ref.js";
+
+export { formatMethodBreakdownRef };
+
 import type { DetectedPattern, PatternDetector } from "../types/patterns.js";
 import type { ProcessedNode, ProcessedProfile } from "../types/processed.js";
 import { aggregateByMethod } from "./aggregator.js";
@@ -70,18 +73,6 @@ export function formatMethodRef(node: ProcessedNode): string {
 	const { functionName } = node.callFrame;
 	const { objectType, objectId } = node.applicationDefinition;
 	return `${functionName} (${objectType} ${objectId})`;
-}
-
-/**
- * Format an aggregated method (from aggregateByMethod) the same way as
- * formatMethodRef. MethodBreakdown does not carry a ProcessedNode's
- * callFrame/applicationDefinition, so it gets its own formatter rather than
- * a cast.
- */
-export function formatMethodBreakdownRef(
-	method: Pick<MethodBreakdown, "functionName" | "objectType" | "objectId">,
-): string {
-	return `${method.functionName} (${method.objectType} ${method.objectId})`;
 }
 
 function callSiteWord(count: number): string {

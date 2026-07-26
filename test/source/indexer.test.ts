@@ -313,8 +313,8 @@ test("does not count method calls as field accesses", async () => {
 describe("buildSourceIndex", () => {
 	it("should build an index from a directory of AL files", async () => {
 		const index = await buildSourceIndex(fixturesDir);
-		expect(index.files.length).toBe(48);
-		expect(index.objects.size).toBe(48);
+		expect(index.files.length).toBe(49);
+		expect(index.objects.size).toBe(49);
 
 		const procList = index.procedures.get("processrecords");
 		expect(procList).toBeDefined();

@@ -87,6 +87,14 @@ export interface ObjectInfo {
 	 */
 	sourceTableTemporary?: boolean;
 	/**
+	 * Page/Report/XMLport/Query `SourceTable` — the table the object's implicit
+	 * `Rec` refers to. `Rec` has no `var` declaration anywhere, so this is the
+	 * only place its TYPE is recoverable; without it a detector holding a `Rec`
+	 * operation knows there is a record but not which table, and has to fall
+	 * back to its conservative answer. Quotes stripped.
+	 */
+	sourceTable?: string;
+	/**
 	 * The object this one extends, for `tableextension` / `pageextension` /
 	 * `reportextension` / `enumextension`. Quotes stripped. Read from the
 	 * grammar's `base_object` field, so it is undefined on a root

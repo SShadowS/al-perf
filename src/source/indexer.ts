@@ -1679,7 +1679,7 @@ export async function indexALFile(
 	const sourceLines = source.split("\n");
 	const tree = await parseALSource(source);
 	try {
-		return indexParsedTree(tree, source, sourceLines, absolutePath, baseDir);
+		return indexParsedTree(tree, sourceLines, absolutePath, baseDir);
 	} finally {
 		// A web-tree-sitter Tree holds WASM heap memory that is released ONLY by
 		// an explicit delete(). Every parsed file leaked its tree, so the heap
@@ -1694,7 +1694,6 @@ export async function indexALFile(
 
 function indexParsedTree(
 	tree: Tree,
-	source: string,
 	sourceLines: string[],
 	absolutePath: string,
 	baseDir: string,
@@ -1832,6 +1831,7 @@ function indexParsedTree(
 		fields,
 		keys,
 		sourceTableTemporary: extractSourceTableTemporary(declNode),
+		sourceTable: extractSourceTable(declNode),
 		...(extendsTarget ? { extendsTarget } : {}),
 	};
 }
@@ -1842,6 +1842,25 @@ function indexParsedTree(
  * costs no SQL at all. There is no `var` declaration for `Rec`, so this is the
  * only place that fact is available (see `isTemporaryOp`).
  */
+/**
+ * Read the object-level `SourceTable` property — the table an implicit `Rec`
+ * refers to on a Page/Report/XMLport/Query. `Rec` has no `var` declaration, so
+ * without this its table is unknowable and every consumer must assume the
+ * worst.
+ */
+function extractSourceTable(declNode: SyntaxNode): string | undefined {
+	const body = declNode.namedChildren.find(
+		(c) => c.type === "declaration_body",
+	);
+	for (const child of body?.namedChildren ?? []) {
+		if (!isPropertyNamed(child, "SourceTable")) continue;
+		const value = child.childForFieldName("value")?.text;
+		if (!value) return undefined;
+		return stripQuotes(value);
+	}
+	return undefined;
+}
+
 function extractSourceTableTemporary(declNode: SyntaxNode): boolean {
 	// Object properties sit inside `declaration_body`, not directly under the
 	// declaration node (which holds only the keyword, id and name).

@@ -9,3 +9,11 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+
+  # The workflow's actions pin major versions and do not update themselves;
+  # without this they rot silently until a runner deprecation breaks the build
+  # (actions/checkout@v4 and actions/cache@v4 already warn about Node 20).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

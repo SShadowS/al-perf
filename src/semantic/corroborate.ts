@@ -16,6 +16,7 @@
  *    for at least one of the attribution's findings.
  */
 
+import { formatMethodBreakdownRef } from "../core/method-ref.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { FusedModel } from "../types/fused.js";
 import type { DetectedPattern } from "../types/patterns.js";
@@ -24,25 +25,6 @@ import {
 	CORROBORATION_MAP,
 	corroboratesDetector,
 } from "./corroboration-map.js";
-
-// ---------------------------------------------------------------------------
-// Method ref formatting
-//
-// Must match the format emitted by formatMethodRef in src/core/patterns.ts:
-//   `${functionName} (${objectType} ${objectId})`
-//
-// formatMethodRef is exported from src/core/patterns.ts, but importing the full
-// patterns module here would create a dependency on ProcessedNode/ProcessedProfile
-// types that belong to the runtime layer. Since the format is a trivial template
-// string, we replicate it here and keep the shapes independent.
-//
-// TODO: share formatMethodRef with src/core/patterns.ts (extract to a shared
-// helper) so the two definitions cannot drift.
-// ---------------------------------------------------------------------------
-
-function formatMethodRef(m: MethodBreakdown): string {
-	return `${m.functionName} (${m.objectType} ${m.objectId})`;
-}
 
 // ---------------------------------------------------------------------------
 // corroborate — the public entry point
@@ -76,7 +58,7 @@ export function corroborate(
 	// Build a lookup from methodAttrKey → set of corroborating runtime pattern ids.
 	//
 	// For each mapped pattern, take the anchor method = involvedMethods[anchorIndex],
-	// match it against the live methods[] by comparing formatMethodRef(m) to the
+	// match it against the live methods[] by comparing formatMethodBreakdownRef(m) to the
 	// anchor string. The matched method's methodAttrKey is the map key.
 	const corroborationByKey = new Map<string, Set<string>>();
 
@@ -89,7 +71,7 @@ export function corroborate(
 
 		// Match the anchor display string to a live method.
 		for (const m of methods) {
-			if (formatMethodRef(m) === anchorStr) {
+			if (formatMethodBreakdownRef(m) === anchorStr) {
 				const key = methodAttrKey(m);
 				const existing = corroborationByKey.get(key);
 				if (existing) {

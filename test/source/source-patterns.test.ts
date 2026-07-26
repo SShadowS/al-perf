@@ -65,6 +65,32 @@ describe("detectCalcFieldsInLoop", () => {
 		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
 		expect(patterns.length).toBe(0);
 	});
+
+	it("types the FlowField behind an implicit Rec via the object's SourceTable", () => {
+		// A Page's `Rec` has no `var` declaration, so its table used to be
+		// unknowable and every CalcFields on an object's own record took the
+		// conservative `critical` regardless of what it actually calculated.
+		// The table IS knowable — it is the SourceTable property. This can only
+		// ever REFINE the answer: the operation is detected the same either way.
+		//
+		// Assert the SUGGESTION, not the severity. On a Page the severity is
+		// `warning` whether or not the field resolved, because the Page
+		// implicit-loop downgrade turns an unresolved `critical` into exactly
+		// the same `warning` a resolved Lookup produces — so a severity
+		// assertion here passes with the fix removed and proves nothing. The
+		// fact sentence is the real discriminator: it is omitted entirely when
+		// nothing resolved, rather than guessed. (On a Report or XMLport, which
+		// take no such downgrade, the severity itself moves.)
+		const method = makeMethod({
+			functionName: "OnAfterGetRecord",
+			objectType: "Page",
+			objectId: 50904,
+		});
+		const patterns = detectCalcFieldsInLoop([method], sourceIndex);
+		const f = patterns.find((p) => p.id === "calcfields-in-loop");
+		expect(f).toBeDefined();
+		expect(f?.suggestion).toContain("Lookup FlowFields");
+	});
 });
 
 describe("detectModifyInLoop", () => {
