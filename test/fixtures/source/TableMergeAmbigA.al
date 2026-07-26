@@ -7,6 +7,7 @@ table 50973 "Merge Ambig"
         }
         field(2; AlphaOnly; Text[50])
         {
+            TableRelation = Customer."No.";
         }
     }
 
