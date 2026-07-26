@@ -90,9 +90,9 @@ Reusing `canonicalObjectType` matters: the profile says `CodeUnit` and the index
 
 ### 2. The finding must be about ONE routine
 
-`involvedMethods` is not always a single anchor. `event-subscriber-hotspot` sets it to every aggregated subscriber (`aggregated.map(formatMethodBreakdownRef)` in `detectEventSubscriberHotspot`), and `deep-call-stack` to the five deepest nodes in traversal order (`deepestNodes.slice(0, 5).map(formatMethodRef)`). For those, `[0]` is an arbitrary member of a set, and attaching "no anti-patterns were found in **this** routine" to a finding about N routines is a single-routine claim on a multi-routine finding.
+`involvedMethods` is not always a single anchor, and it is only two of the seven profile-only detectors — `single-method-dominance` and `recursive-call` — that always name exactly one. The other five all build multi-anchor `involvedMethods`: `high-hit-count` names exactly two at both of its emit sites in patterns.ts (`[formatMethodRef(node), formatMethodRef(node.parent)]` in the sampling path, `[formatMethodRef(edge.child), formatMethodRef(edge.parent)]` in the exact-count ir-json path), `repeated-siblings` names exactly two (`[formatMethodRef(node), formatMethodRef(representative)]`), and `event-chain` names its root plus every subscriber beneath it (`chain.chain.map(formatMethodRef)`, always ≥ 2 since a chain with zero members is never reported). `event-subscriber-hotspot` sets it to every aggregated subscriber (`aggregated.map(formatMethodBreakdownRef)` in `detectEventSubscriberHotspot`), and `deep-call-stack` to the deepest nodes in traversal order, up to five (`deepestNodes.slice(0, 5).map(formatMethodRef)`) — both variable-length, so `[0]` is an arbitrary member of a set for them too. For all five, attaching "no anti-patterns were found in **this** routine" to a finding about N routines is a single-routine claim on a multi-routine finding.
 
-So the clean sentence requires `involvedMethods.length === 1`. Sibling naming does not: a sibling finding on any listed routine is a real finding about this finding's subject matter.
+So the clean sentence requires `involvedMethods.length === 1`, and — measured, not assumed — that condition can in practice only ever be met by `single-method-dominance` and `recursive-call`; the other five are excluded by construction. Sibling naming does not have this restriction: a sibling finding on any listed routine is a real finding about this finding's subject matter.
 
 ### 3. The claim must name what was actually checked
 
@@ -100,7 +100,9 @@ So the clean sentence requires `involvedMethods.length === 1`. Sibling naming do
 
 An unqualified "no database anti-patterns were found in this routine" would therefore be false exactly when it matters most. The sentence names its own scope instead:
 
-> No loop or SetLoadFields findings were raised for this routine, so its cost is more likely computational than per-row I/O.
+> No loop or SetLoadFields findings were raised for this routine.
+
+The sentence ends at that premise. An earlier draft continued "...so its cost is more likely computational than per-row I/O" — an inference the fences above do not cover, since `analyzeProfile` never runs the source-ONLY family (`unfiltered-findset`, `external-call-in-loop`, `dangerous-call-in-loop`, `nested-loops`, `unindexed-filter`). A routine can carry an HTTP call inside a loop, or an unfiltered `FindSet`, with none of that visible to this pass — both are real costs and neither is "computational". The premise (no loop or SetLoadFields finding was raised) is proven by the fences; the inference from it to "therefore computational" was not, and review found it false on real routines. Cut, not reworded.
 
 ### Resulting behaviour
 
@@ -127,7 +129,7 @@ All seven profile-only detectors, identified by pattern id:
 
 `single-method-dominance`, `high-hit-count`, `deep-call-stack`, `repeated-siblings`, `event-subscriber-hotspot`, `recursive-call`, `event-chain`
 
-Not just the five carrying savings models. But they do NOT all benefit equally, and the spec should not pretend otherwise: `deep-call-stack` and `event-subscriber-hotspot` emit multi-routine `involvedMethods`, so by fence 2 they can never receive the clean sentence. They gain sibling naming only. The other five, which anchor a single routine, can receive either.
+Not just the five carrying savings models. But they do NOT all benefit equally, and the spec should not pretend otherwise: `high-hit-count`, `deep-call-stack`, `repeated-siblings`, `event-subscriber-hotspot` and `event-chain` all emit multi-routine `involvedMethods` (see fence 2 above), so by fence 2 they can never receive the clean sentence — they gain sibling naming only. Only `single-method-dominance` and `recursive-call`, which always anchor a single routine, can receive either.
 
 ## Error handling
 
@@ -138,7 +140,7 @@ The pass is advisory and must never fail an analysis. A pattern with an empty `i
 Unit tests in `test/core/annotate-cause.test.ts`, driven by hand-built `DetectedPattern[]` plus a `SourceIndex` from `buildSourceIndex("test/fixtures/source")`:
 
 1. A profile-only pattern whose routine has a source-correlated sibling names that sibling's pattern id.
-2. A profile-only pattern whose routine resolves to exactly one indexed member with no siblings gets the computational-cost sentence.
+2. A profile-only pattern whose routine resolves to exactly one indexed member with no siblings gets the scoped no-findings sentence.
 3. A profile-only pattern whose routine resolves to **zero** members is left byte-identical.
 4. A profile-only pattern whose anchor name exists in the index but under a **different `objectId`** is left byte-identical — the `matchExactToSource` fence. Using `matchAllToSource` instead makes this test fail, which is the point of the new function.
 5. A profile-only pattern whose anchor type is `CodeUnit` against an index entry typed `Codeunit` still resolves — `canonicalObjectType` is applied. Without it the fence is silent for every real finding and the feature looks like a no-op.
@@ -156,5 +158,5 @@ Fixture note: `test/fixtures/source/` gains no new files, so the `48 → 49` cou
 ## Risks, accepted
 
 - **Redundancy.** A routine with a `modify-in-loop` finding now mentions it twice — once as its own finding, once inside the dominance suggestion. Accepted deliberately: the cause is named where the reader is already looking.
-- **Frequently silent, and more so after review.** In a real capture the dominant method is often base-app or dependency code, which `.dependencies/` exclusion means is never indexed. The three fences narrow it further: exact type+id resolution, single-routine findings only, and two of the seven detectors excluded from the clean sentence by construction. Expect silence to be the common outcome. That is correct behaviour rather than a gap — the alternative is a confident sentence about code the tool did not read — but it does mean the feature's visible value rests mostly on sibling naming, not on the clean claim.
+- **Frequently silent, and more so after review.** In a real capture the dominant method is often base-app or dependency code, which `.dependencies/` exclusion means is never indexed. The three fences narrow it further: exact type+id resolution, single-routine findings only, and five of the seven detectors excluded from the clean sentence by construction, leaving only `single-method-dominance` and `recursive-call` able to receive it. Expect silence to be the common outcome. That is correct behaviour rather than a gap — the alternative is a confident sentence about code the tool did not read — but it does mean the feature's visible value rests mostly on sibling naming, not on the clean claim.
 - **The clean claim is the risky half and the small half.** It survives review only because it is scoped to "loop or SetLoadFields findings". If a future change runs `runSourceOnlyDetectors` inside `analyzeProfile`, that wording becomes needlessly narrow and should widen with it; if a new source-correlated detector is added, the wording is already correct without edit. Either way the sentence must never be widened to "no database anti-patterns" while any detector family is absent from the path.

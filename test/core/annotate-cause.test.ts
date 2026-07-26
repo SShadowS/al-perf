@@ -195,7 +195,7 @@ describe("annotateStaticCause", () => {
 		expect(p[0].suggestion).not.toContain("`");
 	});
 
-	test("the profile-only id set matches the detector registry", () => {
+	test("PROFILE_ONLY_PATTERN_IDS is pinned to a hardcoded list, not checked against the detector registry", () => {
 		expect([...PROFILE_ONLY_PATTERN_IDS].sort()).toEqual([
 			"deep-call-stack",
 			"event-chain",

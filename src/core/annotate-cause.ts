@@ -43,8 +43,14 @@ export const PROFILE_ONLY_PATTERN_IDS: ReadonlySet<string> = new Set([
  *
  *  1. the routine must resolve on type AND id (`matchExactToSource`, never
  *     `matchAllToSource`, whose fallbacks can answer about a different object);
- *  2. the finding must name exactly one routine — `deep-call-stack` and
- *     `event-subscriber-hotspot` carry several, so `[0]` is arbitrary for them;
+ *  2. the finding must name exactly one routine. Measured against patterns.ts:
+ *     only `single-method-dominance` and `recursive-call` always name exactly
+ *     one. The other five build multi-anchor `involvedMethods` —
+ *     `high-hit-count` and `repeated-siblings` always name exactly two,
+ *     `event-chain` always names its root plus every subscriber beneath it,
+ *     and `deep-call-stack` / `event-subscriber-hotspot` name a
+ *     variable-length set — so `[0]` is arbitrary for any of those five, and
+ *     the negative claim can in practice only ever reach the first two;
  *  3. the wording names only what `analyzeProfile` actually runs. The
  *     source-ONLY family (unfiltered-findset, dangerous-call-in-loop,
  *     external-call-in-loop, nested-loops, unindexed-filter) never runs in this
@@ -98,6 +104,6 @@ export function annotateStaticCause(
 		);
 		if (exact.length === 0) continue;
 
-		p.suggestion = `${p.suggestion} No loop or SetLoadFields findings were raised for this routine, so its cost is more likely computational than per-row I/O.`;
+		p.suggestion = `${p.suggestion} No loop or SetLoadFields findings were raised for this routine.`;
 	}
 }
