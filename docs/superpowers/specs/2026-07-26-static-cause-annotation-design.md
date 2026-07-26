@@ -18,6 +18,8 @@ This design joins them: a profile-only finding names the source findings that sh
 - **No new detection.** The pass invents no findings and suppresses none. It only restates findings other detectors already emitted.
 - **No fusion dependency.** `fusionViews` joins runtime routines to al-sem static findings already, but is gated on an al-sem workspace. This works on plain `--source`.
 
+**Citation convention:** code is cited by symbol, not by line number, except where a line is the whole point (`locator.ts:65`). Two line citations in the first draft of this spec were already stale one commit after being written.
+
 ## Architecture
 
 One new module, one call site.
@@ -41,35 +43,81 @@ A second argument for the post-pass: `high-hit-count` is emitted from **two** si
 
 ## The join
 
-Source-correlated detectors build `involvedMethods` with `methodLabel()`; profile-only detectors use `formatMethodBreakdownRef()`. Both render `Name (Type Id)` and, since `core/method-ref.ts` was extracted, are one function. So the anchor strings are directly comparable with `===`.
+All `involvedMethods` anchors render `Name (Type Id)` through a single helper, `formatMethodBreakdownRef` (`src/core/method-ref.ts`), so the strings are directly comparable with `===`.
+
+That is true as of `d0705af` and was NOT true when this spec was first written. A review found the earlier claim false, and checking it turned up **five** builders of that format — `formatMethodRef` (patterns.ts), `formatMethodBreakdownRef`, `methodLabel` (source-patterns.ts), an inline literal in `telemetry-parser.ts` (`buildSinglePattern`), and the display-only `displayMethodRef`. Four fed `involvedMethods`. They agreed by convention, not by construction. All now delegate to the one helper, pinned by `test/core/method-ref.test.ts`.
+
+The implementer should not re-derive this: if a new anchor builder appears, the join degrades silently to "no siblings found", which looks exactly like a routine with no findings.
 
 Two lookups, both by string equality — no parsing:
 
-1. **Sibling findings.** Group all patterns by `involvedMethods[0]`. For a profile-only pattern, its siblings are the other patterns sharing that string, minus itself and minus other profile-only patterns.
+1. **Sibling findings.** Group all patterns by `involvedMethods[0]`. For a profile-only pattern, its siblings are the other patterns sharing that string, minus itself and minus other profile-only patterns. "Profile-only" is decided by a hardcoded `Set<string>` of the seven ids listed under Scope, exported from the new module so a test can assert it matches the detector registry — an id added to `allDetectors` without being added here would silently annotate a profile-only finding with itself.
 2. **The routine's `MethodBreakdown`.** Scan `methods` for the first `m` where `formatMethodBreakdownRef(m) === pattern.involvedMethods[0]`, exactly as `semantic/corroborate.ts` already does. This yields `functionName` / `objectType` / `objectId` for the index lookup.
 
 `involvedMethods[0]` is the finding-lifecycle fingerprint anchor. This pass **reads** it and must never write it.
+
+Not every anchor is a routine. On a sampling capture a SQL statement node is a call-tree node like any other, so `high-hit-count`'s anchor can be a thousand characters of raw SQL rather than a method name. Nothing special is needed: such an anchor matches no `MethodBreakdown` and resolves to no member, so both lookups return nothing and the pass stays silent. It is recorded here so the implementer recognises the case rather than treating it as a bug.
 
 Parsing the anchor string back into its three parts with a regex is rejected: real function names contain quotes, dots and parentheses (`OnAfterPostSalesDoc."Sales Header"`), and a parser that is wrong on one shape silently mis-attributes a finding.
 
 ## The fence
 
-Saying "nothing was found here" is a claim about coverage, not about findings. It is only true if the routine was read. The fence is `matchAllToSource(functionName, objectType, objectId, index)` from `src/source/locator.ts`:
+Saying "nothing was found here" is a claim about coverage, not about findings, and it is the only part of this design that can produce a confident falsehood. Three conditions must ALL hold before it is made.
 
-| resolves to | siblings | annotation |
-|---|---|---|
-| ≥ 1 member | ≥ 1 | name them: `` Static analysis also flagged `modify-in-loop`, `calcfields-in-loop` on this routine. `` |
-| exactly 1 member | 0 | `No database anti-patterns were found in this routine, so its cost is likely computational rather than I/O.` |
-| > 1 member | 0 | *(silent)* — ambiguous; cannot prove which member ran |
-| 0 members | any | *(silent)* — not indexed, so absence proves nothing |
+### 1. The routine must resolve EXACTLY, on type and id
 
-The two silences carry the design's weight. Absence of findings on code that was never read is not evidence of clean code, and this project has shipped that error twice (`incomplete-setloadfields`' "will cause runtime errors", the fragment fences it later needed). The `> 1` case is silent even though a sibling-bearing ambiguous routine still names its siblings — naming a finding is safe under ambiguity because some member really did produce it; claiming *clean* is not.
+`matchAllToSource` (`src/source/locator.ts:32`) must NOT be used for this claim. It is a recall-oriented resolver with two fallbacks after its canonical step:
 
-Note the asymmetry in row 1: siblings are reported whenever the routine resolves at all, including ambiguously, because those findings exist regardless of which member matched.
+- step 2 returns id-only matches when no candidate's type matched;
+- step 3 (`locator.ts:65`) returns a lone candidate **regardless of `objectId`** — a same-named routine in an entirely different object.
+
+Under step 3, "resolves to exactly one member" can be a routine the profile never measured, and the clean sentence would then describe the wrong code with full confidence. Those fallbacks are correct for their existing callers, which want a probable location; they are wrong here, where the question is "did we definitely read THIS routine".
+
+This design adds a strict sibling to `locator.ts`:
+
+```ts
+export function matchExactToSource(
+  functionName: string,
+  objectType: string,
+  objectId: number,
+  index: SourceIndex,
+): SourceMatch[]
+```
+
+Its body is `matchAllToSource`'s step 1 alone — candidates from `index.procedures` and `index.triggers` under the lowercased name, filtered to `c.objectId === objectId && canonicalObjectType(c.objectType) === canonicalObjectType(objectType)`. No fallbacks. It returns `[]` where `matchAllToSource` would guess.
+
+Reusing `canonicalObjectType` matters: the profile says `CodeUnit` and the index says `Codeunit`, and a naive `===` on the type would make this fence reject every real match and go permanently silent.
+
+### 2. The finding must be about ONE routine
+
+`involvedMethods` is not always a single anchor. `event-subscriber-hotspot` sets it to every aggregated subscriber (`aggregated.map(formatMethodBreakdownRef)` in `detectEventSubscriberHotspot`), and `deep-call-stack` to the five deepest nodes in traversal order (`deepestNodes.slice(0, 5).map(formatMethodRef)`). For those, `[0]` is an arbitrary member of a set, and attaching "no anti-patterns were found in **this** routine" to a finding about N routines is a single-routine claim on a multi-routine finding.
+
+So the clean sentence requires `involvedMethods.length === 1`. Sibling naming does not: a sibling finding on any listed routine is a real finding about this finding's subject matter.
+
+### 3. The claim must name what was actually checked
+
+`analyzeProfile` runs `runDetectors` and `runSourceDetectors` and merges both into `patterns`. It never runs `runSourceOnlyDetectors` — so `unfiltered-findset`, `nested-loops`, `unindexed-filter`, `dangerous-call-in-loop` and `external-call-in-loop` are absent from this path entirely (see CLAUDE.md's Pattern Detection section). A routine whose real problem is an unfiltered `FindSet` or a `Commit` in a loop has no finding here.
+
+An unqualified "no database anti-patterns were found in this routine" would therefore be false exactly when it matters most. The sentence names its own scope instead:
+
+> No loop or SetLoadFields findings were raised for this routine, so its cost is more likely computational than per-row I/O.
+
+### Resulting behaviour
+
+| routine resolves exactly | `involvedMethods` | siblings | annotation |
+|---|---|---|---|
+| yes or no | any | ≥ 1 | name them: `Static analysis also flagged modify-in-loop, calcfields-in-loop on this routine.` |
+| yes | exactly 1 | 0 | the scoped sentence above |
+| yes | > 1 | 0 | *(silent)* — multi-routine finding |
+| no | any | 0 | *(silent)* — not provably this routine |
+
+Siblings are named regardless of exact resolution because those findings exist and were produced by a detector that did resolve the routine; only the *negative* claim needs proof of coverage.
 
 ## Output
 
-The annotation is appended to the existing `suggestion` string, separated by a single space, and only when the detector already has a suggestion. All seven do — verified, though `repeated-siblings`' sits fifteen lines below its `id`, far enough from it to be missed by a narrow grep.
+The annotation is appended to the existing `suggestion` string, separated by a single space, and only when the detector already has one. All seven do — verified individually, though `repeated-siblings`' `suggestion` sits fifteen lines below its `id`, far enough to be missed by a narrow grep.
+
+Pattern ids are written bare, not in backticks: `suggestion` is plain text in the terminal formatter and HTML-escaped in the HTML one, so markdown syntax reaches the user as literal punctuation.
 
 `suggestion` renders in terminal, markdown and HTML today, so this needs no formatter work and adds no surface to the field-parity test. `estimatedSavings`, `savingsExplanation`, `severity`, `impact` and `involvedMethods` are untouched.
 
@@ -79,7 +127,7 @@ All seven profile-only detectors, identified by pattern id:
 
 `single-method-dominance`, `high-hit-count`, `deep-call-stack`, `repeated-siblings`, `event-subscriber-hotspot`, `recursive-call`, `event-chain`
 
-Not just the five carrying savings models — `deep-call-stack` and `event-subscriber-hotspot` name a routine and benefit identically.
+Not just the five carrying savings models. But they do NOT all benefit equally, and the spec should not pretend otherwise: `deep-call-stack` and `event-subscriber-hotspot` emit multi-routine `involvedMethods`, so by fence 2 they can never receive the clean sentence. They gain sibling naming only. The other five, which anchor a single routine, can receive either.
 
 ## Error handling
 
@@ -92,10 +140,14 @@ Unit tests in `test/core/annotate-cause.test.ts`, driven by hand-built `Detected
 1. A profile-only pattern whose routine has a source-correlated sibling names that sibling's pattern id.
 2. A profile-only pattern whose routine resolves to exactly one indexed member with no siblings gets the computational-cost sentence.
 3. A profile-only pattern whose routine resolves to **zero** members is left byte-identical.
-4. A profile-only pattern whose routine resolves to **more than one** member, with no siblings, is left byte-identical.
-5. A source-correlated pattern is never annotated, even when it shares a routine with a profile-only one.
-6. `annotateStaticCause(patterns, methods, undefined)` leaves every suggestion byte-identical.
-7. `involvedMethods` is unchanged for every pattern in every case above.
+4. A profile-only pattern whose anchor name exists in the index but under a **different `objectId`** is left byte-identical — the `matchExactToSource` fence. Using `matchAllToSource` instead makes this test fail, which is the point of the new function.
+5. A profile-only pattern whose anchor type is `CodeUnit` against an index entry typed `Codeunit` still resolves — `canonicalObjectType` is applied. Without it the fence is silent for every real finding and the feature looks like a no-op.
+6. A multi-routine finding (`involvedMethods.length > 1`) with no siblings is left byte-identical, even when `[0]` resolves exactly.
+7. The scoped sentence names loop/SetLoadFields, and does NOT claim "no database anti-patterns" — pinned by string, because the unscoped wording is the confident falsehood this fence exists to prevent.
+8. The profile-only id set matches the ids emitted by `runDetectors` over a fixture profile.
+9. A source-correlated pattern is never annotated, even when it shares a routine with a profile-only one.
+10. `annotateStaticCause(patterns, methods, undefined)` leaves every suggestion byte-identical.
+11. `involvedMethods` is unchanged for every pattern in every case above.
 
 **Every fence must be mutation-tested** — delete it, confirm a test fails on an assertion that encodes the behaviour, restore byte-identical. This is the codebase's most repeated defect: today alone, two guards shipped green with tests that could not fail, including one in this same session where a Page severity downgrade masked the very refinement under test. Cases 3 and 4 are the fences here; if removing the `matchAllToSource` check leaves the suite green, the test is measuring nothing.
 
@@ -104,4 +156,5 @@ Fixture note: `test/fixtures/source/` gains no new files, so the `48 → 49` cou
 ## Risks, accepted
 
 - **Redundancy.** A routine with a `modify-in-loop` finding now mentions it twice — once as its own finding, once inside the dominance suggestion. Accepted deliberately: the cause is named where the reader is already looking.
-- **Frequently silent.** In a real capture the dominant method is often base-app or dependency code, which `.dependencies/` exclusion means is never indexed. Expect the 0-match silence to be the common outcome. That is correct behaviour, not a gap, and it is why the empty-case sentence is worth having at all: when it *does* fire, it means something.
+- **Frequently silent, and more so after review.** In a real capture the dominant method is often base-app or dependency code, which `.dependencies/` exclusion means is never indexed. The three fences narrow it further: exact type+id resolution, single-routine findings only, and two of the seven detectors excluded from the clean sentence by construction. Expect silence to be the common outcome. That is correct behaviour rather than a gap — the alternative is a confident sentence about code the tool did not read — but it does mean the feature's visible value rests mostly on sibling naming, not on the clean claim.
+- **The clean claim is the risky half and the small half.** It survives review only because it is scoped to "loop or SetLoadFields findings". If a future change runs `runSourceOnlyDetectors` inside `analyzeProfile`, that wording becomes needlessly narrow and should widen with it; if a new source-correlated detector is added, the wording is already correct without edit. Either way the sentence must never be widened to "no database anti-patterns" while any detector family is absent from the path.
