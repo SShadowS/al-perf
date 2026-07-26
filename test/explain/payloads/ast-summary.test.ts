@@ -38,7 +38,25 @@ function makeSourceIndex(
 		procedures: [{ name: procName, objectType, objectId, features }],
 		triggers: [],
 	});
-	return { objects } as unknown as SourceIndex;
+	return completeIndex(objects);
+}
+
+/**
+ * A complete `SourceIndex` around a hand-built objects map. `as unknown as
+ * SourceIndex` defeats the type checker outright, so a field added to the
+ * interface never surfaces here — and tsconfig.json excludes test/, so tsc
+ * would not catch it either way.
+ */
+function completeIndex(objects: Map<string, unknown>): SourceIndex {
+	return {
+		files: [],
+		procedures: new Map(),
+		triggers: new Map(),
+		objects: objects as SourceIndex["objects"],
+		tables: new Map(),
+		eventCatalog: { publishers: [], subscribers: [] },
+		failedFiles: [],
+	};
 }
 
 describe("extractAstSummaries", () => {
@@ -207,7 +225,7 @@ describe("extractAstSummaries", () => {
 				},
 			],
 		});
-		const si = { objects } as unknown as SourceIndex;
+		const si = completeIndex(objects);
 		const hotspots = [makeHotspot("OnInsert", "Table", 50100)];
 
 		const result = extractAstSummaries(hotspots, si);
@@ -241,7 +259,7 @@ describe("extractAstSummaries", () => {
 			})),
 			triggers: [],
 		});
-		const si = { objects } as unknown as SourceIndex;
+		const si = completeIndex(objects);
 
 		const result = extractAstSummaries(hotspots, si);
 		expect(result).toHaveLength(15);

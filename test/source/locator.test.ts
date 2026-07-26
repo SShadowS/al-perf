@@ -43,7 +43,17 @@ function makeIndex(
 		list.push(t);
 		triggers.set(key, list);
 	}
-	return { files: [], procedures, triggers, objects: new Map() };
+	return {
+		files: [],
+		procedures,
+		triggers,
+		objects: new Map(),
+		// tsconfig.json excludes test/, so tsc cannot catch a SourceIndex
+		// literal that is missing a required field. Kept complete by hand.
+		tables: new Map(),
+		eventCatalog: { publishers: [], subscribers: [] },
+		failedFiles: [],
+	};
 }
 
 describe("matchToSource", () => {

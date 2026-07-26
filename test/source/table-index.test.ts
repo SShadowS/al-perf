@@ -31,7 +31,9 @@ describe("buildTableIndex", () => {
 		expect(fieldNames).toContain("Ext Code");
 		expect(fieldNames).toContain("Ext Lookup");
 
-		expect(t.sources.map((s) => s.objectId).sort()).toEqual([50970, 50971]);
+		expect(t.sources.map((s) => s.objectId).sort()).toEqual([
+			50970, 50971, 50978,
+		]);
 	});
 
 	it("takes primaryKey from the root only", () => {
@@ -78,6 +80,18 @@ describe("buildTableIndex", () => {
 		expect(t).toBeDefined();
 		expect(t.ambiguous).toBe(true);
 		expect(t.sources.map((s) => s.objectId).sort()).toEqual([50973, 50974]);
+	});
+
+	it("merges multiple extensions in (objectId, path) order", () => {
+		// The cross-run equality check below cannot see a deleted extension
+		// sort while every table has at most one extension. "Merge Base" has
+		// two, so the exact provenance sequence pins the order.
+		const t = tables.get("merge base")!;
+		expect(t.keys.map((k) => k.fromObjectId)).toEqual([
+			50970, 50970, 50971, 50971, 50978,
+		]);
+		expect(t.sources.map((s) => s.objectId)).toEqual([50970, 50971, 50978]);
+		expect(t.fields.map((f) => f.name)).toContain("ExtB Code");
 	});
 
 	it("orders contributors deterministically, not by walk order", () => {
