@@ -1500,6 +1500,22 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(p[0].evidence).toContain("somethingunseen");
 	});
 
+	it("never reports a Record BUILT-IN as a missing field, even on an unknown table", () => {
+		// `Rec.ReadPermission` with no parens is a built-in on every Record.
+		// The detector cannot check an unindexed table's field list — but it
+		// does not need to: no table has a field by that name. Seven findings
+		// across two real corpora were exactly this.
+		expect(findings("ReadsRecordBuiltInOnUnknownTable")).toHaveLength(0);
+	});
+
+	it("still reports a genuine unknown name alongside a dropped built-in", () => {
+		const p = findings("ReadsBuiltInAndRealFieldOnUnknownTable");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].evidence).toContain("somereallookingfield");
+		expect(p[0].evidence).not.toContain("filtergroup");
+	});
+
 	it("hedges an unconfirmable name on a fragment", () => {
 		const p = findings("ReadsUnknownNameOnFragmentAfterNarrowing");
 		expect(p).toHaveLength(1);
