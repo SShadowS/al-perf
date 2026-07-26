@@ -1,9 +1,24 @@
 import type { DetectedPattern } from "../types/patterns.js";
 
 /**
- * Heuristic cost models for estimating savings per pattern type.
- * Estimates are conservative (typically 30-70% of impact) since
- * fixes rarely eliminate 100% of the cost.
+ * Cost models for estimating savings per pattern type.
+ *
+ * Three of these were MEASURED on BC 28 (`private/matrix-probe`,
+ * `private/whatif-probe`) and all three were wrong, in both directions:
+ * modify-in-loop claimed 60% and buys 7%, dangerous-call-in-loop claimed 90%
+ * and buys 59%, calcfields-in-loop claimed 80% and buys 96%. So the previous
+ * note here — that these estimates are "conservative" — was not true; they
+ * were arbitrary. Do not restore that framing.
+ *
+ * A model can only be measured when the suggested fix is concrete enough to
+ * run: hoist the CalcFields, hoist the Commit, swap the loop for ModifyAll.
+ * The rest suggest a direction rather than an edit ("reduce call frequency",
+ * "restructure to reduce per-iteration database calls"), so there is no second
+ * variant to time and no number to check. Those keep a rough figure so the
+ * ranking stays useful, and say so in their text — a user must be able to tell
+ * which of these numbers came from a container and which came from judgement.
+ * If you add a model, measure it or mark it "rough estimate"; the test suite
+ * enforces that every entry does one or the other.
  */
 const SAVINGS_MODELS: Record<
 	string,
@@ -11,27 +26,31 @@ const SAVINGS_MODELS: Record<
 > = {
 	"single-method-dominance": (p) => ({
 		savings: Math.round(p.impact * 0.3),
-		explanation: `Optimizing the dominant method could save ~30% of its ${formatImpact(p.impact)} selfTime through algorithmic improvements.`,
+		explanation: `Rough estimate (not measured): optimizing the dominant method might save ~30% of its ${formatImpact(p.impact)} selfTime through algorithmic improvements.`,
 	}),
 	"high-hit-count": (p) => ({
 		savings: Math.round(p.impact * 0.5),
-		explanation: `Reducing call frequency (e.g., caching or batching) could save ~50% of the ${formatImpact(p.impact)} spent in high-frequency calls.`,
+		explanation: `Rough estimate (not measured): reducing call frequency, e.g. by caching or batching, might save ~50% of the ${formatImpact(p.impact)} spent in high-frequency calls.`,
 	}),
 	"repeated-siblings": (p) => ({
 		savings: Math.round(p.impact * 0.7),
-		explanation: `Eliminating repeated sibling calls (likely N+1 pattern) could save ~70% of the ${formatImpact(p.impact)} by batching operations.`,
+		explanation: `Rough estimate (not measured): eliminating repeated sibling calls (likely an N+1 pattern) might save ~70% of the ${formatImpact(p.impact)} by batching operations.`,
 	}),
 	"recursive-call": (p) => ({
 		savings: Math.round(p.impact * 0.5),
-		explanation: `Converting recursion to iteration or adding caching could save ~50% of the ${formatImpact(p.impact)} spent in recursive calls.`,
+		explanation: `Rough estimate (not measured): converting recursion to iteration, or adding caching, might save ~50% of the ${formatImpact(p.impact)} spent in recursive calls.`,
 	}),
 	"event-chain": (p) => ({
 		savings: Math.round(p.impact * 0.4),
-		explanation: `Consolidating the event chain could save ~40% of the ${formatImpact(p.impact)} from cascading subscriber overhead.`,
+		explanation: `Rough estimate (not measured): consolidating the event chain might save ~40% of the ${formatImpact(p.impact)} from cascading subscriber overhead.`,
 	}),
+	// Measured: 2,000 parents x 10 children, Sum FlowField over a SumIndexField
+	// key. CalcFields in the loop cost 2001 statements / 132 ms; the same loop
+	// with SetAutoCalcFields cost 1 statement / 5 ms. The platform folds the
+	// aggregate into the one query instead of issuing it per row.
 	"calcfields-in-loop": (p) => ({
-		savings: Math.round(p.impact * 0.8),
-		explanation: `Moving CalcFields outside the loop, or calling SetAutoCalcFields before it, could eliminate ~80% of the ${formatImpact(p.impact)} per-iteration cost. SetLoadFields does not help here — it does not accept FlowFields.`,
+		savings: Math.round(p.impact * 0.96),
+		explanation: `Calling SetAutoCalcFields before the loop, or moving the calculation outside it, removes ~96% of the ${formatImpact(p.impact)} (measured on BC 28: 2001 SQL statements and 132ms become 1 and 5ms over 2,000 rows) — the platform folds the aggregate into the query instead of issuing one per row. SetLoadFields does not help here — it does not accept FlowFields.`,
 	}),
 	// The one entry in this table backed by measurement rather than judgement.
 	// ModifyAll is not set-based on BC 28: it issues one UPDATE per row, the
@@ -45,15 +64,20 @@ const SAVINGS_MODELS: Record<
 	}),
 	"record-op-in-loop": (p) => ({
 		savings: Math.round(p.impact * 0.7),
-		explanation: `Restructuring to reduce per-iteration database calls could save ~70% of the ${formatImpact(p.impact)}.`,
+		explanation: `Rough estimate (not measured): restructuring to reduce per-iteration database calls might save ~70% of the ${formatImpact(p.impact)}.`,
 	}),
+	// Measured: a 2,000-row loop that modifies each row cost 4002 statements /
+	// 690 ms with Commit inside, and 2005 / 284 ms with one Commit after. The
+	// saving is bounded by whatever else the loop does -- here one UPDATE per
+	// row -- so 59% is the figure for a loop that writes, which is the shape
+	// Commit-in-loop almost always appears in.
 	"dangerous-call-in-loop": (p) => ({
-		savings: Math.round(p.impact > 0 ? p.impact * 0.9 : 0),
-		explanation: `Moving Commit/Error outside the loop eliminates per-iteration transaction overhead.`,
+		savings: Math.round(p.impact > 0 ? p.impact * 0.59 : 0),
+		explanation: `Moving Commit outside the loop removes ~59% of the ${formatImpact(p.impact)} (measured on BC 28 over 2,000 rows: 690ms becomes 284ms, and 4002 SQL statements become 2005) by collapsing N write transactions into one.`,
 	}),
 	"external-call-in-loop": (p) => ({
 		savings: Math.round(p.impact > 0 ? p.impact * 0.9 : 0),
-		explanation: `Hoisting the HTTP call/Sleep outside the loop (or batching the request) eliminates per-iteration network round-trip or blocking-delay overhead.`,
+		explanation: `Rough estimate (not measured): hoisting the HTTP call or Sleep outside the loop, or batching the request, removes the per-iteration network round-trip or blocking delay.`,
 	}),
 };
 

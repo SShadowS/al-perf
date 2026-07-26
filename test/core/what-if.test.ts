@@ -76,6 +76,90 @@ describe("What If estimator", () => {
 		expect(patterns[0].savingsExplanation).not.toContain("60%");
 	});
 
+	test("calcfields-in-loop savings match what hoisting the calculation buys", () => {
+		// Measured on BC 28: 2,000 parents with 10 children each, a Sum
+		// FlowField backed by a SumIndexField key. CalcFields inside the loop
+		// cost 2001 statements / 132 ms; SetAutoCalcFields before it cost 1
+		// statement / 5 ms. That is 96%, not the 80% written from judgement --
+		// this multiplier was too LOW, where modify-in-loop's was too high.
+		const patterns: DetectedPattern[] = [
+			{
+				id: "calcfields-in-loop",
+				severity: "critical",
+				title: "CalcFields() inside loop in SumLines",
+				description: "test pattern",
+				impact: 1_000_000,
+				involvedMethods: ["SumLines (Codeunit 50300)"],
+				evidence: "test evidence",
+			},
+		];
+		annotateEstimatedSavings(patterns);
+		expect(patterns[0].estimatedSavings).toBe(960_000);
+		expect(patterns[0].savingsExplanation).toContain("measured");
+	});
+
+	test("dangerous-call-in-loop savings match what hoisting the Commit buys", () => {
+		// Measured on BC 28: a 2,000-row loop that modifies each row cost 690 ms
+		// with Commit inside and 284 ms with a single Commit after -- 59%, not
+		// the 90% claimed. Statement counts agree (4002 vs 2005). The shape
+		// matters: the saving is bounded by whatever else the loop does, and
+		// here that is one UPDATE per row.
+		const patterns: DetectedPattern[] = [
+			{
+				id: "dangerous-call-in-loop",
+				severity: "critical",
+				title: "Commit() inside loop in PostBatch",
+				description: "test pattern",
+				impact: 1_000_000,
+				involvedMethods: ["PostBatch (Codeunit 50300)"],
+				evidence: "test evidence",
+			},
+		];
+		annotateEstimatedSavings(patterns);
+		expect(patterns[0].estimatedSavings).toBe(590_000);
+		expect(patterns[0].savingsExplanation).toContain("measured");
+	});
+
+	test("every savings model is either measured or labelled as a rough estimate", () => {
+		// Three of these multipliers were measured on BC 28 and all three were
+		// wrong -- 60% vs 7%, 90% vs 59%, 80% vs 96%. A user reading a
+		// microsecond figure cannot tell a container measurement from a guess
+		// unless the text says so, and the ones that cannot be measured are the
+		// ones whose suggested fix names no concrete edit. This pins the
+		// convention so a model added later has to pick a side.
+		const ids = [
+			"single-method-dominance",
+			"high-hit-count",
+			"repeated-siblings",
+			"recursive-call",
+			"event-chain",
+			"calcfields-in-loop",
+			"modify-in-loop",
+			"record-op-in-loop",
+			"dangerous-call-in-loop",
+			"external-call-in-loop",
+		];
+		const patterns: DetectedPattern[] = ids.map((id) => ({
+			id,
+			severity: "warning",
+			title: `${id} title`,
+			description: "test pattern",
+			impact: 1_000_000,
+			involvedMethods: ["SomeMethod (Codeunit 50300)"],
+			evidence: "test evidence",
+		}));
+		annotateEstimatedSavings(patterns);
+
+		for (const p of patterns) {
+			expect(p.savingsExplanation).toBeTruthy();
+			const text = p.savingsExplanation as string;
+			const claimsMeasured = text.includes("measured on BC");
+			const admitsGuess = text.includes("Rough estimate (not measured)");
+			// Exactly one, never both and never neither.
+			expect([claimsMeasured, admitsGuess].filter(Boolean).length).toBe(1);
+		}
+	});
+
 	test("estimates savings for external-call-in-loop pattern", () => {
 		// external-call-in-loop is source-only (never produced by
 		// analyzeProfile alone -- it needs --source), so this exercises
