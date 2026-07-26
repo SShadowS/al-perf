@@ -10,6 +10,11 @@ tableextension 50972 "Merge Orphan Ext" extends "Merge Absent"
             FieldClass = FlowField;
             CalcFormula = Sum("Test Table".Amount where("No." = field("Orphan Code")));
         }
+        field(50002; "Orphan Lookup"; Text[100])
+        {
+            FieldClass = FlowField;
+            CalcFormula = Lookup("Test Table".Description where("No." = field("Orphan Code")));
+        }
     }
 
     keys

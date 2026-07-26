@@ -65,7 +65,11 @@ describe("buildTableIndex", () => {
 		expect(t.objectId).toBeUndefined();
 		expect(t.primaryKey).toBeUndefined();
 		expect(t.name).toBe("Merge Absent");
-		expect(t.fields.map((f) => f.name)).toEqual(["Orphan Code", "Orphan Sum"]);
+		expect(t.fields.map((f) => f.name)).toEqual([
+			"Orphan Code",
+			"Orphan Sum",
+			"Orphan Lookup",
+		]);
 		expect(t.keys).toHaveLength(1);
 	});
 

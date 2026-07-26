@@ -632,7 +632,36 @@ describe("calcfields-in-loop — resolving fields through the merged table", () 
 	});
 
 	it("keeps critical when only some called fields resolve on a fragment", () => {
+		// "Orphan Lookup" (not "Orphan Sum") resolves; "Unseen Base Total" does
+		// not. Deliberately a Lookup: if the resolved subset contained a Sum,
+		// calcFieldSeverity would land on critical anyway (Sum forces it),
+		// which would pass even with the allResolved fence deleted -- see the
+		// mutation-testing note below.
 		const p = findings("PartlyResolvedCalcFieldsOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+
+	it("keeps critical for a bare CalcFields() on a Lookup-only fragment", () => {
+		// "Merge Absent Lookup"'s only known FlowField is a Lookup -- no
+		// Sum/Count anywhere in the picture, so this is the case fence 1's own
+		// comment describes: an unseen root Sum is what actually runs, and the
+		// bare-call fallback must not downgrade on the Lookup alone.
+		const p = findings("BareCalcFieldsOnLookupOnlyFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+
+	it("treats an ambiguous table exactly as an absent one, even though the winning root's fields survive", () => {
+		// Two distinct roots both declare "Merge Ambig" (50973, 50974). The
+		// merged entry is marked ambiguous, but the winning root's fields
+		// (including this Lookup, added to 50973 only) are NOT empty -- so
+		// this is the one case the `resolved.length === 0` branch cannot also
+		// catch. Without the `|| table.ambiguous` fence, this would resolve
+		// the Lookup and downgrade to warning.
+		const p = findings("CalcFieldsOnAmbiguousFragment");
 		expect(p).toHaveLength(1);
 		expect(p[0].severity).toBe("critical");
 		expect(p[0].suggestion).not.toMatch(/This table has/i);

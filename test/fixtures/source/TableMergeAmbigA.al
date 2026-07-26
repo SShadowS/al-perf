@@ -9,6 +9,11 @@ table 50973 "Merge Ambig"
         {
             TableRelation = Customer."No.";
         }
+        field(3; "Ambig Lookup"; Text[100])
+        {
+            FieldClass = FlowField;
+            CalcFormula = Lookup("Test Table".Description where("No." = field("No.")));
+        }
     }
 
     keys
