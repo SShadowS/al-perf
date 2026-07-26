@@ -1,3 +1,4 @@
+import { formatMethodBreakdownRef } from "../core/method-ref.js";
 import { sortPatterns } from "../core/patterns.js";
 import type { MethodBreakdown } from "../types/aggregated.js";
 import type { DetectedPattern } from "../types/patterns.js";
@@ -78,13 +79,6 @@ export function isKnownNonRecordOp(
 	);
 	if (!variable) return false; // unresolved -- fail open
 	return !variable.isRecord;
-}
-
-/**
- * Format a method label for use in involvedMethods arrays.
- */
-function methodLabel(m: MethodBreakdown): string {
-	return `${m.functionName} (${m.objectType} ${m.objectId})`;
 }
 
 /**
@@ -332,7 +326,7 @@ export function detectCalcFieldsInLoop(
 					title: `${op.type} inside loop in ${method.functionName}`,
 					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query, causing N+1 query performance issues.`,
 					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
+					involvedMethods: [formatMethodBreakdownRef(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					// The filter above (`op.type === "CalcFields" || op.type === "CalcSums"`)
 					// guarantees op.type is exactly this union here; .filter() doesn't
@@ -390,7 +384,7 @@ export function detectModifyInLoop(
 					title: `${op.type} inside loop in ${method.functionName}`,
 					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL UPDATE, which can be very slow for large datasets.`,
 					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
+					involvedMethods: [formatMethodBreakdownRef(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					suggestion:
 						"Collect changes and apply them after the loop, or use ModifyAll() if applicable.",
@@ -446,7 +440,7 @@ export function detectInsertInLoop(
 					title: `${op.type} inside loop in ${method.functionName}`,
 					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL INSERT, which can be very slow for large datasets.`,
 					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
+					involvedMethods: [formatMethodBreakdownRef(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					suggestion:
 						"Build a temporary table and insert the records once after the loop, or use a bulk-insert pattern — each Insert() in a loop is a separate SQL INSERT.",
@@ -503,7 +497,7 @@ export function detectDeleteInLoop(
 					title: `${op.type} inside loop in ${method.functionName}`,
 					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration issues a separate SQL DELETE, which can be very slow for large datasets.`,
 					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
+					involvedMethods: [formatMethodBreakdownRef(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					suggestion:
 						"Use DeleteAll() with a filter instead of deleting row by row — but expect a modest gain, not an order of magnitude: DeleteAll() still issues one DELETE per row on BC 28 (measured ~6% faster than the equivalent loop over 20,000 rows). The large win is deleting fewer rows. If this call already is DeleteAll(), the loop around it is the bug — DeleteAll() exists to replace the loop, not to run inside one.",
@@ -562,7 +556,7 @@ export function detectRecordOpInLoop(
 					title: `${op.type} inside loop in ${method.functionName}`,
 					description: `${op.type}()${recVar} ${loopLocationPhrase(op, op.line, match.file)}. Each iteration triggers a separate SQL query.`,
 					impact: method.selfTime,
-					involvedMethods: [methodLabel(method)],
+					involvedMethods: [formatMethodBreakdownRef(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					suggestion:
 						"Read the looked-up table once into a temporary record before the loop, then read from that inside it — measured on BC 28 as 2001 SQL statements and 167ms becoming 2 and 9ms over 2,000 rows. That only holds where the looked-up set fits in memory; for an unbounded table, filter it down first, or restructure so the loop gets what it needs from one query.",
@@ -756,7 +750,7 @@ export function detectMissingSetLoadFields(
 						title: `${op.type} without SetLoadFields in ${method.functionName}`,
 						description: `${op.type}()${recVar} at line ${op.line} in ${match.file} has no preceding SetLoadFields(). This loads all fields from the database when only a subset may be needed.`,
 						impact: method.selfTime,
-						involvedMethods: [methodLabel(method)],
+						involvedMethods: [formatMethodBreakdownRef(method)],
 						evidence: `${op.type}() at line ${op.line} without SetLoadFields for ${op.recordVariable ?? "unknown variable"}`,
 						suggestion: escapes
 							? `Check what reads ${op.recordVariable ?? "this record"} elsewhere before adding SetLoadFields() — it is passed on, or has a table method called on it, so fields not named in this member may be read from it. Narrowing the load without covering those is worse than leaving it alone.`
@@ -983,7 +977,7 @@ export function detectIncompleteSetLoadFields(
 							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Reading a field that was not loaded triggers a JIT load — an implicit Get — and the platform then adds that field to the load set for the rest of the iteration, so the narrowing stops applying from that point on. Measured on BC 28: 5,000 iterations cost 4 SQL statements against 1 for a covering load set, so the cost is a small constant, not one round-trip per row. Under concurrent modification a JIT load can also fail with "Inconsistent read of field(s)".`
 							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so ${unconfirmed.join(", ")} could not be confirmed to be ${unconfirmed.length === 1 ? "a field" : "fields"} at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
-						involvedMethods: [methodLabel(method)],
+						involvedMethods: [formatMethodBreakdownRef(method)],
 						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
 						suggestion: `Add the missing fields to SetLoadFields so they load with the record instead of costing an extra Get: ${missingFields.map((f) => `"${f}"`).join(", ")}`,
 					});

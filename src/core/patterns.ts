@@ -72,7 +72,11 @@ export function displayMethodRef(node: ProcessedNode): string {
 export function formatMethodRef(node: ProcessedNode): string {
 	const { functionName } = node.callFrame;
 	const { objectType, objectId } = node.applicationDefinition;
-	return `${functionName} (${objectType} ${objectId})`;
+	// Delegates rather than re-templating: this string is the finding-lifecycle
+	// fingerprint anchor, and it was being built from the same three fields in
+	// four separate places. Byte-identical output is the whole requirement, so
+	// there is exactly one place that decides what the bytes are.
+	return formatMethodBreakdownRef({ functionName, objectType, objectId });
 }
 
 function callSiteWord(count: number): string {

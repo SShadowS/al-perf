@@ -26,6 +26,7 @@ import {
 	type TelemetryBatchDocument,
 	type TelemetrySignal,
 } from "../types/telemetry.js";
+import { formatMethodBreakdownRef } from "./method-ref.js";
 
 const TELEMETRY_BATCH_MARKER = /"payloadType"\s*:\s*"telemetry-batch"/;
 
@@ -703,7 +704,16 @@ function buildSinglePattern(
 		title,
 		description: `Telemetry signal ${s.signalId} recorded ${s.count} occurrence(s) of ${s.methodName} (${s.objectType} ${s.objectId}) at or above the ${severity} threshold, up to ${s.maxDurationMs}ms.`,
 		impact: s.maxDurationMs * 1000,
-		involvedMethods: [`${s.methodName} (${s.objectType} ${s.objectId})`],
+		// Built through the shared helper, not a local template: lifecycle's
+		// collectFindings resolves a finding's appId by matching this exact string
+		// against the method index, so a drift here silently breaks that lookup.
+		involvedMethods: [
+			formatMethodBreakdownRef({
+				functionName: s.methodName,
+				objectType: s.objectType,
+				objectId: s.objectId,
+			}),
+		],
 		evidence: [baseEvidence, ...extras].join("\n"),
 		sqlEvidence: s.sqlEvidence,
 		sqlRank: s.sqlEvidence ? s.sqlEvidence.totalMeasuredMs * 1000 : undefined,
