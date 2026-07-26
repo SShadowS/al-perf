@@ -10,8 +10,16 @@ import { formatMethodBreakdownRef } from "./method-ref.js";
  * cannot be specific without help, and why they are the only patterns this pass
  * annotates.
  *
- * Kept in sync with `allDetectors` in patterns.ts by a test; an id added there
- * and not here would let a profile-only finding cite itself as its own cause.
+ * `allDetectors` in patterns.ts is the real registry, and it is not exported —
+ * nothing here can check against it directly. What IS checked: a test in
+ * annotate-cause.test.ts runs `runDetectors` over
+ * test/fixtures/sampling-minimal.alcpuprofile and asserts every id it emits
+ * is a member of this set. That is a real pin, but a partial one — it only
+ * covers ids that actually FIRE on that one fixture. A profile-only detector
+ * added to patterns.ts without ever firing on sampling-minimal.alcpuprofile
+ * (or firing only under a shape that fixture doesn't produce) would ship
+ * silently absent from this set, and its findings would then be treated as
+ * source-correlated and become eligible to be cited as their own cause.
  */
 export const PROFILE_ONLY_PATTERN_IDS: ReadonlySet<string> = new Set([
 	"single-method-dominance",

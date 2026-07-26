@@ -127,6 +127,29 @@ describe("annotateStaticCause", () => {
 		expect(p[1].suggestion).toBe("BASE.");
 	});
 
+	test("a profile-only finding never cites another profile-only finding (or itself) as a sibling, even sharing an anchor", () => {
+		// Guards the sibling-collection loop's
+		// `if (PROFILE_ONLY_PATTERN_IDS.has(p.id)) continue;`. Without it, two
+		// profile-only findings sharing an anchor would each land in
+		// siblingsByAnchor and be read back as the other's (and even their own)
+		// "Static analysis also flagged" sibling -- a profile-only finding
+		// analyses nothing, so it must never be cited as a cause.
+		const p = [
+			pattern("single-method-dominance", [PROCESS]),
+			pattern("recursive-call", [PROCESS]),
+		];
+		annotateStaticCause(
+			p,
+			[method("ProcessRecords", "Codeunit", 50100)],
+			INDEX,
+		);
+		for (const finding of p) {
+			expect(finding.suggestion).not.toContain("Static analysis also flagged");
+			expect(finding.suggestion).not.toContain("single-method-dominance");
+			expect(finding.suggestion).not.toContain("recursive-call");
+		}
+	});
+
 	test("is a no-op without a source index", () => {
 		const p = [
 			pattern("single-method-dominance", [PROCESS]),
@@ -218,4 +241,19 @@ describe("annotateStaticCause wired into analyzeProfile", () => {
 		expect(dominance!.suggestion).toContain("Static analysis also flagged");
 		expect(dominance!.suggestion).toContain("calcfields-in-loop");
 	});
+});
+
+test("every id emitted by runDetectors is classified profile-only", async () => {
+	// The id set is a copy of knowledge that lives in patterns.ts's
+	// `allDetectors`. If a new profile-only detector ships without being added
+	// to the set, it would be treated as a source-correlated finding and could
+	// be cited as its own cause.
+	const { parseProfile } = await import("../../src/core/parser.js");
+	const { processProfile } = await import("../../src/core/processor.js");
+	const { runDetectors } = await import("../../src/core/patterns.js");
+	const raw = await parseProfile("test/fixtures/sampling-minimal.alcpuprofile");
+	const emitted = new Set(runDetectors(processProfile(raw)).map((p) => p.id));
+	for (const id of emitted) {
+		expect(PROFILE_ONLY_PATTERN_IDS.has(id)).toBe(true);
+	}
 });
