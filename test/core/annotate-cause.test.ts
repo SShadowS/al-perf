@@ -195,4 +195,27 @@ describe("annotateStaticCause wired into analyzeProfile", () => {
 			expect(p.suggestion ?? "").not.toContain("No loop or SetLoadFields");
 		}
 	});
+
+	// test/fixtures/sampling-minimal.alcpuprofile's two methods resolve against
+	// nothing in test/fixtures/source, so the no-source test above cannot tell
+	// a correctly-wired call from a missing one -- both look identical. This
+	// fixture's hot method is ProcessRecords in Codeunit 50100, which exists in
+	// test/fixtures/source/CodeUnit50100.al and already carries a
+	// calcfields-in-loop (and modify-in-loop, missing-setloadfields) finding,
+	// so with --source both a profile-only finding (single-method-dominance)
+	// and source-correlated findings land on the same involvedMethods anchor --
+	// exercising the sibling-naming branch of annotateStaticCause, not just its
+	// undefined-sourceIndex early return.
+	test("a profile-only finding is annotated with its source-correlated siblings when --source resolves the routine", async () => {
+		const result = await analyzeProfile(
+			"test/fixtures/static-cause-synthetic.alcpuprofile",
+			{ sourcePath: "test/fixtures/source" },
+		);
+		const dominance = result.patterns.find(
+			(p) => p.id === "single-method-dominance",
+		);
+		expect(dominance).toBeDefined();
+		expect(dominance!.suggestion).toContain("Static analysis also flagged");
+		expect(dominance!.suggestion).toContain("calcfields-in-loop");
+	});
 });
