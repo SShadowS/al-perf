@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { matchAllToSource, matchToSource } from "../../src/source/locator.js";
+import {
+	matchAllToSource,
+	matchExactToSource,
+	matchToSource,
+} from "../../src/source/locator.js";
 import type {
 	ProcedureInfo,
 	SourceIndex,
@@ -278,5 +282,68 @@ describe("matchAllToSource — object-type collision (id is unique only per type
 		expect(matchAllToSource("Refresh", "Codeunit", 50999, index)).toHaveLength(
 			2,
 		);
+	});
+});
+
+describe("matchExactToSource", () => {
+	// ProcessRecords exists once, in Codeunit 50100. LookupRecords shares that
+	// id under a different TYPE — the pair that separates an id-only rule from
+	// a type+id one.
+	const index = makeIndex([
+		makeProcedure({
+			name: "ProcessRecords",
+			objectType: "Codeunit",
+			objectId: 50100,
+		}),
+		makeProcedure({
+			name: "LookupRecords",
+			objectType: "Table",
+			objectId: 50100,
+		}),
+	]);
+
+	it("resolves a routine when type and id both match", () => {
+		const m = matchExactToSource("ProcessRecords", "Codeunit", 50100, index);
+		expect(m.length).toBe(1);
+		expect(m[0].objectId).toBe(50100);
+	});
+
+	it("tolerates the profile's object-type casing", () => {
+		// Profiles say "CodeUnit"; the index says "Codeunit". Without
+		// canonicalObjectType this fence rejects every real match, and the
+		// feature depending on it goes permanently silent while looking like it
+		// works.
+		expect(
+			matchExactToSource("ProcessRecords", "CodeUnit", 50100, index).length,
+		).toBe(1);
+	});
+
+	it("refuses a name-only match that matchAllToSource accepts", () => {
+		// Asked about Codeunit 99999, matchAllToSource falls through to its
+		// step-3 single-candidate rule and returns the WRONG object's routine.
+		// Verified against the real fixture index too, not just this synthetic
+		// one. matchExactToSource must return nothing: that is why it exists.
+		expect(
+			matchAllToSource("ProcessRecords", "Codeunit", 99999, index).length,
+		).toBe(1);
+		expect(
+			matchExactToSource("ProcessRecords", "Codeunit", 99999, index).length,
+		).toBe(0);
+	});
+
+	it("refuses a right-id, wrong-type match", () => {
+		expect(
+			matchAllToSource("LookupRecords", "Codeunit", 50100, index).length,
+		).toBe(1);
+		expect(
+			matchExactToSource("LookupRecords", "Codeunit", 50100, index).length,
+		).toBe(0);
+	});
+
+	it("returns nothing for an unknown name", () => {
+		expect(
+			matchExactToSource("NoSuchRoutineAnywhere", "Codeunit", 50100, index)
+				.length,
+		).toBe(0);
 	});
 });

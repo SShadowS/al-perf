@@ -68,6 +68,39 @@ export function matchAllToSource(
 }
 
 /**
+ * Resolve a routine ONLY when the object type and id both match — no
+ * fallbacks.
+ *
+ * `matchAllToSource` is recall-oriented: after its canonical step it falls back
+ * to id-only, then to a single candidate regardless of `objectId`. Those steps
+ * are right for callers that want a probable source location for a hotspot.
+ *
+ * They are wrong for a caller whose next move is a NEGATIVE claim — "nothing
+ * was found in this routine" — because a step-3 answer can be a same-named
+ * routine in an entirely different object, and the claim would then describe
+ * code the profile never measured. Anything asserting coverage must use this
+ * function; anything merely locating source should keep using
+ * `matchAllToSource`.
+ */
+export function matchExactToSource(
+	functionName: string,
+	objectType: string,
+	objectId: number,
+	index: SourceIndex,
+): SourceMatch[] {
+	const nameLower = functionName.toLowerCase();
+	const candidates: SourceMatch[] = [
+		...(index.procedures.get(nameLower) ?? []),
+		...(index.triggers.get(nameLower) ?? []),
+	];
+	const wantType = canonicalObjectType(objectType);
+	return candidates.filter(
+		(c) =>
+			c.objectId === objectId && canonicalObjectType(c.objectType) === wantType,
+	);
+}
+
+/**
  * Match a profile method to its source location in the index.
  *
  * See `matchAllToSource` for the matching strategy (type+id, then id-only
