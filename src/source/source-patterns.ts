@@ -186,19 +186,28 @@ function calcFieldSeverity(
 }
 
 /**
- * The factual "this table has ... FlowFields" clause of the suggestion.
+ * The factual clause of the suggestion, about THE FIELDS THIS CALL
+ * CALCULATES — never about the table.
+ *
+ * It used to say "This table has Lookup FlowFields", which is false whenever
+ * the table also has an aggregation FlowField nobody is calculating here.
+ * `Merge Base` in the fixtures is exactly that shape (`Base Total` is a Sum,
+ * `Ext Lookup` is a Lookup), and the sentence claimed the table had only
+ * Lookups. The severity beside it was already field-scoped — this makes the
+ * prose agree with it.
+ *
  * Must only ever be called with a resolved field list (see
  * `resolveCalcFields`) — never derived from severity alone, which can be a
  * conservative default rather than actual knowledge of the field's type.
  */
 function calcFieldFactSentence(resolved: TableFieldInfo[]): string {
 	if (resolved.some((f) => AGGREGATION_CALC_TYPES.has(f.calcFormulaType))) {
-		return "This table has aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.";
+		return "The field(s) calculated here are aggregation FlowFields (Sum/Count), which force a SQL aggregation per call.";
 	}
 	if (resolved.every((f) => f.calcFormulaType === "Exist")) {
-		return "This table has an Exist FlowField — cheaper than Sum/Count since SQL can short-circuit on the first matching row, but still one query per iteration.";
+		return "The field(s) calculated here are Exist FlowFields — cheaper than Sum/Count since SQL can short-circuit on the first matching row, but still one query per iteration.";
 	}
-	return "This table has Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.";
+	return "The field(s) calculated here are Lookup FlowFields — cheaper than Sum/Count, but still one SQL query per iteration.";
 }
 
 /**
