@@ -52,8 +52,8 @@ export function trimResultForPrompt(result: AnalysisResult): TrimmedResult {
 export type ExplainModel = "sonnet" | "opus";
 
 export const MODEL_IDS: Record<ExplainModel, string> = {
-	sonnet: "claude-sonnet-4-6",
-	opus: "claude-opus-4-8",
+	sonnet: "claude-sonnet-5",
+	opus: "claude-opus-5",
 };
 
 export interface ExplainOptions {
