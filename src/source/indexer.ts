@@ -20,6 +20,7 @@ import type {
 } from "../types/source-index.js";
 import type { ImplicitLoopAware } from "./implicit-loop.js";
 import { parseALSource } from "./parser-init.js";
+import { buildTableIndex } from "./table-index.js";
 
 const RECORD_OPS: Set<string> = new Set([
 	"findset",
@@ -1736,6 +1737,7 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
 		procedures: new Map(),
 		triggers: new Map(),
 		objects: new Map(),
+		tables: new Map(),
 		eventCatalog: { publishers: [], subscribers: [] },
 		failedFiles: [],
 	};
@@ -1838,6 +1840,9 @@ export async function buildSourceIndex(dirPath: string): Promise<SourceIndex> {
 			}
 		}
 	}
+
+	// Derived from `objects`, so it is built last, once, from the finished set.
+	index.tables = buildTableIndex(index.objects.values());
 
 	return index;
 }
