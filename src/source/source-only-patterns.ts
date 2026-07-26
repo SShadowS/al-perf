@@ -287,15 +287,15 @@ export function detectDangerousCallsInLoop(
  * is deliberately out of scope here (needs its own thinking, per the brief).
  * Severity: critical (warning for a Page's implicit per-row loop).
  *
- * KNOWN LIMITATION: `HttpClient` calls are recognized by the receiver
- * variable's declared type, resolved from `buildVariableTypeMap`/
- * `extractVariables` in indexer.ts -- which only sees a member's OWN
- * `var_section`, not an object-level global declared above the procedures.
- * An `HttpClient` declared as an object-level global and reused across
- * procedures (normal BC code) is therefore invisible to this detector: the
- * type gate fails closed rather than degrading gracefully. Deliberately
- * deferred, pinned by a negative test (see indexer.ts's `buildVariableTypeMap`
- * doc comment and CLAUDE.md).
+ * `HttpClient` calls are recognized by the receiver variable's declared type,
+ * resolved from `buildVariableTypeMap`/`extractVariables` in indexer.ts, which
+ * covers a member's parameters, its own `var_section`, AND the object-level
+ * `var` section above the procedures. That last one matters here more than
+ * anywhere else: this type gate IS the detector, so an unresolvable receiver
+ * fails CLOSED -- the call goes unreported rather than merely unrefined -- and
+ * a global `HttpClient` reused across procedures is normal BC code. Pinned by
+ * "flags an OBJECT-LEVEL global HttpClient in a loop" in
+ * test/source/source-only-patterns.test.ts.
  */
 /**
  * Whether the loop enclosing `line` terminates on the DATA running out rather

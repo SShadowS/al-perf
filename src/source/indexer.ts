@@ -688,17 +688,20 @@ const EXTERNAL_HTTP_CALL_CASE_MAP: Record<string, ExternalCallInfo["type"]> = {
  * currently being walked. Used to gate `HttpClient` member calls by the
  * receiver's actual declared type rather than by method name alone.
  *
- * KNOWN LIMITATION: `variables` comes from `extractVariables(procedureNode)`,
- * which reads a member's own `parameter_list` and `var_section` -- it never sees an
- * object-level `var` section declared above the procedures (a normal way to
- * declare and reuse a global `HttpClient` across procedures in BC). For
- * `external-call-in-loop`, this declared-type gate IS the detector (unlike
- * the record detectors, where a globals gap only degrades a temp/table
- * refinement), so an object-level global `HttpClient` fails closed: its
- * calls are invisible, not just unrefined. Deliberately deferred (wide blast
- * radius across other detectors that also call `extractVariables`) -- pinned
- * by a negative test in test/source/source-only-patterns.test.ts
- * ("does not flag an object-level global HttpClient") rather than fixed here.
+ * Note on scope: `extractVariables` reads a member's own `parameter_list` and
+ * `var_section`, and callers merge in the OBJECT-LEVEL `var` section declared
+ * above the procedures (see the `objectGlobals` spreads in `buildSourceIndex`),
+ * with member-local names shadowing globals. That matters most for
+ * `external-call-in-loop`, where this declared-type gate IS the detector: an
+ * unresolvable receiver makes the call invisible rather than merely unrefined,
+ * unlike the record detectors where a gap only costs a temp/table refinement.
+ * A global `HttpClient` reused across procedures is ordinary BC code and is
+ * now resolved -- pinned by test/source/source-only-patterns.test.ts
+ * ("flags an OBJECT-LEVEL global HttpClient in a loop").
+ *
+ * What is still unresolved is a name declared in NONE of those places, such as
+ * a Page/Report/XMLport's implicit `Rec`, where `isKnownNonRecordOp` fails
+ * OPEN by design.
  */
 function buildVariableTypeMap(
 	variables: VariableInfo[] | undefined,
@@ -963,14 +966,13 @@ function collectFieldAccesses(node: SyntaxNode): FieldAccessInfo[] {
 /**
  * Extract variable declarations from a procedure/trigger node's var_section.
  *
- * Reads a member's own `parameter_list` AND its own `var_section`.
- *
- * KNOWN LIMITATION: never an
- * object-level `var` section declared above the procedures/triggers (a
- * codeunit/page/report/table global). Callers relying on this for
- * declared-type resolution (e.g. `buildVariableTypeMap`, above) will not see
- * object-level global variables. See that function's doc comment for the
- * concrete impact on `external-call-in-loop`.
+ * Reads a member's own `parameter_list` AND its own `var_section` -- and only
+ * those. It deliberately does NOT read the object-level `var` section declared
+ * above the procedures; `buildSourceIndex` merges those globals onto the
+ * result (`[...extractVariables(child), ...objectGlobals]`) so that a
+ * member-local name shadows a global of the same name. Read the two together
+ * when reasoning about what a detector can resolve: the merge is where
+ * object-level globals enter, not here.
  */
 /**
  * The `record_type` a `type_specification` ultimately denotes, looking through

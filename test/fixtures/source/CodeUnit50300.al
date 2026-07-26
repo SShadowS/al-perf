@@ -1,5 +1,26 @@
 codeunit 50300 "Dangerous Patterns"
 {
+    // An OBJECT-LEVEL global HttpClient, reused across procedures. This is how
+    // real BC code declares a client it wants to keep alive, and it was once a
+    // documented blind spot: external-call-in-loop resolves HttpClient by the
+    // receiver's DECLARED TYPE, and the type map only saw a member's own
+    // var_section, so a global client's calls were invisible rather than merely
+    // unrefined. Kept as a fixture so that gap cannot silently reopen.
+    var
+        GlobalClient: HttpClient;
+
+    procedure GlobalHttpSendInLoop()
+    var
+        SalesLine: Record "Sales Line";
+        Request: HttpRequestMessage;
+        Response: HttpResponseMessage;
+    begin
+        SalesLine.FindSet();
+        repeat
+            GlobalClient.Send(Request, Response);
+        until SalesLine.Next() = 0;
+    end;
+
     procedure CommitInLoop()
     var
         SalesLine: Record "Sales Line";

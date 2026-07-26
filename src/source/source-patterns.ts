@@ -60,10 +60,11 @@ export function ownerObject(
  * `CodeUnit50300.al`'s `HttpMethodsInLoop`).
  *
  * Fails OPEN (returns false -- "could still be a record, don't exclude it")
- * whenever the variable does not resolve in `variables` -- e.g. an
- * object-level global (see `extractVariables`'s KNOWN LIMITATION in
- * indexer.ts), or a Page/Report/XMLport's implicit `Rec`, which has no `var`
- * declaration at all. Both keep exactly today's behavior: an unresolved
+ * whenever the variable does not resolve in `variables` -- in practice a
+ * Page/Report/XMLport's implicit `Rec`, which has no `var` declaration
+ * anywhere to find. (Object-level globals used to land here too; they are
+ * merged in by `buildSourceIndex` now and do resolve.) This keeps exactly
+ * today's behavior: an unresolved
  * receiver is still treated as a possible record, same as before this guard
  * existed.
  */

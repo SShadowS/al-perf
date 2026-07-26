@@ -327,6 +327,26 @@ describe("external-call-in-loop", () => {
 		expect(f?.suggestion).toMatch(/batch|outside the loop|single request/i);
 	});
 
+	test("flags an OBJECT-LEVEL global HttpClient in a loop", async () => {
+		// This detector resolves HttpClient by the receiver's DECLARED TYPE, so
+		// an unresolvable receiver means the call is invisible rather than
+		// merely unrefined -- the gate fails CLOSED, unlike the record
+		// detectors where a globals gap only costs a temp/table refinement.
+		// A client declared once above the procedures and reused is ordinary BC
+		// code, and it was a documented blind spot until extractVariables began
+		// merging object-level globals. Nothing pinned the fix, so the stale
+		// comments describing it as deferred survived it.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const patterns = detectExternalCallInLoop(index);
+		const f = patterns.find(
+			(p) =>
+				p.id === "external-call-in-loop" &&
+				p.involvedMethods.some((m) => m.includes("GlobalHttpSendInLoop")),
+		);
+		expect(f).toBeDefined();
+		expect(f?.severity).toBe("critical");
+	});
+
 	test("does not flag an HttpClient.Send() outside a loop", async () => {
 		const index = await buildSourceIndex("test/fixtures/source");
 		const patterns = detectExternalCallInLoop(index);
