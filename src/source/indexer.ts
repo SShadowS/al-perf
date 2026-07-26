@@ -1404,7 +1404,10 @@ function flattenPreproc(node: SyntaxNode): SyntaxNode[] {
 /**
  * Extract table field declarations from a table declaration node.
  */
-function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
+function extractTableFields(
+	declNode: SyntaxNode,
+	file: string,
+): TableFieldInfo[] {
 	const fields: TableFieldInfo[] = [];
 
 	function walk(node: SyntaxNode) {
@@ -1541,6 +1544,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 					tableRelationTarget,
 					...(fieldClass !== undefined ? { fieldClass } : {}),
 					line: node.startPosition.row + 1,
+					file,
 				});
 			}
 			return; // Don't recurse into field_declaration children
@@ -1780,7 +1784,7 @@ function indexParsedTree(
 	// Extract table fields (only for table/tableextension declarations)
 	const fields =
 		objectType === "Table" || objectType === "TableExtension"
-			? extractTableFields(declNode)
+			? extractTableFields(declNode, relativePath)
 			: [];
 
 	// Extract table keys (only for table/tableextension declarations)

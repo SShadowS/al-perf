@@ -86,6 +86,20 @@ describe("buildTableRelationGraph", () => {
 		expect(rel!.fromTableId).toBe(0);
 	});
 
+	test("anchors line to the file that declared the field", () => {
+		// On a merged table `line` belongs to the CONTRIBUTOR's file, not to
+		// the base table's. Without fromFile an extension-declared edge reads
+		// as "Merge Base line 8", which is a line in a different file.
+		const relations = buildTableRelationGraph(sourceIndex);
+		const ext = relations.find((r) => r.fromField === "Ext Lookup")!;
+		expect(ext.fromTable).toBe("Merge Base");
+		expect(ext.fromFile).toBe("TableMergeExt.al");
+
+		const root = relations.find((r) => r.fromField === "Base Total")!;
+		expect(root.fromTable).toBe("Merge Base");
+		expect(root.fromFile).toBe("TableMergeBase.al");
+	});
+
 	test("emits nothing for an ambiguous table name", () => {
 		// Two roots named "Merge Ambig" are two different tables; a merged
 		// relation from them would describe neither.
