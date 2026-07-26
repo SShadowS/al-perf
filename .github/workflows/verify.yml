@@ -1,0 +1,52 @@
+name: verify
+
+# Nothing ran the test suite automatically before this workflow existed. The
+# repo had 2276 tests, a `verify` script wiring them to biome and tsc, and
+# dependabot opening dependency PRs into a project where no check ran on them.
+# Every guard in this codebase — the mutation-tested detector fences, the
+# formatter field-parity checks, the savings-model convention — is only binding
+# if something runs it without being asked.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A newer push to the same branch makes the older run's answer irrelevant.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned, not "latest", for the same reason AL_GRAMMAR_VERSION is
+          # pinned: a runtime that changes underneath you turns a red run into a
+          # research project. Bump deliberately.
+          bun-version: 1.3.14
+
+      # The tree-sitter-al grammar is fetched from a GitHub release on first
+      # use and cached beside parser-init.ts. Keying on that file means a
+      # bump to AL_GRAMMAR_VERSION invalidates the cache by itself.
+      - name: Cache tree-sitter-al grammar
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/source/tree-sitter-al.wasm
+            src/source/tree-sitter-al.version
+          key: al-grammar-${{ hashFiles('src/source/parser-init.ts') }}
+
+      - run: bun install --frozen-lockfile
+
+      # biome check . && tsc --noEmit && bun test
+      - run: bun run verify
