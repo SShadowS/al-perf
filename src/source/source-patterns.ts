@@ -554,7 +554,7 @@ export function detectRecordOpInLoop(
 					involvedMethods: [methodLabel(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					suggestion:
-						"Restructure to reduce database calls inside the loop. Consider loading data before the loop with a single query.",
+						"Read the looked-up table once into a temporary record before the loop, then read from that inside it — measured on BC 28 as 2001 SQL statements and 167ms becoming 2 and 9ms over 2,000 rows. That only holds where the looked-up set fits in memory; for an unbounded table, filter it down first, or restructure so the loop gets what it needs from one query.",
 				});
 			}
 		}

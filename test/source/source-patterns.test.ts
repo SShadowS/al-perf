@@ -223,6 +223,14 @@ describe("detectRecordOpInLoop", () => {
 		const patterns = detectRecordOpInLoop([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].id).toBe("record-op-in-loop");
+		// "Restructure to reduce database calls" names a direction, not an edit,
+		// which left the advice unactionable and its savings figure uncheckable.
+		// The edit measured at 95% is: read the lookup once into a temporary
+		// record before the loop. It must carry the condition that makes it
+		// safe -- preloading an unbounded table trades a slow loop for an
+		// out-of-memory error.
+		expect(patterns[0].suggestion).toContain("temporary record");
+		expect(patterns[0].suggestion).toContain("fits in memory");
 	});
 });
 

@@ -62,9 +62,14 @@ const SAVINGS_MODELS: Record<
 		savings: Math.round(p.impact * 0.07),
 		explanation: `Replacing the loop with ModifyAll saves ~7% of the ${formatImpact(p.impact)} (measured on BC 28 over 20,000 rows) -- ModifyAll still issues one UPDATE per row, so it does not remove the round-trips. The large win is modifying fewer rows: narrow the filter, or skip rows whose values are already correct.`,
 	}),
+	// Measured: 2,000 rows, a Get() per iteration against a lookup table. In the
+	// loop it cost 2001 statements / 167 ms; read once into a temporary record
+	// before the loop it cost 2 statements / 9 ms. The saving is nearly all of
+	// it -- but only while the lookup set fits in memory, which is the condition
+	// the explanation has to carry.
 	"record-op-in-loop": (p) => ({
-		savings: Math.round(p.impact * 0.7),
-		explanation: `Rough estimate (not measured): restructuring to reduce per-iteration database calls might save ~70% of the ${formatImpact(p.impact)}.`,
+		savings: Math.round(p.impact * 0.95),
+		explanation: `Reading the looked-up table once into a temporary record before the loop removes ~95% of the ${formatImpact(p.impact)} (measured on BC 28 over 2,000 rows: 2001 SQL statements and 167ms become 2 and 9ms) — but only where the looked-up set fits in memory. For an unbounded table, filter it down first or restructure so the loop reads what it needs in one query.`,
 	}),
 	// Measured: a 2,000-row loop that modifies each row cost 4002 statements /
 	// 690 ms with Commit inside, and 2005 / 284 ms with one Commit after. The

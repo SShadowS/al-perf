@@ -183,6 +183,31 @@ describe("What If estimator", () => {
 		expect(patterns[0].savingsExplanation ?? "").not.toContain("0µs");
 	});
 
+	test("record-op-in-loop savings match what preloading the lookup buys", () => {
+		// Measured on BC 28 over 2,000 rows: Get() inside the loop cost 2001
+		// statements / 167 ms; reading the lookup table once into a temporary
+		// record before the loop cost 2 statements / 9 ms. That is 95%, against
+		// the 70% written from judgement -- understated, like calcfields-in-loop
+		// and unlike modify-in-loop.
+		const patterns: DetectedPattern[] = [
+			{
+				id: "record-op-in-loop",
+				severity: "critical",
+				title: "Get() inside loop in ResolveLines",
+				description: "test pattern",
+				impact: 1_000_000,
+				involvedMethods: ["ResolveLines (Codeunit 50300)"],
+				evidence: "test evidence",
+			},
+		];
+		annotateEstimatedSavings(patterns);
+		expect(patterns[0].estimatedSavings).toBe(950_000);
+		expect(patterns[0].savingsExplanation).toContain("measured");
+		// Preloading only works while the lookup set fits in memory. Advising it
+		// without that condition turns a slow loop into an out-of-memory error.
+		expect(patterns[0].savingsExplanation).toContain("fits in memory");
+	});
+
 	test("estimates savings for external-call-in-loop pattern", () => {
 		// external-call-in-loop is source-only (never produced by
 		// analyzeProfile alone -- it needs --source), so this exercises
