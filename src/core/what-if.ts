@@ -72,11 +72,11 @@ const SAVINGS_MODELS: Record<
 	// row -- so 59% is the figure for a loop that writes, which is the shape
 	// Commit-in-loop almost always appears in.
 	"dangerous-call-in-loop": (p) => ({
-		savings: Math.round(p.impact > 0 ? p.impact * 0.59 : 0),
+		savings: Math.round(p.impact * 0.59),
 		explanation: `Moving Commit outside the loop removes ~59% of the ${formatImpact(p.impact)} (measured on BC 28 over 2,000 rows: 690ms becomes 284ms, and 4002 SQL statements become 2005) by collapsing N write transactions into one.`,
 	}),
 	"external-call-in-loop": (p) => ({
-		savings: Math.round(p.impact > 0 ? p.impact * 0.9 : 0),
+		savings: Math.round(p.impact * 0.9),
 		explanation: `Rough estimate (not measured): hoisting the HTTP call or Sleep outside the loop, or batching the request, removes the per-iteration network round-trip or blocking delay.`,
 	}),
 };
@@ -94,10 +94,18 @@ function formatImpact(us: number): string {
 export function annotateEstimatedSavings(patterns: DetectedPattern[]): void {
 	for (const p of patterns) {
 		const model = SAVINGS_MODELS[p.id];
-		if (model) {
-			const result = model(p);
-			p.estimatedSavings = result.savings;
-			p.savingsExplanation = result.explanation;
-		}
+		if (!model) continue;
+		// A saving is a fraction of measured time, so with no measured time
+		// there is nothing to take a fraction of. Source-only patterns
+		// (dangerous-call-in-loop, external-call-in-loop) fire without a
+		// profile and carry impact 0 by construction, and annotating them
+		// produced "removes ~59% of the 0µs" on findings rated critical —
+		// which reads as "fixing this is worth nothing". Leave both fields
+		// unset: the finding still carries its own `suggestion`, which is
+		// where the actionable advice lives.
+		if (p.impact <= 0) continue;
+		const result = model(p);
+		p.estimatedSavings = result.savings;
+		p.savingsExplanation = result.explanation;
 	}
 }

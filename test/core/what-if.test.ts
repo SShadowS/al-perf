@@ -160,6 +160,29 @@ describe("What If estimator", () => {
 		}
 	});
 
+	test("a source-only pattern gets no numeric estimate and no 0µs sentence", () => {
+		// dangerous-call-in-loop and external-call-in-loop are source-only: they
+		// fire without a profile, so their impact is hardcoded to 0. Multiplying
+		// that by any fraction is 0, and interpolating it produced the sentence
+		// "removes ~59% of the 0µs", which reads as "fixing this is worth
+		// nothing" on a finding rated critical. No profile means no time to
+		// estimate -- the honest output is a suggestion with no number.
+		const patterns: DetectedPattern[] = [
+			{
+				id: "dangerous-call-in-loop",
+				severity: "critical",
+				title: "Commit() inside loop in PostBatch",
+				description: "test pattern",
+				impact: 0,
+				involvedMethods: ["PostBatch (Codeunit 50300)"],
+				evidence: "test evidence",
+			},
+		];
+		annotateEstimatedSavings(patterns);
+		expect(patterns[0].estimatedSavings).toBeUndefined();
+		expect(patterns[0].savingsExplanation ?? "").not.toContain("0µs");
+	});
+
 	test("estimates savings for external-call-in-loop pattern", () => {
 		// external-call-in-loop is source-only (never produced by
 		// analyzeProfile alone -- it needs --source), so this exercises
