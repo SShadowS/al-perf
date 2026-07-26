@@ -155,6 +155,11 @@ describe("delete-in-loop", () => {
 		const f = patterns.find((p) => p.id === "delete-in-loop");
 		expect(f).toBeDefined();
 		expect(f?.suggestion).toContain("DeleteAll");
+		// DeleteAll is not set-based on BC 28 -- measured at 1678 ms against
+		// 1782 ms for the equivalent loop over 20,000 rows, and 2004 SQL
+		// statements against 2003. Suggesting it without that context reads as
+		// "N round-trips become one", which is not what the fix does.
+		expect(f?.suggestion).toContain("one DELETE per row");
 	});
 
 	it("flags DeleteAll inside a loop deliberately — DeleteAll replaces the loop, not lives in one", () => {

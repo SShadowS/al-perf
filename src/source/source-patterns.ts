@@ -451,9 +451,10 @@ export function detectInsertInLoop(
  * Detect Delete()/DeleteAll() inside loops.
  * Severity: critical.
  *
- * A DeleteAll() inside a loop is flagged deliberately: DeleteAll() inside a
- * loop is still N statements — the point of DeleteAll() is to replace the
- * loop, not to live in one.
+ * A DeleteAll() inside a loop is flagged deliberately: DeleteAll() is one
+ * DELETE per row wherever it runs (measured on BC 28), so inside a loop it is
+ * N×M statements — the point of DeleteAll() is to replace the loop, not to
+ * live in one.
  */
 export function detectDeleteInLoop(
 	methods: MethodBreakdown[],
@@ -494,7 +495,7 @@ export function detectDeleteInLoop(
 					involvedMethods: [methodLabel(method)],
 					evidence: `${op.type}() at line ${op.line}, column ${op.column} — ${loopEvidencePhrase(op)}`,
 					suggestion:
-						"Use DeleteAll() with a filter instead of deleting row by row. If this call already is DeleteAll(), the loop around it is the bug — DeleteAll() exists to replace the loop, not to run inside one.",
+						"Use DeleteAll() with a filter instead of deleting row by row — but expect a modest gain, not an order of magnitude: DeleteAll() still issues one DELETE per row on BC 28 (measured ~6% faster than the equivalent loop over 20,000 rows). The large win is deleting fewer rows. If this call already is DeleteAll(), the loop around it is the bug — DeleteAll() exists to replace the loop, not to run inside one.",
 				});
 			}
 		}

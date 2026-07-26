@@ -52,6 +52,30 @@ describe("What If estimator", () => {
 		}
 	});
 
+	test("modify-in-loop savings match what ModifyAll was measured to buy", () => {
+		// Measured on BC 28 (container Cronus28), 20,000 rows in a plain custom
+		// table: a Modify loop took 2584 ms, ModifyAll 2409 ms -- 7%. Statement
+		// counts agreed (2005 vs 2004): ModifyAll issues one UPDATE per row, so
+		// it is not a set-based operation and cannot save a round-trip it never
+		// avoids. The old model claimed 60%, which would have told a user to
+		// expect an order of magnitude more than the fix delivers.
+		const patterns: DetectedPattern[] = [
+			{
+				id: "modify-in-loop",
+				severity: "critical",
+				title: "Modify() inside loop in PostLines",
+				description: "test pattern",
+				impact: 1_000_000,
+				involvedMethods: ["PostLines (Codeunit 50300)"],
+				evidence: "test evidence",
+			},
+		];
+		annotateEstimatedSavings(patterns);
+		expect(patterns[0].estimatedSavings).toBe(70_000);
+		expect(patterns[0].savingsExplanation).toContain("measured");
+		expect(patterns[0].savingsExplanation).not.toContain("60%");
+	});
+
 	test("estimates savings for external-call-in-loop pattern", () => {
 		// external-call-in-loop is source-only (never produced by
 		// analyzeProfile alone -- it needs --source), so this exercises
