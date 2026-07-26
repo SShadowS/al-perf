@@ -9,16 +9,26 @@ export function buildTableRelationGraph(
 ): TableRelationInfo[] {
 	const relations: TableRelationInfo[] = [];
 
-	for (const obj of index.objects.values()) {
-		if (obj.objectType !== "Table" && obj.objectType !== "TableExtension")
-			continue;
+	// Reads the RESOLVED table, not the parsed objects. Walking objects
+	// emitted `fromTable: obj.objectName`, which for a tableextension is the
+	// extension's own name — every extension-declared relation was attributed
+	// to a table that does not exist.
+	for (const table of index.tables.values()) {
+		// Two roots sharing a name are two different tables; a relation merged
+		// across them describes neither.
+		if (table.ambiguous) continue;
 
-		for (const field of obj.fields) {
-			// TableRelation references
+		// `fromTableId` is a required number and there is no root id to give
+		// when only extensions were indexed. 0 is what this index already uses
+		// for objects with no id of their own (Interface_0, ControlAddIn_0);
+		// the extension's own id would name the wrong object.
+		const fromTableId = table.objectId ?? 0;
+
+		for (const field of table.fields) {
 			if (field.tableRelationTarget) {
 				relations.push({
-					fromTable: obj.objectName,
-					fromTableId: obj.objectId,
+					fromTable: table.name,
+					fromTableId,
 					fromField: field.name,
 					toTable: field.tableRelationTarget,
 					relationType: "TableRelation",
@@ -26,11 +36,10 @@ export function buildTableRelationGraph(
 				});
 			}
 
-			// CalcFormula references
 			if (field.calcFormulaTable) {
 				relations.push({
-					fromTable: obj.objectName,
-					fromTableId: obj.objectId,
+					fromTable: table.name,
+					fromTableId,
 					fromField: field.name,
 					toTable: field.calcFormulaTable,
 					relationType: "CalcFormula",

@@ -57,6 +57,43 @@ describe("buildTableRelationGraph", () => {
 		expect(types.has("TableRelation")).toBe(true);
 		expect(types.has("CalcFormula")).toBe(true);
 	});
+
+	test("attributes an extension's relation to the base table, not the extension", () => {
+		// tableextension 50971 "Merge Base Ext" extends "Merge Base" declares a
+		// Lookup FlowField. The relation belongs to "Merge Base"; emitting
+		// "Merge Base Ext" names a table that does not exist.
+		const relations = buildTableRelationGraph(sourceIndex);
+		expect(
+			relations.find((r) => r.fromTable === "Merge Base Ext"),
+		).toBeUndefined();
+		const rel = relations.find(
+			(r) => r.fromTable === "Merge Base" && r.fromField === "Ext Lookup",
+		);
+		expect(rel).toBeDefined();
+		expect(rel!.relationType).toBe("CalcFormula");
+		expect(rel!.fromTableId).toBe(50970);
+	});
+
+	test("emits fromTableId 0 for a table with no indexed root", () => {
+		// "Merge Absent" exists only as the target of an orphan extension, so
+		// there is no root id to name. 0 is what this index already uses for
+		// objects with no id of their own.
+		const relations = buildTableRelationGraph(sourceIndex);
+		const rel = relations.find(
+			(r) => r.fromTable === "Merge Absent" && r.fromField === "Orphan Sum",
+		);
+		expect(rel).toBeDefined();
+		expect(rel!.fromTableId).toBe(0);
+	});
+
+	test("emits nothing for an ambiguous table name", () => {
+		// Two roots named "Merge Ambig" are two different tables; a merged
+		// relation from them would describe neither.
+		const relations = buildTableRelationGraph(sourceIndex);
+		expect(
+			relations.find((r) => r.fromTable === "Merge Ambig"),
+		).toBeUndefined();
+	});
 });
 
 describe("tableConnectivityStats", () => {
