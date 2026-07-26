@@ -910,17 +910,36 @@ export function detectIncompleteSetLoadFields(
 					const unconfirmed = missingFields.filter(
 						(f) => !confirmedFields?.has(f),
 					);
+					// This is a PERFORMANCE finding, not a correctness one.
+					// Accessing a field SetLoadFields left out does not return a
+					// default and does not error: the platform JIT-loads it,
+					// doing an implicit Get against the data source (Microsoft
+					// Learn, "Using partial records"). The value is correct; the
+					// cost is an extra round-trip that erases the saving the
+					// narrowing was for. Errors — "Inconsistent read of
+					// field(s)" / "JIT loading of field(s) failed" — are
+					// possible but only under a race, when another session
+					// modifies, deletes or renames the row between the two
+					// loads.
+					//
+					// So `warning`, not `critical`. The old rating rested on a
+					// "will cause runtime errors" claim that is simply not what
+					// BC does, and one extra Get is not a critical defect. It
+					// stays ONE Get even inside a loop: after a JIT load the
+					// platform updates the enumerator, so later iterations do
+					// not repeat it — unless the record was passed by value,
+					// which does not share the load set.
 					patterns.push({
 						id: "incomplete-setloadfields",
-						severity: allConfirmed ? "critical" : "warning",
+						severity: allConfirmed ? "warning" : "info",
 						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
 						description: allConfirmed
-							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`
+							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Reading a field that was not loaded triggers a JIT load — an implicit Get against the data source — so the value is correct but the narrowing is partly undone. Under concurrent modification a JIT load can also fail with "Inconsistent read of field(s)".`
 							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so ${unconfirmed.join(", ")} could not be confirmed to be ${unconfirmed.length === 1 ? "a field" : "fields"} at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
 						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,
-						suggestion: `Add the missing fields to SetLoadFields: ${missingFields.map((f) => `"${f}"`).join(", ")}`,
+						suggestion: `Add the missing fields to SetLoadFields so they load with the record instead of costing an extra Get: ${missingFields.map((f) => `"${f}"`).join(", ")}`,
 					});
 				}
 			}

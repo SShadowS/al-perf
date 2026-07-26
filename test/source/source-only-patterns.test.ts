@@ -87,6 +87,20 @@ describe("detectUnfilteredFindSet", () => {
 		}
 	});
 
+	test("does not flag a find on an in-memory Rec (SourceTableTemporary)", async () => {
+		// A Page/Query with SourceTableTemporary = true has an in-memory Rec —
+		// no operation on it reaches SQL, so "this queries all records in the
+		// table" describes a query that never runs. This detector built its own
+		// temp gate from `var` declarations only, while isTemporaryOp (used by
+		// every record-op detector) also reads the owning object's
+		// SourceTableTemporary. 126 findings on one real corpus, 89 on another.
+		const index = await buildSourceIndex("test/fixtures/source");
+		const p = detectUnfilteredFindSet(index).find((x) =>
+			x.involvedMethods.some((m) => m.includes("FirstBufferedVendor")),
+		);
+		expect(p).toBeUndefined();
+	});
+
 	test("downgrades a find on an object's implicit Rec", async () => {
 		// A Page/Table `Rec` arrives filtered by SourceTableView, by the
 		// caller's SetTableView, and by the user's filter pane — none of it

@@ -702,7 +702,9 @@ describe("detectIncompleteSetLoadFields", () => {
 		const patterns = detectIncompleteSetLoadFields([method], sourceIndex);
 		expect(patterns.length).toBeGreaterThan(0);
 		expect(patterns[0].id).toBe("incomplete-setloadfields");
-		expect(patterns[0].severity).toBe("warning");
+		// "Sales Line" is not an indexed fixture table, so the names cannot be
+		// confirmed to be fields at all — the hedged tier.
+		expect(patterns[0].severity).toBe("info");
 		// The description should mention the missing field
 		expect(patterns[0].description.toLowerCase()).toContain("amount");
 	});
@@ -1365,25 +1367,25 @@ describe("incomplete-setloadfields — what counts as a field access", () => {
 	it("does not flag a paren-less table METHOD call as a missing field", () => {
 		// `Email.HasMoreDocuments` in a real codebase is `internal procedure
 		// HasMoreDocuments(): Boolean` — recorded as a field access, it produced
-		// a critical finding claiming runtime errors about a method call.
+		// a high-severity finding claiming runtime errors about a method call.
 		expect(f("SetLoadFieldsThenCallTableMethod", 50600)).toHaveLength(0);
 	});
 
-	it("still flags a genuinely missing field on a known table, at critical", () => {
+	it("still flags a genuinely missing field on a known table, at warning", () => {
 		const p = f("SetLoadFieldsMissingRealField", 50600);
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("critical");
+		expect(p[0].severity).toBe("warning");
 		expect(p[0].description.toLowerCase()).toContain("description");
 	});
 
-	it("drops to warning when the table cannot be resolved", () => {
+	it("drops to info when the table cannot be resolved", () => {
 		// With no table in the index there is no way to tell a field from a
-		// paren-less method call, so the critical "will cause runtime errors"
+		// paren-less method call, so the confident claim
 		// claim is not one the tool can stand behind. All 16 findings on one
 		// real codebase were in this state, and at least one was a method.
 		const p = f("BadSetLoadFields", 50700);
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("warning");
+		expect(p[0].severity).toBe("info");
 		expect(p[0].description).toMatch(
 			/could not be confirmed|not in the index/i,
 		);
@@ -1410,7 +1412,7 @@ describe("incomplete-setloadfields — primary key fields are always loaded", ()
 	it("does not flag a primary-key field as forgotten", () => {
 		// BC always loads the primary key: SetLoadFields cannot exclude the
 		// fields that identify the record. 86 of 193 findings on a 15,436-file
-		// corpus were exactly this — rated critical, claiming runtime errors,
+		// corpus were exactly this — top-rated, claiming runtime errors,
 		// about `"No."` and `"Document Type"`.
 		const method = makeMethod({
 			functionName: "SetLoadFieldsThenReadPrimaryKey",
@@ -1430,7 +1432,7 @@ describe("incomplete-setloadfields — primary key fields are always loaded", ()
 		});
 		const p = detectIncompleteSetLoadFields([method], sourceIndex);
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("critical");
+		expect(p[0].severity).toBe("warning");
 	});
 });
 
@@ -1442,10 +1444,10 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		);
 	}
 
-	it("flags an extension-declared field at critical when the root is seen", () => {
+	it("flags an extension-declared field at warning when the root is seen", () => {
 		const p = findings("ReadsExtensionFieldAfterNarrowing");
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("critical");
+		expect(p[0].severity).toBe("warning");
 		expect(p[0].description.toLowerCase()).toContain("ext code");
 	});
 
@@ -1476,10 +1478,10 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(findings("ReadsPrimaryKeyAfterNarrowing")).toHaveLength(0);
 	});
 
-	it("flags a confirmed extension field at critical even with no root", () => {
+	it("flags a confirmed extension field at warning even with no root", () => {
 		const p = findings("ReadsFragmentFieldAfterNarrowing");
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("critical");
+		expect(p[0].severity).toBe("warning");
 	});
 
 	it("hedges only the names actually in doubt, not the confirmed ones", () => {
@@ -1488,7 +1490,7 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		// to be fields at all" about both.
 		const p = findings("ReadsConfirmedAndUnconfirmableOnFragment");
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("warning");
+		expect(p[0].severity).toBe("info");
 		expect(p[0].description).toContain(
 			"somethingunseen could not be confirmed",
 		);
@@ -1511,7 +1513,7 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 	it("still reports a genuine unknown name alongside a dropped built-in", () => {
 		const p = findings("ReadsBuiltInAndRealFieldOnUnknownTable");
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("warning");
+		expect(p[0].severity).toBe("info");
 		expect(p[0].evidence).toContain("somereallookingfield");
 		expect(p[0].evidence).not.toContain("filtergroup");
 	});
@@ -1519,7 +1521,7 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 	it("hedges an unconfirmable name on a fragment", () => {
 		const p = findings("ReadsUnknownNameOnFragmentAfterNarrowing");
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("warning");
+		expect(p[0].severity).toBe("info");
 		expect(p[0].description).toMatch(
 			/could not be confirmed|not in the index|only .*fragment/i,
 		);
@@ -1536,7 +1538,7 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		// unusable table gets.
 		const p = findings("ReadsAlphaOnlyOnAmbiguousTable");
 		expect(p).toHaveLength(1);
-		expect(p[0].severity).toBe("warning");
+		expect(p[0].severity).toBe("info");
 		expect(p[0].description).toMatch(
 			/could not be confirmed|not in the index/i,
 		);
