@@ -1343,18 +1343,71 @@ function findTableRelationTarget(node: SyntaxNode): string | undefined {
  * `declaration_body` node (body field) instead of as direct children. This
  * returns a declaration's direct named children plus its body's children, so
  * property lookups (CalcFormula, Clustered, …) work across v2 and v3 grammars.
+ *
+ * Properties guarded by a preprocessor conditional are flattened in as well.
+ * Base-app fields routinely wrap a single property that way while leaving the
+ * field itself unguarded:
+ *
+ *     field(46; MasterAssetName; Text[100])
+ *     {
+ *         FieldClass = FlowField;
+ *     #if not CLEAN25
+ *         CalcFormula = lookup("FS Customer Asset".Name where(...));
+ *     #endif
+ *     }
+ *
+ * Without this the field indexes as a FlowField with no formula. Same reason
+ * the object-level walk descends into `preproc_conditional_object`: this
+ * codebase indexes guarded code rather than pretending it is absent. Both
+ * arms of an `#if`/`#else` are flattened, so a property defined differently
+ * per branch resolves to the last one seen — rare, and better than dropping
+ * the property entirely.
  */
 function declarationChildren(node: SyntaxNode): SyntaxNode[] {
 	const body = node.namedChildren.find((c) => c.type === "declaration_body");
-	return body
+	const direct = body
 		? [...node.namedChildren, ...body.namedChildren]
 		: node.namedChildren;
+
+	const out: SyntaxNode[] = [];
+	for (const child of direct) {
+		if (child.type.startsWith("preproc_")) {
+			out.push(...flattenPreproc(child));
+		} else {
+			out.push(child);
+		}
+	}
+	return out;
+}
+
+/** Every non-directive descendant of a preprocessor conditional, both arms. */
+function flattenPreproc(node: SyntaxNode): SyntaxNode[] {
+	const out: SyntaxNode[] = [];
+	for (const child of node.namedChildren) {
+		if (
+			child.type === "preproc_if" ||
+			child.type === "preproc_else" ||
+			child.type === "preproc_elsif" ||
+			child.type === "preproc_endif"
+		) {
+			continue;
+		}
+		if (child.type.startsWith("preproc_")) {
+			out.push(...flattenPreproc(child));
+		} else {
+			out.push(child);
+		}
+	}
+	return out;
 }
 
 /**
  * Extract table field declarations from a table declaration node.
  */
-function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
+function extractTableFields(
+	declNode: SyntaxNode,
+	file: string,
+): TableFieldInfo[] {
 	const fields: TableFieldInfo[] = [];
 
 	function walk(node: SyntaxNode) {
@@ -1491,6 +1544,7 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 					tableRelationTarget,
 					...(fieldClass !== undefined ? { fieldClass } : {}),
 					line: node.startPosition.row + 1,
+					file,
 				});
 			}
 			return; // Don't recurse into field_declaration children
@@ -1730,7 +1784,7 @@ function indexParsedTree(
 	// Extract table fields (only for table/tableextension declarations)
 	const fields =
 		objectType === "Table" || objectType === "TableExtension"
-			? extractTableFields(declNode)
+			? extractTableFields(declNode, relativePath)
 			: [];
 
 	// Extract table keys (only for table/tableextension declarations)

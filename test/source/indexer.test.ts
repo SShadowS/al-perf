@@ -715,3 +715,29 @@ describe("CalcFormula shapes the extractor used to drop", () => {
 		expect(f.calcFormulaType).toBeUndefined();
 	});
 });
+
+describe("properties guarded by a preprocessor conditional", () => {
+	// The FIELD is unguarded; only the property inside it is wrapped. Three
+	// base-app FlowFields on a 15,436-file corpus were in this shape and
+	// indexed with no formula at all.
+	it("reads a CalcFormula wrapped in #if", async () => {
+		const r = (await indexALFile(
+			resolve(fixturesDir, "TableMergeBase.al"),
+			fixturesDir,
+		))!;
+		const f = r.fields.find((x) => x.name === "Guarded Total")!;
+		expect(f.fieldClass).toBe("FlowField");
+		expect(f.calcFormulaType).toBe("Sum");
+		expect(f.calcFormulaTable).toBe("Test Table");
+	});
+
+	it("reads a TableRelation wrapped in #if", async () => {
+		const r = (await indexALFile(
+			resolve(fixturesDir, "TableMergeBase.al"),
+			fixturesDir,
+		))!;
+		expect(
+			r.fields.find((x) => x.name === "Guarded Relation")!.tableRelationTarget,
+		).toBe("Test Table");
+	});
+});

@@ -176,12 +176,26 @@ export interface TableFieldInfo {
 	/** Table referenced in TableRelation property */
 	tableRelationTarget?: string;
 	line: number;
+	/**
+	 * Relative path of the object that DECLARED this field. `line` is
+	 * meaningless without it once fields from a root and its extensions sit in
+	 * one `ResolvedTable.fields` array — the line belongs to the contributor's
+	 * file, not to the table's.
+	 */
+	file?: string;
 }
 
 export interface TableRelationInfo {
 	/** Source table that has the relation */
 	fromTable: string;
 	fromTableId: number;
+	/**
+	 * The object that DECLARED the field, and its file. On a merged table
+	 * these differ from `fromTable`/`fromTableId` whenever a `tableextension`
+	 * contributed the field — and `line` refers to THIS file, not to the base
+	 * table's.
+	 */
+	fromFile?: string;
 	/** Field in the source table */
 	fromField: string;
 	/** Target table referenced */

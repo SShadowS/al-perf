@@ -156,6 +156,18 @@ function resolveCalcFields(
 		// Bare CalcFields() means "every FlowField on the table". On a fragment
 		// that set is not the runtime set — an extension's lone Lookup would
 		// downgrade the finding while an unseen root Sum is what actually runs.
+		//
+		// MEASURED, so nobody deletes this as dead: across five corpora
+		// (15,436 + 19,141 + three partner apps) this branch is REACHED 6
+		// times, all on `CTS-CDN eBilling Line` in DO.Support, and has never
+		// CHANGED a finding. Changing one needs the fragment to declare a
+		// FlowField the loop calculates, and that fragment declares none, so
+		// the empty-resolution path below returns undefined anyway. Removing
+		// both fences leaves DO.Support at 835 findings / 730 critical / 105
+		// warning, identical. The fence can only ever preserve the
+		// conservative critical, so being wrong here costs nothing — and the
+		// shape it guards (an app that extends a table AND calculates a
+		// FlowField on it in a loop) is rare, not impossible.
 		if (!table.rootSeen) return undefined;
 		const allFlowFields = table.fields.filter((f) => f.calcFormulaType);
 		return allFlowFields.length > 0 ? allFlowFields : undefined;

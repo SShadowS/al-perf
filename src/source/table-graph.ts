@@ -30,6 +30,7 @@ export function buildTableRelationGraph(
 				relations.push({
 					fromTable: table.name,
 					fromTableId,
+					...(field.file ? { fromFile: field.file } : {}),
 					fromField: field.name,
 					toTable: field.tableRelationTarget,
 					relationType: "TableRelation",
@@ -41,6 +42,7 @@ export function buildTableRelationGraph(
 				relations.push({
 					fromTable: table.name,
 					fromTableId,
+					...(field.file ? { fromFile: field.file } : {}),
 					fromField: field.name,
 					toTable: field.calcFormulaTable,
 					relationType: "CalcFormula",
