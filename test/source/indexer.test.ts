@@ -568,6 +568,16 @@ describe("extension objects", () => {
 		))!;
 		expect(result.extendsTarget).toBeUndefined();
 	});
+
+	it("strips the quotes from a multi-word extends target", async () => {
+		// Nearly every real base table is multi-word and therefore quoted;
+		// `extends Customer` is the one shape where stripQuotes is a no-op.
+		const result = (await indexALFile(
+			resolve(fixturesDir, "ImplicitRecPageExtension.al"),
+			fixturesDir,
+		))!;
+		expect(result.extendsTarget).toBe("Customer Card");
+	});
 });
 
 describe("objects the index used to drop silently", () => {

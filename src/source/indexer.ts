@@ -301,23 +301,15 @@ function extractObjectName(decl: SyntaxNode): string {
 }
 
 /**
- * The object an `…extension` declaration extends. The target is the first
- * identifier AFTER `extends_keyword` — `extractObjectName` returns the first
- * one before it, which is the extension's own name.
+ * The object an `…extension` declaration extends. The grammar names this
+ * child `base_object` on tableextension/pageextension/reportextension/
+ * enumextension. An `interface X extends Y` is deliberately NOT captured:
+ * its target is a different field (`extends_interface`), and nothing here
+ * consumes it.
  */
 function extractExtendsTarget(decl: SyntaxNode): string | undefined {
-	let seenExtends = false;
-	for (const child of decl.namedChildren) {
-		if (child.type === "extends_keyword") {
-			seenExtends = true;
-			continue;
-		}
-		if (!seenExtends) continue;
-		if (child.type === "quoted_identifier" || child.type === "identifier") {
-			return stripQuotes(child.text);
-		}
-	}
-	return undefined;
+	const target = decl.childForFieldName("base_object")?.text;
+	return target ? stripQuotes(target) : undefined;
 }
 
 /**
@@ -1685,6 +1677,8 @@ function indexParsedTree(
 			? extractTableKeys(declNode)
 			: [];
 
+	const extendsTarget = extractExtendsTarget(declNode);
+
 	return {
 		objectType,
 		objectName,
@@ -1695,9 +1689,7 @@ function indexParsedTree(
 		fields,
 		keys,
 		sourceTableTemporary: extractSourceTableTemporary(declNode),
-		...(extractExtendsTarget(declNode)
-			? { extendsTarget: extractExtendsTarget(declNode) }
-			: {}),
+		...(extendsTarget ? { extendsTarget } : {}),
 	};
 }
 
