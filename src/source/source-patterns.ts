@@ -158,13 +158,13 @@ function resolveCalcFields(
 		// downgrade the finding while an unseen root Sum is what actually runs.
 		//
 		// MEASURED, so nobody deletes this as dead: across five corpora
-		// (15,436 + 19,141 + three partner apps) this branch is REACHED 6
-		// times, all on `CTS-CDN eBilling Line` in DO.Support, and has never
-		// CHANGED a finding. Changing one needs the fragment to declare a
-		// FlowField the loop calculates, and that fragment declares none, so
-		// the empty-resolution path below returns undefined anyway. Removing
-		// both fences leaves DO.Support at 835 findings / 730 critical / 105
-		// warning, identical. The fence can only ever preserve the
+		// (15,436 files with the base app in-tree, a 19,141-file partner
+		// solution, and three smaller partner apps) this branch is REACHED 6
+		// times and has never CHANGED a finding. All 6 hits are on one
+		// fragment table that declares no FlowFields at all, so the
+		// empty-resolution path below returns undefined anyway; removing both
+		// fences left that corpus byte-identical at 835 findings / 730
+		// critical / 105 warning. The fence can only ever preserve the
 		// conservative critical, so being wrong here costs nothing — and the
 		// shape it guards (an app that extends a table AND calculates a
 		// FlowField on it in a loop) is rare, not impossible.
