@@ -626,3 +626,40 @@ describe("unindexed-filter — fields that cannot cause a scan", () => {
 		expect(found).toHaveLength(0);
 	});
 });
+
+describe("unindexed-filter — the merged table picture", () => {
+	async function findings(functionName: string) {
+		const index = await buildSourceIndex("test/fixtures/source");
+		return detectUnindexedFilters(index).filter((p) =>
+			p.involvedMethods.some((m) => m.includes(functionName)),
+		);
+	}
+
+	test("an extension key's leading field suppresses the finding", async () => {
+		expect(await findings("FiltersOnExtensionKeyLeadingField")).toHaveLength(0);
+	});
+
+	test("an extension FlowFilter suppresses the finding", async () => {
+		expect(await findings("FiltersOnExtensionFlowFilter")).toHaveLength(0);
+	});
+
+	test("still flags a field no indexed key leads with", async () => {
+		const p = await findings("FiltersOnUnindexedFieldOfRootSeenTable");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+	});
+
+	test("skips a table whose root was never indexed", async () => {
+		// "Does NO key lead with this field" cannot be answered from a
+		// fragment: an unseen root key could lead with it.
+		expect(await findings("FiltersOnFragmentTable")).toHaveLength(0);
+	});
+
+	test("skips a table whose name is ambiguous", async () => {
+		// Two roots share the name "Merge Ambig"; the winning root's fields
+		// and keys survive the merge and would otherwise raise a finding
+		// (AlphaOnly leads no key on the surviving root), but neither answer
+		// is about the table actually in hand.
+		expect(await findings("FiltersOnAmbiguousTable")).toHaveLength(0);
+	});
+});
