@@ -773,24 +773,33 @@ export function detectIncompleteSetLoadFields(
 				const variable = match.features.variables.find(
 					(v) => v.name.toLowerCase() === varLower,
 				);
-				const table = variable?.tableName
-					? [...index.objects.values()].find(
-							(o) =>
-								o.objectType === "Table" && o.objectName === variable.tableName,
-						)
+				// The RESOLVED table: the root declaration plus every indexed
+				// tableextension. An ambiguous name is two different tables, so
+				// it is treated exactly as an absent one.
+				const resolvedTable = variable?.tableName
+					? index.tables.get(variable.tableName.toLowerCase())
 					: undefined;
-				const knownFields = table
-					? new Set(table.fields.map((f) => f.name.toLowerCase()))
+				const table =
+					resolvedTable && !resolvedTable.ambiguous ? resolvedTable : undefined;
+
+				// Fields we can positively confirm. Present on a fragment too —
+				// a field that is present IS a field, whether or not the root
+				// was indexed.
+				const confirmedFields = table
+					? new Map(table.fields.map((f) => [f.name.toLowerCase(), f]))
 					: undefined;
+				// Only a root-seen table can support the NEGATIVE claim "this
+				// name is not a field, so it is a paren-less method call". On a
+				// fragment an absent name proves nothing.
+				const closedFieldList = table?.rootSeen === true;
+
 				// BC ALWAYS loads the primary key — SetLoadFields cannot exclude
 				// the fields that identify the record, and SystemId rides along
-				// with them. Reading one back is not a forgotten field, so
-				// reporting it as a critical runtime-error risk describes
-				// something that cannot happen. 86 of 193 findings on a
-				// 15,436-file corpus were exactly this: `"No."`,
-				// `"Document Type"`.
+				// with them. The primary key is the ROOT's first key and only
+				// ever the root's: an extension key is a secondary key by BC
+				// definition, so a fragment has no primary key to know.
 				const alwaysLoaded = new Set<string>(["systemid"]);
-				for (const f of table?.keys?.[0]?.fields ?? []) {
+				for (const f of table?.primaryKey?.fields ?? []) {
 					alwaysLoaded.add(f.toLowerCase());
 				}
 
@@ -810,9 +819,22 @@ export function detectIncompleteSetLoadFields(
 					const fieldLower = access.fieldName.toLowerCase();
 					if (governingOp.fields.has(fieldLower)) continue;
 					if (alwaysLoaded.has(fieldLower)) continue;
-					// Not a field of this table => a paren-less table method call,
-					// not a forgotten field. Only skip when the table is KNOWN.
-					if (knownFields && !knownFields.has(fieldLower)) continue;
+
+					const confirmed = confirmedFields?.get(fieldLower);
+					// SetLoadFields accepts normal fields only. Telling someone
+					// to add a FlowField or a FlowFilter to the list produces
+					// code that does not compile.
+					if (
+						confirmed?.calcFormulaType !== undefined ||
+						confirmed?.fieldClass?.toLowerCase() === "flowfilter"
+					) {
+						continue;
+					}
+					// Not a field of a table whose field list is CLOSED => a
+					// paren-less table method call, not a forgotten field. On a
+					// fragment the same absence proves nothing, so the finding
+					// stands and hedges instead.
+					if (closedFieldList && !confirmed) continue;
 
 					const missing = missingByOp.get(governingOp) ?? new Set<string>();
 					missing.add(fieldLower);
@@ -822,13 +844,20 @@ export function detectIncompleteSetLoadFields(
 				for (const [op, missingFieldsSet] of missingByOp) {
 					const missingFields = [...missingFieldsSet];
 					const recVar = accessesForVar[0]?.recordVariable ?? varLower;
+					// Certainty requires that every reported name be a
+					// CONFIRMED field. One unconfirmable name in the list drops
+					// the whole finding to warning, because that name may be a
+					// paren-less method call rather than a forgotten field.
+					const allConfirmed =
+						confirmedFields !== undefined &&
+						missingFields.every((f) => confirmedFields.has(f));
 					patterns.push({
 						id: "incomplete-setloadfields",
-						severity: knownFields ? "critical" : "warning",
+						severity: allConfirmed ? "critical" : "warning",
 						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
-						description: knownFields
+						description: allConfirmed
 							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. These fields will return default values or cause runtime errors.`
-							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is not in the index, so these names could not be confirmed to be fields at all — a paren-less call to a table method reads identically here.`,
+							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so these names could not be confirmed to be fields at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
 						evidence: `SetLoadFields loads ${op.fields.size} field(s), but ${missingFields.length} additional field(s) are accessed: ${missingFields.join(", ")}`,

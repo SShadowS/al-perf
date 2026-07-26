@@ -1434,6 +1434,61 @@ describe("incomplete-setloadfields — primary key fields are always loaded", ()
 	});
 });
 
+describe("incomplete-setloadfields — the merged table picture", () => {
+	function findings(functionName: string) {
+		return detectIncompleteSetLoadFields(
+			[makeMethod({ functionName, objectType: "Codeunit", objectId: 50976 })],
+			sourceIndex,
+		);
+	}
+
+	it("flags an extension-declared field at critical when the root is seen", () => {
+		const p = findings("ReadsExtensionFieldAfterNarrowing");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].description.toLowerCase()).toContain("ext code");
+	});
+
+	it("never reports a FlowField as a missing SetLoadFields entry", () => {
+		// SetLoadFields does not accept FlowFields — the suggestion would not
+		// compile.
+		expect(findings("ReadsExtensionFlowFieldAfterNarrowing")).toHaveLength(0);
+	});
+
+	it("does not flag the root's primary key", () => {
+		expect(findings("ReadsPrimaryKeyAfterNarrowing")).toHaveLength(0);
+	});
+
+	it("flags a confirmed extension field at critical even with no root", () => {
+		const p = findings("ReadsFragmentFieldAfterNarrowing");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+	});
+
+	it("hedges an unconfirmable name on a fragment", () => {
+		const p = findings("ReadsUnknownNameOnFragmentAfterNarrowing");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toMatch(
+			/could not be confirmed|not in the index|only .*fragment/i,
+		);
+	});
+
+	it("treats an ambiguous table exactly as an absent one, even though the winning root's own field survives", () => {
+		// Two distinct roots both declare "Merge Ambig". The merged entry's
+		// `fields` still carries the winning root's "AlphaOnly" -- if the
+		// ambiguous check were dropped, that field would resolve and this
+		// would wrongly report critical instead of the hedged warning an
+		// unusable table gets.
+		const p = findings("ReadsAlphaOnlyOnAmbiguousTable");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].description).toMatch(
+			/could not be confirmed|not in the index/i,
+		);
+	});
+});
+
 describe("receiver resolution — indexed, quoted and expression receivers", () => {
 	function findingsFor(functionName: string) {
 		return runSourceDetectors(
