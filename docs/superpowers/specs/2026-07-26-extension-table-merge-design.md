@@ -73,7 +73,11 @@ app that was not indexed at all.
 
 ```ts
 interface ResolvedTable {
-  /** As declared on the root, else as named by the first extension seen. */
+  /**
+   * As declared on the root. With no root, the `extendsTarget` text exactly
+   * as written by the first contributor in `(objectId, file)` order — so the
+   * display casing is deterministic even though the map key is lowercased.
+   */
   name: string;
   /** The root's object id. Absent when no root declaration was indexed. */
   objectId?: number;
@@ -138,8 +142,10 @@ in this repo.
    resolves **first wins**: later roots are appended to `sources` and
    contribute nothing else, so a stale copy can never redefine a live table.
 2. Every `TableExtension` carrying an `extendsTarget` resolves by lowercased
-   name. A miss creates a `complete: false` entry with no `primaryKey`. Fields
-   and keys are then appended, **union by field name, first wins**.
+   name. A miss creates a `complete: false` entry with no `primaryKey`.
+   Fields are then appended **unioned by field name, first wins**, and keys
+   **unioned by key name, first wins** — BC key names are unique within a
+   table, so a repeated name is a redefinition, not a second key.
 
 Pass 1 runs to completion before pass 2, so `complete` never depends on
 file-walk order. Within pass 2 the contributing extensions are sorted by
@@ -166,9 +172,11 @@ FlowField found in an extension is a FlowField. An unresolved table still
 returns `undefined` and still falls back to the conservative `critical`.
 
 **`table-graph`** — iterate `index.tables` instead of `index.objects`.
-`fromTable` becomes the resolved table name and `fromTableId` the root's id,
-absent on a partial table. Extension relations stop being attributed to
-phantom tables.
+`fromTable` becomes the resolved table name. `TableRelationInfo.fromTableId`
+is a required `number`, so a partial table emits `0` — the value this index
+already uses for objects with no id of their own (`Interface_0`,
+`ControlAddIn_0`) — rather than the extension's own id, which would name the
+wrong object. Extension relations stop being attributed to phantom tables.
 
 **`incomplete-setloadfields`** — today two-way (table known / unknown),
 becomes three-way:
