@@ -70,4 +70,15 @@ codeunit 50976 "SetLoadFields Merge Probe"
         if Ambig.FindFirst() then
             Message('%1', Ambig.AlphaOnly);
     end;
+
+    procedure ReadsExtensionFlowFilterAfterNarrowing()
+    var
+        MergeBase: Record "Merge Base";
+    begin
+        // A FlowFilter is not a loadable column either — SetLoadFields does
+        // not accept one, so suggesting it produces code that will not build.
+        MergeBase.SetLoadFields(Description);
+        if MergeBase.FindFirst() then
+            Message('%1', MergeBase."Ext Date Filter");
+    end;
 }

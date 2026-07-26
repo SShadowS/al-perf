@@ -1455,6 +1455,14 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(findings("ReadsExtensionFlowFieldAfterNarrowing")).toHaveLength(0);
 	});
 
+	it("never reports a FlowFilter as a missing SetLoadFields entry", () => {
+		// SetLoadFields does not accept FlowFilters either — the suggestion
+		// would not compile. Separate clause from the FlowField guard above,
+		// so it needs its own test: nothing else in the fixture corpus reads a
+		// FlowFilter after a SetLoadFields call.
+		expect(findings("ReadsExtensionFlowFilterAfterNarrowing")).toHaveLength(0);
+	});
+
 	it("does not flag the root's primary key", () => {
 		expect(findings("ReadsPrimaryKeyAfterNarrowing")).toHaveLength(0);
 	});
@@ -1472,6 +1480,9 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(p[0].description).toMatch(
 			/could not be confirmed|not in the index|only .*fragment/i,
 		);
+		// The fragment-specific half of the wording, not just the shared
+		// "not in the index" suffix both branches emit.
+		expect(p[0].description).toContain("only known from its extensions");
 	});
 
 	it("treats an ambiguous table exactly as an absent one, even though the winning root's own field survives", () => {
@@ -1486,6 +1497,9 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(p[0].description).toMatch(
 			/could not be confirmed|not in the index/i,
 		);
+		// Ambiguous is treated as ABSENT, not as a fragment — it must get the
+		// plain "not in the index" wording, not the fragment-specific phrase.
+		expect(p[0].description).not.toContain("only known from its extensions");
 	});
 });
 
