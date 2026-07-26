@@ -992,37 +992,43 @@ describe("MCP response size — an agent's context is the budget", () => {
 	// the most expensive call in the server.
 	const REAL = "test/fixtures/batch-recorded/profile-1.alcpuprofile";
 
-	test("get_hotspots returns a hotspot summary, not the whole analysis", async () => {
-		const { client } = await createTestClient();
-		const result = await client.callTool({
-			name: "get_hotspots",
-			arguments: { profilePath: REAL, top: 6 },
-		});
-		const text = (result.content as TextContent)[0].text;
-		const parsed = JSON.parse(text);
+	test.skipIf(!existsSync(REAL))(
+		"get_hotspots returns a hotspot summary, not the whole analysis",
+		async () => {
+			const { client } = await createTestClient();
+			const result = await client.callTool({
+				name: "get_hotspots",
+				arguments: { profilePath: REAL, top: 6 },
+			});
+			const text = (result.content as TextContent)[0].text;
+			const parsed = JSON.parse(text);
 
-		expect(parsed.hotspots.length).toBeLessThanOrEqual(6);
-		// 40 KB is already generous for "quick summary of 6 hotspots".
-		expect(text.length).toBeLessThan(40_000);
-	});
+			expect(parsed.hotspots.length).toBeLessThanOrEqual(6);
+			// 40 KB is already generous for "quick summary of 6 hotspots".
+			expect(text.length).toBeLessThan(40_000);
+		},
+	);
 
-	test("analyze_profile does not repeat every method inside every breakdown", async () => {
-		const { client } = await createTestClient();
-		const result = await client.callTool({
-			name: "analyze_profile",
-			arguments: { profilePath: REAL, top: 5 },
-		});
-		const text = (result.content as TextContent)[0].text;
-		const parsed = JSON.parse(text);
+	test.skipIf(!existsSync(REAL))(
+		"analyze_profile does not repeat every method inside every breakdown",
+		async () => {
+			const { client } = await createTestClient();
+			const result = await client.callTool({
+				name: "analyze_profile",
+				arguments: { profilePath: REAL, top: 5 },
+			});
+			const text = (result.content as TextContent)[0].text;
+			const parsed = JSON.parse(text);
 
-		// The breakdowns stay — they are what the tool advertises — but their
-		// nested per-method lists are what made the payload unusable.
-		for (const a of parsed.appBreakdown ?? []) {
-			expect(a.methods).toBeUndefined();
-		}
-		for (const o of parsed.objectBreakdown ?? []) {
-			expect(o.methods).toBeUndefined();
-		}
-		expect(text.length).toBeLessThan(120_000);
-	});
+			// The breakdowns stay — they are what the tool advertises — but their
+			// nested per-method lists are what made the payload unusable.
+			for (const a of parsed.appBreakdown ?? []) {
+				expect(a.methods).toBeUndefined();
+			}
+			for (const o of parsed.objectBreakdown ?? []) {
+				expect(o.methods).toBeUndefined();
+			}
+			expect(text.length).toBeLessThan(120_000);
+		},
+	);
 });

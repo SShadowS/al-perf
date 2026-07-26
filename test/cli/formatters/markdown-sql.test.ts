@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { formatBatchMarkdown } from "../../../src/cli/formatters/batch-markdown.js";
 import { formatAnalysisMarkdown } from "../../../src/cli/formatters/markdown.js";
 import { analyzeProfile } from "../../../src/core/analyzer.js";
@@ -26,13 +27,19 @@ function longestTableCell(md: string): number {
 }
 
 describe("markdown formatter — SQL node names", () => {
-	test("no table cell carries a whole SQL statement", async () => {
-		const result = await analyzeProfile(REAL, { top: 20 });
-		const md = formatAnalysisMarkdown(result);
-		expect(longestTableCell(md)).toBeLessThan(200);
-	});
+	// Guarded because test/fixtures/batch-recorded/ is gitignored real capture
+	// data: absent on a fresh clone and in CI, where an unguarded read is an
+	// ENOENT rather than a skip.
+	test.skipIf(!existsSync(REAL))(
+		"no table cell carries a whole SQL statement",
+		async () => {
+			const result = await analyzeProfile(REAL, { top: 20 });
+			const md = formatAnalysisMarkdown(result);
+			expect(longestTableCell(md)).toBeLessThan(200);
+		},
+	);
 
-	test("batch markdown too", async () => {
+	test.skipIf(!existsSync(REAL))("batch markdown too", async () => {
 		const result = await analyzeBatch([REAL, REAL], { top: 20 });
 		const md = formatBatchMarkdown(result);
 		expect(longestTableCell(md)).toBeLessThan(200);

@@ -593,7 +593,9 @@ describe("healthScore — repetition of one pattern is one problem", () => {
 });
 
 describe("summary one-liner must not carry raw SQL or customer names", () => {
-	test("a SQL-node top method is named by operation and table", async () => {
+	test.skipIf(
+		!existsSync("test/fixtures/batch-recorded/profile-3.alcpuprofile"),
+	)("a SQL-node top method is named by operation and table", async () => {
 		// summary.oneLiner leads every output format — terminal, markdown, HTML,
 		// JSON, and the MCP analyze_profile response. When the hottest method is
 		// a SQL node, its functionName IS the statement, so the headline of the
