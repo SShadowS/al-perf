@@ -13,6 +13,7 @@ import {
 	loopEvidencePhrase,
 	loopLocationPhrase,
 } from "./implicit-loop.js";
+import { PARENLESS_RECORD_BUILTINS } from "./indexer.js";
 import { matchAllToSource } from "./locator.js";
 
 /**
@@ -874,6 +875,16 @@ export function detectIncompleteSetLoadFields(
 					// fragment the same absence proves nothing, so the finding
 					// stands and hedges instead.
 					if (closedFieldList && !confirmed) continue;
+					// …except that some names need no field list to settle.
+					// `Rec.ReadPermission` is a Record BUILT-IN, a field of no
+					// table, and it parses exactly like `Rec."Document No."`.
+					// Hedging over it claims an uncertainty the tool does not
+					// have. Applied only where the field list is NOT closed —
+					// a known table has already answered, and answered better,
+					// since `Number` and `RecordID` are legal field names.
+					if (!closedFieldList && PARENLESS_RECORD_BUILTINS.has(fieldLower)) {
+						continue;
+					}
 
 					const missing = missingByOp.get(governingOp) ?? new Set<string>();
 					missing.add(fieldLower);

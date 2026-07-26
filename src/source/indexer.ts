@@ -804,13 +804,44 @@ function promoteImplicitLoopItems<T extends ImplicitLoopAware>(
  * read fields this member never mentions: a custom table method by definition,
  * and built-ins like `TransferFields`/`Validate`/`TestField` in practice.
  */
+/**
+ * Record members that are callable WITHOUT parentheses and are fields of NO
+ * table. `Rec.ReadPermission` parses as a member expression exactly like
+ * `Rec."Document No."` does, so `collectFieldAccesses` records it as a field
+ * access — and `incomplete-setloadfields` then reports it as a field missing
+ * from a `SetLoadFields` list.
+ *
+ * Consulted only where the table's field list is NOT available. When the
+ * table IS indexed the field list already settles it, and settles it better:
+ * `Number` and `RecordID` are legal field names (five tables across two real
+ * corpora declare one), so this set must never override a known table.
+ *
+ * Deliberately excludes `number` and `recordid` for that reason — on an
+ * unknown table those two stay ambiguous and keep hedging, which is the
+ * honest answer rather than a guess in either direction.
+ */
+export const PARENLESS_RECORD_BUILTINS = new Set([
+	"readpermission",
+	"writepermission",
+	"istemporary",
+	"tablename",
+	"tablecaption",
+	"currentkey",
+	"hasfilter",
+	"markedonly",
+	"filtergroup",
+	"ascending",
+	"getfilters",
+	"getview",
+]);
+
 const FIELD_NEUTRAL_RECORD_METHODS = new Set([
 	...RECORD_OPS,
+	...PARENLESS_RECORD_BUILTINS,
 	"init",
 	"setcurrentkey",
 	"setrecfilter",
 	"getfilter",
-	"getfilters",
 	"setascending",
 	"changecompany",
 	"recordid",
@@ -823,14 +854,8 @@ const FIELD_NEUTRAL_RECORD_METHODS = new Set([
 	// advice was perfectly safe to follow.
 	"fieldno",
 	"fieldcaption",
-	"tablecaption",
-	"tablename",
 	"mark",
-	"markedonly",
 	"clearmarks",
-	"currentkey",
-	"hasfilter",
-	"filtergroup",
 ]);
 
 /**

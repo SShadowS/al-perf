@@ -106,4 +106,30 @@ codeunit 50976 "SetLoadFields Merge Probe"
             Message('%1', Absent.SomethingUnseen);
         end;
     end;
+
+    procedure ReadsRecordBuiltInOnUnknownTable(var Unknown: Record "Base App Thing")
+    begin
+        // `ReadPermission` is a Record BUILT-IN, not a field of any table —
+        // exactly the shape found in real code:
+        //     DCSetup.SetLoadFields("Document Nos.");
+        //     if not DCSetup.ReadPermission then ...
+        // The table is not in the index, so the detector cannot check a field
+        // list — but it does not need one. No table has a field by this name.
+        Unknown.SetLoadFields("Document Nos.");
+        if Unknown.FindFirst() then
+            if not Unknown.ReadPermission then
+                exit;
+    end;
+
+    procedure ReadsBuiltInAndRealFieldOnUnknownTable(var Unknown2: Record "Base App Thing")
+    begin
+        // The built-in is dropped from the missing list; the genuine unknown
+        // name still reports, and still hedges.
+        Unknown2.SetLoadFields("Document Nos.");
+        if Unknown2.FindFirst() then begin
+            if not Unknown2.FilterGroup then
+                exit;
+            Message('%1', Unknown2.SomeRealLookingField);
+        end;
+    end;
 }
