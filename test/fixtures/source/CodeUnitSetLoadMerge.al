@@ -132,4 +132,37 @@ codeunit 50976 "SetLoadFields Merge Probe"
             Message('%1', Unknown2.SomeRealLookingField);
         end;
     end;
+
+    procedure ReadsAuditFieldAfterNarrowing()
+    var
+        MergeBase: Record "Merge Base";
+    begin
+        // SystemModifiedAt is an audit field. BC always loads it, so this
+        // costs nothing extra — measured 1 SQL statement against a baseline
+        // of 1, where a genuinely unloaded field cost 4.
+        MergeBase.SetLoadFields(Description);
+        if MergeBase.FindFirst() then
+            Message('%1', MergeBase.SystemModifiedAt);
+    end;
+
+    procedure ReadsBlobAfterNarrowing()
+    var
+        MergeBase: Record "Merge Base";
+    begin
+        // Same for a Blob: never excluded, so never a forgotten field.
+        MergeBase.SetLoadFields(Description);
+        if MergeBase.FindFirst() then
+            Message('%1', MergeBase.Attachment);
+    end;
+
+    procedure ReadsAuditFieldOnUnknownTable(var Unknown3: Record "Base App Thing")
+    begin
+        // The table is NOT in the index, so the known-table skip cannot apply
+        // and the hedge path is reached. An audit field is still never
+        // excluded from a load set, whatever table it belongs to — that is a
+        // name-level fact, so it must be recognised without a field list.
+        Unknown3.SetLoadFields("Document Nos.");
+        if Unknown3.FindFirst() then
+            Message('%1', Unknown3.SystemModifiedAt);
+    end;
 }

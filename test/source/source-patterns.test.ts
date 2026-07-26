@@ -1457,6 +1457,25 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(findings("ReadsExtensionFlowFieldAfterNarrowing")).toHaveLength(0);
 	});
 
+	it("never reports an audit field on an UNKNOWN table either", () => {
+		// The known-table skip cannot fire here, so this is what actually pins
+		// the audit-field names in `alwaysLoaded`.
+		expect(findings("ReadsAuditFieldOnUnknownTable")).toHaveLength(0);
+	});
+
+	it("never reports an audit field as a missing SetLoadFields entry", () => {
+		// Measured on BC 28: reading SystemModifiedAt after SetLoadFields
+		// (Description) costs 1 SQL statement — identical to reading nothing
+		// extra, where a genuinely unloaded field cost 4. Audit fields are
+		// never excluded from a load set, so they can never be forgotten.
+		expect(findings("ReadsAuditFieldAfterNarrowing")).toHaveLength(0);
+	});
+
+	it("never reports a Blob as a missing SetLoadFields entry", () => {
+		// Same measurement, same result: 1 statement, not 4.
+		expect(findings("ReadsBlobAfterNarrowing")).toHaveLength(0);
+	});
+
 	it("never reports an UNTYPED FlowField as a missing SetLoadFields entry", () => {
 		// A FlowField whose CalcFormula the extractor cannot type still is not
 		// a loadable column. Keying the guard only on `calcFormulaType` let 130
