@@ -78,7 +78,7 @@ If the file is not named `ImplicitRecTableExt.al`, use the name that command pri
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test test/source/indexer.test.ts -t "records the base object"`
+Run: `AI_DISABLED=1 bun test test/source/indexer.test.ts -t "records the base object"`
 Expected: FAIL — `expect(received).toBe(expected)`, received `undefined`.
 
 - [ ] **Step 3: Add the type field**
@@ -138,13 +138,13 @@ Note the spread: the field stays absent rather than `undefined` on root objects,
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `bun test test/source/indexer.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/indexer.test.ts`
 Expected: PASS, 0 fail.
 
 - [ ] **Step 7: Full verify and commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add src/types/source-index.ts src/source/indexer.ts test/source/indexer.test.ts
 git commit -m "$(cat <<'EOF'
 feat(indexer): record the object an extension extends
@@ -341,7 +341,7 @@ table 50974 "Merge Ambig"
 
 - [ ] **Step 5: Run the suite to see the count assertions fail**
 
-Run: `bun test test/source/indexer.test.ts test/source/cache.test.ts test/source/indexer-snapshots.test.ts test/cli/commands/source-map.test.ts test/e2e/source-correlation.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/indexer.test.ts test/source/cache.test.ts test/source/indexer-snapshots.test.ts test/cli/commands/source-map.test.ts test/e2e/source-correlation.test.ts`
 Expected: FAIL — several `expect(38)` assertions now receive `43`.
 
 - [ ] **Step 6: Update the fixture-count assertions**
@@ -365,7 +365,7 @@ Expected: no output.
 
 - [ ] **Step 7: Run tests to verify they pass**
 
-Run: `bun run verify`
+Run: `AI_DISABLED=1 bun run verify`
 Expected: 0 fail.
 
 - [ ] **Step 8: Commit**
@@ -388,18 +388,26 @@ EOF
 
 ---
 
-### Task 3: `ResolvedTable` type and `buildTableIndex`
+### Task 3: `ResolvedTable`, `buildTableIndex`, and wiring it into the index and cache
+
+Adding `tables` to `SourceIndex` breaks every literal that constructs one until
+the wiring lands, so the type, the builder, the wiring and the `CACHE_VERSION`
+bump are one task with one green commit. The builder still gets its own tests.
 
 **Files:**
 - Modify: `src/types/source-index.ts` (add `ResolvedTable`, add `tables` to `SourceIndex:1-23`)
 - Create: `src/source/table-index.ts`
 - Create: `test/source/table-index.test.ts`
+- Modify: `src/source/indexer.ts:1716-1727` (the `SourceIndex` literal in `buildSourceIndex`) and its `return index;` at line 1826
+- Modify: `src/source/cache.ts:23` (`CACHE_VERSION`), `:38-46` (`SerializedObjectInfo`), `:130-143` (`deserializeIndex`)
+- Modify: `test/source/cache.test.ts`
 
 **Interfaces:**
 - Consumes: `ObjectInfo.extendsTarget` from Task 1; the fixtures from Task 2.
 - Produces:
   - `interface ResolvedTable` exported from `src/types/source-index.ts`, exact shape below.
-  - `export function buildTableIndex(objects: Iterable<ObjectInfo>): Map<string, ResolvedTable>` from `src/source/table-index.ts`. Tasks 4-8 call it or read its output.
+  - `export function buildTableIndex(objects: Iterable<ObjectInfo>): Map<string, ResolvedTable>` from `src/source/table-index.ts`.
+  - A populated `index.tables` on every `SourceIndex`, from a fresh build and from a cache hit alike. Tasks 4-7 read it.
 
 - [ ] **Step 1: Add the type**
 
@@ -574,7 +582,7 @@ describe("buildTableIndex", () => {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `bun test test/source/table-index.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/table-index.test.ts`
 Expected: FAIL — `Cannot find module '../../src/source/table-index.js'`.
 
 - [ ] **Step 4: Write the builder**
@@ -700,55 +708,15 @@ export function buildTableIndex(
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Run the builder tests to verify they pass**
 
-Run: `bun test test/source/table-index.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/table-index.test.ts`
 Expected: PASS, 6 tests, 0 fail.
 
-- [ ] **Step 6: Full verify and commit**
+Do NOT commit yet — `tsc` still reports `tables` missing on every
+`SourceIndex` literal. Steps 6-10 close that in the same commit.
 
-`tsc` will report `tables` missing on every `SourceIndex` literal until Task 4. If `bun run verify` fails only with `Property 'tables' is missing in type ... SourceIndex`, that is expected here — proceed to Task 4 and commit both together. Otherwise fix and commit now:
-
-```bash
-bun run verify
-git add src/types/source-index.ts src/source/table-index.ts test/source/table-index.test.ts
-git commit -m "$(cat <<'EOF'
-feat(source): resolve a table from its root plus every extension
-
-buildTableIndex merges each root `table` declaration with every indexed
-`tableextension` that extends it, keyed on the lowercased table name.
-
-Keys carry provenance and are never deduplicated by name: Microsoft's
-table-keys docs allow a tableextension to reuse a base key name as long
-as the key holds no base-table fields, and dropping one manufactures the
-false unindexed-filter finding this whole change exists to remove.
-
-`primaryKey` comes only from the root — an extension key is a secondary
-key by definition, so a fragment has no primary key to know.
-
-Two roots sharing a name are two different tables (namespaces make that
-legal; `Dimension Set Entry` is 480 in BaseApp and 36950 in PowerBI
-Reports). Such an entry is marked ambiguous and answers nothing.
-
-Claude-Session: https://claude.ai/code/session_01YLmrajt7dZLmFW24pSQ2Ue
-EOF
-)"
-```
-
----
-
-### Task 4: Wire `tables` into the index and the cache
-
-**Files:**
-- Modify: `src/source/indexer.ts:1716-1727` (the `SourceIndex` literal in `buildSourceIndex`) and its `return index;` at line 1826
-- Modify: `src/source/cache.ts:23` (`CACHE_VERSION`), `:26-31` (`SerializedIndex`), `:38-46` (`SerializedObjectInfo`), `:130-143` (`deserializeIndex`)
-- Modify: `test/source/cache.test.ts`
-
-**Interfaces:**
-- Consumes: `buildTableIndex` from Task 3.
-- Produces: a populated `index.tables` on every `SourceIndex`, from a fresh build and from a cache hit alike. Tasks 5-8 read it.
-
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 6: Write the failing cache tests**
 
 Add to `test/source/cache.test.ts`, inside the existing `describe("SourceIndexCache", ...)`:
 
@@ -801,12 +769,10 @@ import {
 } from "fs";
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `bun test test/source/cache.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/cache.test.ts`
 Expected: FAIL — `warm.tables` is undefined, and the version-3 entry is still accepted.
 
-- [ ] **Step 3: Populate `tables` in `buildSourceIndex`**
+- [ ] **Step 7: Populate `tables` in `buildSourceIndex`**
 
 In `src/source/indexer.ts`, add the import at the top of the file, next to the other local imports:
 
@@ -830,7 +796,7 @@ Then replace the final `return index;` (line 1826) with:
 }
 ```
 
-- [ ] **Step 4: Bump the cache version and rebuild `tables` on deserialize**
+- [ ] **Step 8: Bump the cache version and rebuild `tables` on deserialize**
 
 In `src/source/cache.ts`:
 
@@ -889,11 +855,11 @@ Add the import at the top of `src/source/cache.ts`:
 import { buildTableIndex } from "./table-index.js";
 ```
 
-- [ ] **Step 5: Fix every other `SourceIndex` literal**
+- [ ] **Step 9: Fix every other `SourceIndex` literal**
 
 Run: `bunx tsc --noEmit`
 
-Every error will be `Property 'tables' is missing in type '{ ... }' but required in type 'SourceIndex'`. Add `tables: new Map(),` to each reported literal. Expect these to be test helpers and `src/source/zip-extractor.ts`-style callers; add the field, do not make it optional.
+Every error will be `Property 'tables' is missing in type '{ ... }' but required in type 'SourceIndex'`. Add `tables: new Map(),` to each reported literal. Expect these to be test helpers and other callers that construct an index by hand; add the field, do not make it optional.
 
 Re-run until clean:
 
@@ -903,18 +869,28 @@ bunx tsc --noEmit
 
 Expected: no output.
 
-- [ ] **Step 6: Run tests to verify they pass**
-
-Run: `bun test test/source/cache.test.ts test/source/table-index.test.ts`
-Expected: PASS, 0 fail.
-
-- [ ] **Step 7: Full verify and commit**
+- [ ] **Step 10: Full verify and commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add -A src test
 git commit -m "$(cat <<'EOF'
-feat(source): expose the resolved table picture on SourceIndex
+feat(source): resolve a table from its root plus every extension
+
+buildTableIndex merges each root `table` declaration with every indexed
+`tableextension` that extends it, keyed on the lowercased table name.
+
+Keys carry provenance and are never deduplicated by name: Microsoft's
+table-keys docs allow a tableextension to reuse a base key name as long
+as the key holds no base-table fields, and dropping one manufactures the
+false unindexed-filter finding this whole change exists to remove.
+
+`primaryKey` comes only from the root — an extension key is a secondary
+key by definition, so a fragment has no primary key to know.
+
+Two roots sharing a name are two different tables (namespaces make that
+legal; `Dimension Set Entry` is 480 in BaseApp and 36950 in PowerBI
+Reports). Such an entry is marked ambiguous and answers nothing.
 
 `buildSourceIndex` builds `index.tables` once from the finished object
 set, and `deserializeIndex` rebuilds it with the SAME builder rather than
@@ -933,14 +909,14 @@ EOF
 
 ---
 
-### Task 5: `table-graph` reads the resolved table
+### Task 4: `table-graph` reads the resolved table
 
 **Files:**
 - Modify: `src/source/table-graph.ts:7-44`
 - Test: `test/source/table-graph.test.ts`
 
 **Interfaces:**
-- Consumes: `index.tables` from Task 4.
+- Consumes: `index.tables` from Task 3.
 - Produces: no new exports. `buildTableRelationGraph`'s signature is unchanged.
 
 Background: today the function walks `index.objects`, accepts both `Table` and `TableExtension`, and emits `fromTable: obj.objectName`. For a tableextension that is the *extension's* name, so every extension-declared relation names a table that does not exist.
@@ -988,7 +964,7 @@ Add to `test/source/table-graph.test.ts`, inside `describe("buildTableRelationGr
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test test/source/table-graph.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/table-graph.test.ts`
 Expected: FAIL — the first test finds a `"Merge Base Ext"` relation.
 
 - [ ] **Step 3: Rewrite the loop**
@@ -1049,13 +1025,13 @@ export function buildTableRelationGraph(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `bun test test/source/table-graph.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/table-graph.test.ts`
 Expected: PASS, 0 fail.
 
 - [ ] **Step 5: Full verify and commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add src/source/table-graph.ts test/source/table-graph.test.ts
 git commit -m "$(cat <<'EOF'
 fix(table-graph): attribute an extension's relations to the base table
@@ -1078,25 +1054,18 @@ EOF
 
 ---
 
-### Task 6: `calcfields-in-loop` severity, with the two fragment fences
+### Task 5: `calcfields-in-loop` severity, with the two fragment fences
 
 **Files:**
 - Modify: `src/source/source-patterns.ts:124-162` (`resolveCalcFields`) and the `calcFieldFactSentence` call site
 - Test: `test/source/source-patterns.test.ts`
 
 **Interfaces:**
-- Consumes: `index.tables` from Task 4.
-- Produces: `resolveCalcFields` gains a second return channel. New exact signature:
-
-```ts
-function resolveCalcFields(
-	op: RecordOpInfo,
-	variables: VariableInfo[],
-	index: SourceIndex,
-): { fields: TableFieldInfo[]; trustworthy: boolean } | undefined;
-```
-
-`trustworthy: false` means the field list is real but incomplete, so it may not be used to DOWNGRADE severity and may not back a factual "this table has …" sentence. Callers in this file must be updated to read `.fields`.
+- Consumes: `index.tables` from Task 3.
+- Produces: no signature change. `resolveCalcFields` keeps returning
+  `TableFieldInfo[] | undefined`; the new fences return `undefined`, which
+  `calcFieldSeverity` already maps to the conservative `critical` and which
+  already suppresses `calcFieldFactSentence`. **No call site changes.**
 
 Background: `calcFieldSeverity(undefined)` returns the conservative `critical`. Two existing paths would newly downgrade off a fragment:
 
@@ -1199,7 +1168,7 @@ Update every hit, and the `it("should index all 43 fixture files")` title.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test test/source/source-patterns.test.ts -t "calcfields-in-loop — resolving"`
+Run: `AI_DISABLED=1 bun test test/source/source-patterns.test.ts -t "calcfields-in-loop — resolving"`
 Expected: FAIL — the first test gets `critical` (the extension field does not resolve), the others may pass for the wrong reason. All three must be green only after Step 3.
 
 - [ ] **Step 3: Rewrite `resolveCalcFields`**
@@ -1211,7 +1180,7 @@ function resolveCalcFields(
 	op: RecordOpInfo,
 	variables: VariableInfo[],
 	index: SourceIndex,
-): { fields: TableFieldInfo[]; trustworthy: boolean } | undefined {
+): TableFieldInfo[] | undefined {
 	const recordVariable = op.recordVariable;
 	if (!recordVariable) return undefined;
 
@@ -1236,9 +1205,7 @@ function resolveCalcFields(
 		// downgrade the finding while an unseen root Sum is what actually runs.
 		if (!table.rootSeen) return undefined;
 		const allFlowFields = table.fields.filter((f) => f.calcFormulaType);
-		return allFlowFields.length > 0
-			? { fields: allFlowFields, trustworthy: true }
-			: undefined;
+		return allFlowFields.length > 0 ? allFlowFields : undefined;
 	}
 
 	const calledLower = new Set(calledFields.map((f) => f.toLowerCase()));
@@ -1252,44 +1219,31 @@ function resolveCalcFields(
 	const allResolved = resolved.length === calledFields.length;
 	if (!table.rootSeen && !allResolved) return undefined;
 
-	return { fields: resolved, trustworthy: true };
+	return resolved;
 }
 ```
 
-Note `trustworthy` is always `true` on the paths that return a value — the fences return `undefined` instead. The field is kept in the return type because it is the honest name for the contract and because a future fence may want to return fields while forbidding a downgrade.
-
-- [ ] **Step 4: Update the two call sites**
-
-Find them:
+The return type is unchanged: every fence returns `undefined`, which
+`calcFieldSeverity` already maps to the conservative `critical` and which
+already suppresses `calcFieldFactSentence`. **No call site changes** — verify
+that with:
 
 ```bash
 grep -n "resolveCalcFields(" src/source/source-patterns.ts
 ```
 
-At each call site, the result is now an object. Change
+Each call site should still read `const resolved = resolveCalcFields(...)`
+with no unwrapping.
 
-```ts
-const resolved = resolveCalcFields(op, match.features.variables, index);
-```
+- [ ] **Step 4: Run tests to verify they pass**
 
-to
-
-```ts
-const resolvedInfo = resolveCalcFields(op, match.features.variables, index);
-const resolved = resolvedInfo?.fields;
-```
-
-and leave every downstream use of `resolved` (`calcFieldSeverity(resolved)`, the `calcFieldFactSentence(resolved)` guard) unchanged — both already treat `undefined` as "nothing known".
-
-- [ ] **Step 5: Run tests to verify they pass**
-
-Run: `bun test test/source/source-patterns.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/source-patterns.test.ts`
 Expected: PASS, 0 fail.
 
-- [ ] **Step 6: Full verify and commit**
+- [ ] **Step 5: Full verify and commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add -A src test
 git commit -m "$(cat <<'EOF'
 fix(calcfields-in-loop): resolve FlowFields through the merged table
@@ -1319,14 +1273,14 @@ EOF
 
 ---
 
-### Task 7: `incomplete-setloadfields` reads the merged table
+### Task 6: `incomplete-setloadfields` reads the merged table
 
 **Files:**
 - Modify: `src/source/source-patterns.ts:768-832`
 - Test: `test/source/source-patterns.test.ts`
 
 **Interfaces:**
-- Consumes: `index.tables` from Task 4.
+- Consumes: `index.tables` from Task 3.
 - Produces: no new exports.
 
 Behaviour target:
@@ -1459,7 +1413,7 @@ grep -rn "toBe(44)\|toHaveLength(44)\|all 44 fixture" test/
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test test/source/source-patterns.test.ts -t "incomplete-setloadfields — the merged"`
+Run: `AI_DISABLED=1 bun test test/source/source-patterns.test.ts -t "incomplete-setloadfields — the merged"`
 Expected: FAIL — the first test finds 0 findings (the extension field does not resolve, so the name is treated as unknown and the whole table is unknown).
 
 - [ ] **Step 3: Replace the resolution block**
@@ -1555,13 +1509,13 @@ Replace line 822's `severity: knownFields ? "critical" : "warning",` and the two
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `bun test test/source/source-patterns.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/source-patterns.test.ts`
 Expected: PASS, 0 fail. If the pre-existing tests "still flags a genuinely missing real field on a known table, at critical" or "drops to warning when the table cannot be resolved" fail, the new `allConfirmed` rule disagrees with them — re-read those tests before changing either side.
 
 - [ ] **Step 7: Full verify and commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add -A src test
 git commit -m "$(cat <<'EOF'
 fix(incomplete-setloadfields): read the merged table, and stop suggesting FlowFields
@@ -1597,14 +1551,14 @@ EOF
 
 ---
 
-### Task 8: `unindexed-filter` reads the merged table, fenced on the root
+### Task 7: `unindexed-filter` reads the merged table, fenced on the root
 
 **Files:**
 - Modify: `src/source/source-only-patterns.ts:360-366` (`isKeyLeadingField`) and `:443-460` (the resolution block in `detectUnindexedFilters`)
 - Test: `test/source/source-only-patterns.test.ts`
 
 **Interfaces:**
-- Consumes: `index.tables` from Task 4.
+- Consumes: `index.tables` from Task 3.
 - Produces: `isKeyLeadingField` changes signature to
   `function isKeyLeadingField(table: ResolvedTable, field: string): boolean`.
 
@@ -1699,7 +1653,7 @@ grep -rn "toBe(45)\|toHaveLength(45)\|all 45 fixture" test/
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test test/source/source-only-patterns.test.ts -t "unindexed-filter — the merged"`
+Run: `AI_DISABLED=1 bun test test/source/source-only-patterns.test.ts -t "unindexed-filter — the merged"`
 Expected: FAIL — the first two tests each find 1 finding (the extension's key and FlowFilter are invisible).
 
 - [ ] **Step 3: Change `isKeyLeadingField`**
@@ -1766,13 +1720,13 @@ The evidence line at `source-only-patterns.ts:447` builds the key list from `tab
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `bun test test/source/source-only-patterns.test.ts`
+Run: `AI_DISABLED=1 bun test test/source/source-only-patterns.test.ts`
 Expected: PASS, 0 fail.
 
 - [ ] **Step 7: Full verify and commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add -A src test
 git commit -m "$(cat <<'EOF'
 fix(unindexed-filter): see keys and FlowFilters declared in extensions
@@ -1798,7 +1752,7 @@ EOF
 
 ---
 
-### Task 9: Measure on the corpora and write the CHANGELOG
+### Task 8: Measure on the corpora and write the CHANGELOG
 
 **Files:**
 - Create: `private/audit-merge.ts` (gitignored scratch)
@@ -1870,32 +1824,32 @@ for (const [id, sev] of [...byId].sort(
 
 - [ ] **Step 2: Capture the BEFORE numbers**
 
-The merge is already committed, so the baseline comes from the commit before Task 1. Find it and run the harness from a detached worktree so the working tree is untouched — never `git checkout` in this repo, the CRLF noise makes it expensive:
+The baseline is `master` — this branch was cut from it and every task's work is on the branch. Run the harness from a second worktree so neither tree is disturbed; never `git checkout` in this repo, the CRLF noise makes it expensive.
+
+The harness reads `index.tables`, which does not exist on `master`, so the baseline copy needs that one `console.log` line removed. Write the baseline copy explicitly rather than trying to patch it in place:
 
 ```bash
-BASE=$(git log --oneline -1 --format=%H --before=@ -- src/source/table-index.ts | tail -1)
-git log --oneline -12
-```
-
-Identify the commit immediately before "feat(indexer): record the object an extension extends" and use its SHA:
-
-```bash
-git worktree add ../al-perf-baseline <sha-before-task-1>
-cd ../al-perf-baseline && bun install
-cp U:/Git/al-perf/private/audit-merge.ts private/ 2>/dev/null || mkdir -p private && cp U:/Git/al-perf/private/audit-merge.ts private/
+cd /u/Git/al-perf
+git worktree add .worktrees/merge-baseline master
+cd .worktrees/merge-baseline && bun install
+cp /u/Git/al-perf/src/source/tree-sitter-al.wasm src/source/
+mkdir -p private
+# Same harness, minus the one line that reads index.tables.
+grep -v 'index.tables.size' /u/Git/al-perf/.worktrees/ext-table-merge/private/audit-merge.ts \
+  | grep -v 'rootSeen\|ambiguous' > private/audit-merge.ts
 for d in U:/Git/tree-sitter-al U:/Git/DO U:/Git/DC U:/Git/DocumentOutputRelease; do
-  bun run private/audit-merge.ts "$d"
-done | tee U:/Git/al-perf/private/before.txt
+  AI_DISABLED=1 bun run private/audit-merge.ts "$d"
+done | tee /u/Git/al-perf/.worktrees/ext-table-merge/private/before.txt
 ```
 
-The baseline copy of `audit-merge.ts` will fail on `index.tables` — delete that one line from the baseline copy before running it there.
+Confirm the baseline harness actually ran all four corpora before trusting the file — a `grep` that removed too much would make it fail silently.
 
 - [ ] **Step 3: Capture the AFTER numbers**
 
 ```bash
-cd U:/Git/al-perf
+cd /u/Git/al-perf/.worktrees/ext-table-merge
 for d in U:/Git/tree-sitter-al U:/Git/DO U:/Git/DC U:/Git/DocumentOutputRelease; do
-  bun run private/audit-merge.ts "$d"
+  AI_DISABLED=1 bun run private/audit-merge.ts "$d"
 done | tee private/after.txt
 diff private/before.txt private/after.txt
 ```
@@ -1952,7 +1906,7 @@ Add to **Fixed — scale and output**:
 - [ ] **Step 8: Commit**
 
 ```bash
-bun run verify
+AI_DISABLED=1 bun run verify
 git add CHANGELOG.md
 git commit -m "$(cat <<'EOF'
 docs(changelog): cover the resolved table picture
@@ -1964,15 +1918,15 @@ and the case-sensitivity bug the lowercased lookup fixes.
 Claude-Session: https://claude.ai/code/session_01YLmrajt7dZLmFW24pSQ2Ue
 EOF
 )"
-git worktree remove ../al-perf-baseline
+git worktree remove /u/Git/al-perf/.worktrees/merge-baseline
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage.** Every spec section maps to a task: `extendsTarget` → Task 1; `ResolvedTable`, the two build passes, ambiguity, key provenance, `primaryKey` from root, ordering → Task 3; `CACHE_VERSION` and the shared builder → Task 4; the four detector uptakes → Tasks 5-8; measurement, capture-kind verification, the stop condition and the compatibility note → Task 9. The spec's declared non-goals (implicit `Rec` in extension members, namespace-aware resolution, data-audit fields in `alwaysLoaded`) have no task by design.
+**Spec coverage.** Every spec section maps to a task: `extendsTarget` → Task 1; `ResolvedTable`, the two build passes, ambiguity, key provenance, `primaryKey` from root, ordering, `CACHE_VERSION` and the shared builder → Task 3; the four detector uptakes → Tasks 4-7; measurement, capture-kind verification, the stop condition and the compatibility note → Task 8. The spec's declared non-goals (implicit `Rec` in extension members, namespace-aware resolution, data-audit fields in `alwaysLoaded`) have no task by design.
 
-**Type consistency.** `ResolvedTable.keys` is `Array<{ key, fromObjectId, fromFile }>` everywhere it is read — Task 3 defines it, Task 5 reads `table.fields` only, Task 7 reads `table.primaryKey` and `table.fields`, Task 8 reads `k.key.fields` in both `isKeyLeadingField` and the evidence string. `resolveCalcFields` returns `{ fields, trustworthy } | undefined` and Task 6 updates both call sites to unwrap `.fields`. `buildTableIndex(objects: Iterable<ObjectInfo>)` is called with `index.objects.values()` in Task 4 and with an array in the Task 3 determinism test — `Iterable` covers both.
+**Type consistency.** `ResolvedTable.keys` is `Array<{ key, fromObjectId, fromFile }>` everywhere it is read — Task 3 defines it, Task 4 reads `table.fields` only, Task 6 reads `table.primaryKey` and `table.fields`, Task 7 reads `k.key.fields` in both `isKeyLeadingField` and the evidence string. `resolveCalcFields` keeps returning `TableFieldInfo[] | undefined`, so Task 5 changes no call site. `buildTableIndex(objects: Iterable<ObjectInfo>)` is called with `index.objects.values()` and with an array in the Task 3 determinism test — `Iterable` covers both.
 
-**Fixture counts.** Five files in Task 2 (38 → 43), one in Task 6 (43 → 44), one in Task 7 (44 → 45), one in Task 8 (45 → 46). Each task carries its own `grep` to catch a missed assertion.
+**Fixture counts.** Five files in Task 2 (38 → 43), one in Task 5 (43 → 44), one in Task 6 (44 → 45), one in Task 7 (45 → 46). Each task carries its own `grep` to catch a missed assertion.
