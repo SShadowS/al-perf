@@ -41,6 +41,7 @@ import { parseProfile } from "./parser.js";
 // Re-exported for callers (e.g. tests) that previously imported normalizeAppGuid from analyzer.
 export { normalizeAppGuid };
 
+import { annotateStaticCause } from "./annotate-cause.js";
 import { displaySqlName, runDetectors, sortPatterns } from "./patterns.js";
 import { isIdleNode, processProfile } from "./processor.js";
 import { buildTableBreakdown } from "./table-view.js";
@@ -312,6 +313,11 @@ export async function analyzeProfile(
 			}
 		}
 	}
+
+	// Name each profile-only finding's static cause, where source can supply
+	// one. Runs before the savings annotator only for readability; the two are
+	// independent. `methods` is `aggregateByMethod(processed)` from above.
+	annotateStaticCause(patterns, methods, sourceIndex);
 
 	// Annotate patterns with estimated savings
 	annotateEstimatedSavings(patterns);

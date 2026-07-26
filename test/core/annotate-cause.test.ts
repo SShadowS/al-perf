@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { analyzeProfile } from "../../src/core/analyzer.js";
 import {
 	annotateStaticCause,
 	PROFILE_ONLY_PATTERN_IDS,
@@ -181,5 +182,17 @@ describe("annotateStaticCause", () => {
 			"repeated-siblings",
 			"single-method-dominance",
 		]);
+	});
+});
+
+describe("annotateStaticCause wired into analyzeProfile", () => {
+	test("a profile-only finding is unannotated without --source", async () => {
+		const result = await analyzeProfile(
+			"test/fixtures/sampling-minimal.alcpuprofile",
+		);
+		for (const p of result.patterns) {
+			expect(p.suggestion ?? "").not.toContain("Static analysis also flagged");
+			expect(p.suggestion ?? "").not.toContain("No loop or SetLoadFields");
+		}
 	});
 });
