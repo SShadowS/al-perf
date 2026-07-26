@@ -604,6 +604,41 @@ describe("calcfields-in-loop — CalcSums gets actionable advice", () => {
 	});
 });
 
+describe("calcfields-in-loop — resolving fields through the merged table", () => {
+	function findings(functionName: string) {
+		return detectCalcFieldsInLoop(
+			[makeMethod({ functionName, objectType: "Codeunit", objectId: 50975 })],
+			sourceIndex,
+		);
+	}
+
+	it("graduates severity off an extension-declared FlowField when the root is seen", () => {
+		// "Ext Lookup" lives in tableextension 50971. Before the merge it did
+		// not resolve at all and every such finding took the conservative
+		// critical default.
+		const p = findings("CalcExtFlowFieldOnRootSeenTable");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("warning");
+		expect(p[0].suggestion).toMatch(/Lookup/i);
+	});
+
+	it("keeps critical for a bare CalcFields() on a fragment", () => {
+		// The fallback is "every FlowField on the table"; on a fragment that is
+		// a claim about fields nobody has seen.
+		const p = findings("BareCalcFieldsOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+
+	it("keeps critical when only some called fields resolve on a fragment", () => {
+		const p = findings("PartlyResolvedCalcFieldsOnFragment");
+		expect(p).toHaveLength(1);
+		expect(p[0].severity).toBe("critical");
+		expect(p[0].suggestion).not.toMatch(/This table has/i);
+	});
+});
+
 describe("duplicate wrong-advice sites stay fixed", () => {
 	// Task 1 fixed four shipped copies of "use SetLoadFields() to pre-load the
 	// fields you need" -- SetLoadFields does not accept FlowFields, and

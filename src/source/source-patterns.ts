@@ -135,31 +135,36 @@ function resolveCalcFields(
 	// NOTE (documented, not fixed — Issue 6): a Page/Report/XMLport's implicit
 	// `Rec` inside a per-row trigger has no `var` declaration, so it never
 	// appears in `variables` and this always falls through to `undefined`
-	// here. That makes this resolution — and the severity it feeds — inert
-	// for every implicit-loop calcfields-in-loop finding: it always falls
-	// back to the conservative `critical` default regardless of which field
-	// is actually being calculated. Fails safe (over-severe, never
-	// under-severe); pre-existing behavior, not fixed by this change.
+	// here. Fails safe (over-severe, never under-severe).
 	if (!variable?.isRecord || !variable.tableName) return undefined;
 
-	for (const obj of index.objects.values()) {
-		if (obj.objectType !== "Table" || obj.objectName !== variable.tableName)
-			continue;
+	const table = index.tables.get(variable.tableName.toLowerCase());
+	// An ambiguous name is two different tables; nothing read from it is about
+	// the one in hand.
+	if (!table || table.ambiguous) return undefined;
 
-		const calledFields = op.allFieldArguments;
-		if (!calledFields || calledFields.length === 0) {
-			const allFlowFields = obj.fields.filter((f) => f.calcFormulaType);
-			return allFlowFields.length > 0 ? allFlowFields : undefined;
-		}
-
-		const calledLower = new Set(calledFields.map((f) => f.toLowerCase()));
-		const resolved = obj.fields.filter(
-			(f) => f.calcFormulaType && calledLower.has(f.name.toLowerCase()),
-		);
-		return resolved.length > 0 ? resolved : undefined;
+	const calledFields = op.allFieldArguments;
+	if (!calledFields || calledFields.length === 0) {
+		// Bare CalcFields() means "every FlowField on the table". On a fragment
+		// that set is not the runtime set — an extension's lone Lookup would
+		// downgrade the finding while an unseen root Sum is what actually runs.
+		if (!table.rootSeen) return undefined;
+		const allFlowFields = table.fields.filter((f) => f.calcFormulaType);
+		return allFlowFields.length > 0 ? allFlowFields : undefined;
 	}
 
-	return undefined; // Table not found in the index — nothing known.
+	const calledLower = new Set(calledFields.map((f) => f.toLowerCase()));
+	const resolved = table.fields.filter(
+		(f) => f.calcFormulaType && calledLower.has(f.name.toLowerCase()),
+	);
+	if (resolved.length === 0) return undefined;
+
+	// A partially-resolved list on a fragment cannot justify a downgrade: the
+	// arguments that did NOT resolve may be the expensive ones.
+	const allResolved = resolved.length === calledFields.length;
+	if (!table.rootSeen && !allResolved) return undefined;
+
+	return resolved;
 }
 
 /**
