@@ -1455,6 +1455,15 @@ describe("incomplete-setloadfields — the merged table picture", () => {
 		expect(findings("ReadsExtensionFlowFieldAfterNarrowing")).toHaveLength(0);
 	});
 
+	it("never reports an UNTYPED FlowField as a missing SetLoadFields entry", () => {
+		// A FlowField whose CalcFormula the extractor cannot type still is not
+		// a loadable column. Keying the guard only on `calcFormulaType` let 130
+		// corpus fields through; 4 remain untypeable even after the extractor
+		// learned the no-`where` and negated shapes, so the guard needs the
+		// FieldClass arm too.
+		expect(findings("ReadsUntypedFlowFieldAfterNarrowing")).toHaveLength(0);
+	});
+
 	it("never reports a FlowFilter as a missing SetLoadFields entry", () => {
 		// SetLoadFields does not accept FlowFilters either — the suggestion
 		// would not compile. Separate clause from the FlowField guard above,

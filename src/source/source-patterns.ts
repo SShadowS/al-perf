@@ -824,9 +824,19 @@ export function detectIncompleteSetLoadFields(
 					// SetLoadFields accepts normal fields only. Telling someone
 					// to add a FlowField or a FlowFilter to the list produces
 					// code that does not compile.
+					//
+					// FieldClass is checked as well as calcFormulaType, not
+					// instead of it: a FlowField whose CalcFormula the extractor
+					// cannot type has no calcFormulaType at all, and keying the
+					// guard on that alone let 130 corpus fields through. Four
+					// remain untypeable even after `findCalcFormulaNode` learned
+					// the no-`where` and negated shapes, and the next
+					// unrecognised formula shape would silently reopen this.
+					const confirmedClass = confirmed?.fieldClass?.toLowerCase();
 					if (
 						confirmed?.calcFormulaType !== undefined ||
-						confirmed?.fieldClass?.toLowerCase() === "flowfilter"
+						confirmedClass === "flowfilter" ||
+						confirmedClass === "flowfield"
 					) {
 						continue;
 					}

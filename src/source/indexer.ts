@@ -1288,6 +1288,39 @@ const CALC_FORMULA_FUNC_MAP: Record<string, TableFieldInfo["calcFormulaType"]> =
 	};
 
 /**
+ * The node a `CalcFormula` property's value ultimately denotes, searched
+ * across the whole property subtree.
+ *
+ * Three shapes reach this, and only the first was ever handled:
+ *   `Sum("T".F where(...))`  -> aggregate_formula
+ *   `Lookup("T".F)`          -> lookup_formula
+ *   `Count("T")`             -> call_expression, because an aggregate with NO
+ *                               `where` clause is not an aggregate_formula at
+ *                               all in this grammar
+ * and a leading `-` (`CalcFormula = - sum(...)`) leaves the property with no
+ * `value` field, so keying off `childForFieldName("value")` missed it even
+ * though the aggregate_formula was right there. 130 fields on a 15,436-file
+ * corpus were in one of those two states: `FieldClass = FlowField` with no
+ * resolved `calcFormulaType`.
+ *
+ * `call_expression` is returned only when it is NOT already inside an
+ * aggregate/lookup formula, so a filtered aggregate keeps its precise node.
+ */
+function findCalcFormulaNode(node: SyntaxNode): SyntaxNode | undefined {
+	let fallback: SyntaxNode | undefined;
+	function walk(n: SyntaxNode): SyntaxNode | undefined {
+		if (n.type === "aggregate_formula" || n.type === "lookup_formula") return n;
+		if (n.type === "call_expression" && !fallback) fallback = n;
+		for (const child of n.namedChildren) {
+			const found = walk(child);
+			if (found) return found;
+		}
+		return undefined;
+	}
+	return walk(node) ?? fallback;
+}
+
+/**
  * Recursively search a TableRelation value subtree for the first simple_table_relation
  * and extract the target table name from it.
  */
@@ -1359,19 +1392,47 @@ function extractTableFields(declNode: SyntaxNode): TableFieldInfo[] {
 					// filter on one cannot cause a table scan.
 					fieldClass = child.childForFieldName("value")?.text;
 				} else if (isPropertyNamed(child, "CalcFormula")) {
-					const value = child.childForFieldName("value");
-					if (value) {
-						// In V2, the value field IS the formula node directly (aggregate_formula or lookup_formula)
-						const formulaNode =
-							value.type === "aggregate_formula" ||
-							value.type === "lookup_formula"
-								? value
-								: value.namedChildren.find(
-										(c) =>
-											c.type === "aggregate_formula" ||
-											c.type === "lookup_formula",
-									);
-						if (formulaNode?.type === "aggregate_formula") {
+					// Search the whole property subtree, not `childForFieldName
+					// ("value")`. A NEGATED aggregate — `CalcFormula = - sum(...)`,
+					// which is how every "balance owed" FlowField in BC is written —
+					// still produces an `aggregate_formula`, but the leading `-` means
+					// the property has no `value` field, so keying off it dropped the
+					// formula entirely.
+					const formulaNode = findCalcFormulaNode(child);
+					if (formulaNode) {
+						if (formulaNode.type === "call_expression") {
+							// An aggregate with NO `where` clause parses as an ordinary
+							// call, not an `aggregate_formula` — `CalcFormula =
+							// count("VAT Group Approved Member")` is legal and common.
+							// `Lookup` is unaffected; it keeps its own node either way.
+							const fn =
+								formulaNode.childForFieldName("function") ??
+								formulaNode.namedChildren[0];
+							const funcName = fn?.text?.toLowerCase();
+							if (funcName && funcName in CALC_FORMULA_FUNC_MAP) {
+								calcFormulaType = CALC_FORMULA_FUNC_MAP[funcName];
+							}
+							const argList = formulaNode.namedChildren.find(
+								(c) => c.type === "argument_list",
+							);
+							const firstArg = argList?.namedChildren[0];
+							if (firstArg) {
+								// `count("Table")` names the table directly;
+								// `sum("Table".Field)` names it as the member
+								// expression's object.
+								const target =
+									firstArg.type === "member_expression"
+										? (firstArg.childForFieldName("object") ??
+											firstArg.namedChildren[0])
+										: firstArg;
+								if (
+									target?.type === "identifier" ||
+									target?.type === "quoted_identifier"
+								) {
+									calcFormulaTable = stripQuotes(target.text);
+								}
+							}
+						} else if (formulaNode.type === "aggregate_formula") {
 							const funcNode = formulaNode.namedChildren.find(
 								(c) => c.type === "aggregate_function",
 							);
