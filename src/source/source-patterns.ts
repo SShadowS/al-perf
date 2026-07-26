@@ -910,31 +910,42 @@ export function detectIncompleteSetLoadFields(
 					const unconfirmed = missingFields.filter(
 						(f) => !confirmedFields?.has(f),
 					);
-					// This is a PERFORMANCE finding, not a correctness one.
-					// Accessing a field SetLoadFields left out does not return a
-					// default and does not error: the platform JIT-loads it,
-					// doing an implicit Get against the data source (Microsoft
-					// Learn, "Using partial records"). The value is correct; the
-					// cost is an extra round-trip that erases the saving the
-					// narrowing was for. Errors — "Inconsistent read of
-					// field(s)" / "JIT loading of field(s) failed" — are
-					// possible but only under a race, when another session
-					// modifies, deletes or renames the row between the two
-					// loads.
+					// A PERFORMANCE finding, not a correctness one, and the
+					// cost model below is MEASURED on BC 28 rather than read
+					// off the docs (private/jit-probe, `SessionInformation.
+					// SqlStatementsExecuted`, 5,000 rows per scenario in
+					// disjoint ranges so no scenario warms the cache for
+					// another):
+					//
+					//   no SetLoadFields at all ......... 1 SQL statement
+					//   load set COVERS the reads ....... 1
+					//   reads a field NOT in the set .... 4   (5002 rows read)
+					//   same, via a by-value parameter .. 4   (5002 rows read)
+					//
+					// So it is NOT one round-trip per iteration — 5,000
+					// iterations cost 4 statements, not 5,000. Accessing an
+					// unloaded field JIT-loads it (an implicit Get), and the
+					// platform then adds that field to the load set for the
+					// rest of the iteration. That is the real cost: three extra
+					// statements once, and then the narrowing simply stops
+					// applying, which is what SetLoadFields was for.
+					//
+					// Errors — "Inconsistent read of field(s)" / "JIT loading
+					// of field(s) failed" — are possible but only under a race,
+					// when another session modifies, deletes or renames the row
+					// between the two loads.
 					//
 					// So `warning`, not `critical`. The old rating rested on a
-					// "will cause runtime errors" claim that is simply not what
-					// BC does, and one extra Get is not a critical defect. It
-					// stays ONE Get even inside a loop: after a JIT load the
-					// platform updates the enumerator, so later iterations do
-					// not repeat it — unless the record was passed by value,
-					// which does not share the load set.
+					// "will cause runtime errors" claim that is not what BC
+					// does. (The docs say a by-value copy JIT-loads on every
+					// iteration; this shape measured 4 statements either way on
+					// BC 28, so that is not asserted here.)
 					patterns.push({
 						id: "incomplete-setloadfields",
 						severity: allConfirmed ? "warning" : "info",
 						title: `SetLoadFields on ${recVar} in ${method.functionName} is missing accessed fields`,
 						description: allConfirmed
-							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Reading a field that was not loaded triggers a JIT load — an implicit Get against the data source — so the value is correct but the narrowing is partly undone. Under concurrent modification a JIT load can also fail with "Inconsistent read of field(s)".`
+							? `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Reading a field that was not loaded triggers a JIT load — an implicit Get — and the platform then adds that field to the load set for the rest of the iteration, so the narrowing stops applying from that point on. Measured on BC 28: 5,000 iterations cost 4 SQL statements against 1 for a covering load set, so the cost is a small constant, not one round-trip per row. Under concurrent modification a JIT load can also fail with "Inconsistent read of field(s)".`
 							: `SetLoadFields() on ${recVar} loads [${[...op.fields].join(", ")}] but the code later accesses [${missingFields.join(", ")}]. Table "${variable?.tableName ?? "?"}" is ${table ? "only known from its extensions — its root declaration is not in the index" : "not in the index"}, so ${unconfirmed.join(", ")} could not be confirmed to be ${unconfirmed.length === 1 ? "a field" : "fields"} at all — a paren-less call to a table method reads identically here.`,
 						impact: method.selfTime,
 						involvedMethods: [methodLabel(method)],
