@@ -258,9 +258,22 @@ function renderPatterns(result: AnalysisResult): string {
 		lines.push("");
 		lines.push(p.description);
 		lines.push("");
+		lines.push(`**Pattern:** \`${p.id}\``);
+		if (p.involvedMethods.length > 0) {
+			lines.push(`**Methods:** ${p.involvedMethods.join(", ")}`);
+		}
 		lines.push(`**Impact:** ${formatTime(p.impact)}`);
 		if (p.estimatedSavings && p.estimatedSavings > 0) {
 			lines.push(`**Estimated savings:** ${formatTime(p.estimatedSavings)}`);
+			// Where the figure comes from. Four of these models were measured on
+			// a BC container; the rest are judgement and say so in their text.
+			if (p.savingsExplanation) {
+				lines.push("");
+				lines.push(`> ${p.savingsExplanation}`);
+			}
+		}
+		if (p.evidence) {
+			lines.push(`**Evidence:** ${p.evidence}`);
 		}
 		if (p.suggestion) {
 			lines.push("");

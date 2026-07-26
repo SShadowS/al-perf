@@ -302,13 +302,30 @@ function renderPatterns(result: AnalysisResult): string {
 	lines.push("");
 
 	for (const p of result.patterns) {
-		lines.push(`  ${formatSeverity(p.severity)}  ${chalk.bold(p.title)}`);
+		lines.push(
+			`  ${formatSeverity(p.severity)}  ${chalk.bold(p.title)} ${chalk.dim(`[${p.id}]`)}`,
+		);
 		lines.push(`    ${p.description}`);
+		if (p.involvedMethods.length > 0) {
+			lines.push(`    ${chalk.dim("Methods:")} ${p.involvedMethods.join(", ")}`);
+		}
 		lines.push(`    Impact: ${formatTime(p.impact)}`);
 		if (p.estimatedSavings && p.estimatedSavings > 0) {
 			lines.push(
 				`    Estimated savings: ${chalk.green(formatTime(p.estimatedSavings))}`,
 			);
+			// The number alone invites more trust than it has earned: four of
+			// these models were measured on a BC container and the rest are
+			// judgement calls that say so. Print the basis next to the figure.
+			if (p.savingsExplanation) {
+				lines.push(`      ${chalk.dim(p.savingsExplanation)}`);
+			}
+		}
+		// Where the finding is: line, column, and what made it a loop. Rendered
+		// by no formatter until now, which left a source-correlated finding
+		// with no way to locate it beyond the method name in the title.
+		if (p.evidence) {
+			lines.push(`    ${chalk.dim("Evidence:")} ${p.evidence}`);
 		}
 		if (p.suggestion) {
 			lines.push(`    ${chalk.cyan("Suggestion:")} ${p.suggestion}`);

@@ -1108,10 +1108,16 @@ describe("formatAnalysisTerminal — sqlActivity section (Task 7)", () => {
 		expect(out).toContain("SQL (sampled estimate)");
 		expect(out).toContain("SELECT Customer");
 		expect(out).toContain("×42 sampled");
-		// Scope the honesty guard to the Detected Patterns section specifically
-		// (the sqlActivity section legitimately says "Measured SQL" — that's
-		// the BC activity manifest's own measured counters, a different thing
-		// from the per-finding SAMPLED evidence this test targets).
+		// Scope the honesty guard to the per-finding SQL EVIDENCE lines, which is
+		// what it protects: a sampled estimate must never be described as
+		// measured or exact. It has been narrowed twice for the same reason —
+		// first because the sqlActivity section legitimately says "Measured SQL"
+		// (the BC activity manifest's own counters), and now because a savings
+		// explanation legitimately says "measured on BC 28" about a container
+		// measurement of the fix. Both are different claims from this one, and a
+		// blanket ban on the word across a whole section keeps colliding with
+		// them. The evidence block runs from its header to the end of the
+		// Detected Patterns section, since it renders last in a pattern.
 		const patternsStart = out.indexOf("Detected Patterns");
 		expect(patternsStart).toBeGreaterThan(-1);
 		const patternsEnd = out.indexOf("Object Breakdown");
@@ -1119,9 +1125,12 @@ describe("formatAnalysisTerminal — sqlActivity section (Task 7)", () => {
 			patternsStart,
 			patternsEnd > -1 ? patternsEnd : undefined,
 		);
-		expect(patternsSection).not.toContain("measured");
-		expect(patternsSection).not.toContain("exact");
-		expect(patternsSection).not.toContain("ran 42 times");
+		const sqlStart = patternsSection.indexOf("SQL (sampled estimate)");
+		expect(sqlStart).toBeGreaterThan(-1);
+		const sqlEvidenceLines = patternsSection.slice(sqlStart);
+		expect(sqlEvidenceLines).not.toContain("measured");
+		expect(sqlEvidenceLines).not.toContain("exact");
+		expect(sqlEvidenceLines).not.toContain("ran 42 times");
 	});
 
 	test("renders (unparsed) when statement has no table", async () => {

@@ -300,6 +300,26 @@ function renderPatterns(result: AnalysisResult): string {
 			const suggestion = p.suggestion
 				? `<p class="suggestion"><strong>Suggestion:</strong> ${escapeHtml(p.suggestion)}</p>`
 				: "";
+			const evidence = p.evidence
+				? `<p class="evidence"><strong>Evidence:</strong> ${escapeHtml(p.evidence)}</p>`
+				: "";
+			const methods =
+				p.involvedMethods.length > 0
+					? `<p class="methods"><strong>Methods:</strong> ${escapeHtml(p.involvedMethods.join(", "))}</p>`
+					: "";
+			// The web report is the interface the BC companion app sends profiles
+			// to, and it was the only formatter showing no savings figure at all.
+			// The explanation ships with it: four of these models were measured on
+			// a BC container and the rest are judgement calls that say so, and a
+			// bare number cannot carry that difference.
+			const savings =
+				p.estimatedSavings && p.estimatedSavings > 0
+					? `<p class="savings"><strong>Estimated savings:</strong> ${formatTime(p.estimatedSavings)}${
+							p.savingsExplanation
+								? `<br><span class="savings-basis">${escapeHtml(p.savingsExplanation)}</span>`
+								: ""
+						}</p>`
+					: "";
 			const sqlEvidence = p.sqlEvidence
 				? renderSqlEvidenceHtml(p.sqlEvidence)
 				: "";
@@ -307,9 +327,13 @@ function renderPatterns(result: AnalysisResult): string {
         <div class="pattern-header">
           <span class="severity-badge" style="background:${color}">${p.severity.toUpperCase()}</span>
           <span class="pattern-title">${escapeHtml(p.title)}</span>
+          <span class="pattern-id">${escapeHtml(p.id)}</span>
         </div>
         <p>${escapeHtml(p.description)}</p>
+        ${methods}
         <p class="impact"><strong>Impact:</strong> ${formatTime(p.impact)}</p>
+        ${evidence}
+        ${savings}
         ${suggestion}
         ${sqlEvidence}
       </div>`;
@@ -625,6 +649,11 @@ export function formatAnalysisHtml(result: AnalysisResult): string {
     .pattern-title { font-weight: 600; }
     .impact { color: #505C6D; font-size: 0.9em; }
     .suggestion { color: #00B7C3; margin-top: 4px; font-size: 0.9em; }
+    .methods { color: #666; font-size: 0.85em; margin-top: 2px; }
+    .evidence { color: #666; font-size: 0.85em; margin-top: 2px; }
+    .savings { color: #107C10; margin-top: 4px; font-size: 0.9em; }
+    .savings-basis { color: #666; font-size: 0.92em; font-weight: normal; }
+    .pattern-id { color: #888; font-size: 0.8em; font-family: monospace; margin-left: 8px; }
     .bar { height: 14px; background: #00B7C3; border-radius: 2px; min-width: 2px; }
     .meta-table td:first-child { font-weight: 600; width: 180px; }
     .explanation h2, .explanation h3 { color: #212121; border-bottom: 1px solid #E0E0E0; }
