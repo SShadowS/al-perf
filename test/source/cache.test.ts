@@ -18,8 +18,8 @@ describe("SourceIndexCache", () => {
 	test("cold cache builds index and stores it", async () => {
 		const cache = new SourceIndexCache(cacheDir);
 		const index = await cache.getOrBuild(fixturesDir);
-		expect(index.files.length).toBe(38);
-		expect(index.objects.size).toBe(38);
+		expect(index.files.length).toBe(43);
+		expect(index.objects.size).toBe(43);
 		expect(cache.has(fixturesDir)).toBe(true);
 	});
 
