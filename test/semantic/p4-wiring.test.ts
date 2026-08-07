@@ -12,7 +12,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
@@ -25,6 +25,7 @@ import type { DiffAnalysis } from "../../src/semantic/diff-runner.js";
 import { runEngineDiff } from "../../src/semantic/diff-runner.js";
 import { correlateRegressions } from "../../src/semantic/regression-correlate.js";
 import type { RawProfile } from "../../src/types/profile.js";
+import { AL_SEM_BIN, alSemCorpus } from "./al-sem-paths.js";
 
 const FIXTURE_DIR = resolve(import.meta.dir, "../fixtures/fusion");
 const WS_MIN = resolve(FIXTURE_DIR, "ws-min");
@@ -34,10 +35,19 @@ const BUN_EXE = process.execPath;
 const FIXTURES = "test/fixtures";
 const PROFILE = `${FIXTURES}/sampling-minimal.alcpuprofile`;
 
-// Real-binary paths (for smoke tests).
-const REAL_BIN = "U:/Git/al-call-hierarchy/target/release/alsem.exe";
-const CORPUS_D1 = "U:/Git/al-call-hierarchy/tests/r0-corpus/ws-d1";
-const CORPUS_D2 = "U:/Git/al-call-hierarchy/tests/r0-corpus/ws-d2";
+// Real-binary paths (for smoke tests). Resolved rather than hardcoded — see
+// `al-sem-paths.ts`. Each is `undefined` when the engine checkout is absent, which is
+// what the availability gate further down keys on.
+const RESOLVED_BIN = AL_SEM_BIN;
+const RESOLVED_D1 = alSemCorpus("ws-d1");
+const RESOLVED_D2 = alSemCorpus("ws-d2");
+
+// Non-optional aliases for the call sites. `""` stands in when the engine is absent,
+// which is safe because the smoke block is skipped in exactly that case — the resolver
+// already confirmed existence for any non-empty value here.
+const REAL_BIN = RESOLVED_BIN ?? "";
+const CORPUS_D1 = RESOLVED_D1 ?? "";
+const CORPUS_D2 = RESOLVED_D2 ?? "";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -408,9 +418,11 @@ describe("compareProfiles — both sources (stub-backed)", () => {
 // Real-binary smoke (gated on alsem.exe existing)
 // ---------------------------------------------------------------------------
 
-const BINARY_AVAILABLE = existsSync(REAL_BIN);
-const CORPUS_D1_AVAILABLE = existsSync(CORPUS_D1);
-const CORPUS_D2_AVAILABLE = existsSync(CORPUS_D2);
+// The resolver in `al-sem-paths.ts` already checked existence, so availability is a
+// plain presence test rather than a second round of `existsSync`.
+const BINARY_AVAILABLE = RESOLVED_BIN !== undefined;
+const CORPUS_D1_AVAILABLE = RESOLVED_D1 !== undefined;
+const CORPUS_D2_AVAILABLE = RESOLVED_D2 !== undefined;
 
 // describe.skipIf — the options-object form describe(name, {skip}, fn) is
 // silently ignored by Bun, so the gate never applied and the suite ran (and

@@ -23,7 +23,9 @@ live `runEngine(ws-min)` against these when `AL_SEM_BIN` is set.
 ### Regenerate
 
 ```bash
-AL_SEM_BIN=U:/Git/al-call-hierarchy/target/release/alsem.exe
+# Path to a release build of the al-sem engine. The repo was renamed from
+# al-call-hierarchy in Aug 2026, so an older checkout may still be at that directory name.
+AL_SEM_BIN=U:/Git/al-sem/target/release/alsem.exe
 
 # inventory (routine universe)
 "$AL_SEM_BIN" fingerprint test/fixtures/fusion/ws-min \

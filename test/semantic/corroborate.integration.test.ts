@@ -25,7 +25,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
@@ -37,6 +37,7 @@ import { fuseProfile } from "../../src/semantic/fuse.js";
 import type { MethodBreakdown } from "../../src/types/aggregated.js";
 import type { FusedModel } from "../../src/types/fused.js";
 import type { DetectedPattern } from "../../src/types/patterns.js";
+import { AL_SEM_BIN, alSemCorpus } from "./al-sem-paths.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -310,11 +311,9 @@ describe("fuseProfile + corroborate integration (P3.1 Task 3)", () => {
 //   - enclosingMember on the field-trigger inventory row, and
 //   - evidencePath on the d1-db-op-in-loop finding (with the REAL sourceAnchor shape).
 //
-// The real binary lives at U:\Git\al-call-hierarchy\target\release\alsem.exe; set
-// AL_SEM_BIN to that path (or any rebuilt alsem.exe path) to enable this section.
-//
-// Fallback path: if AL_SEM_BIN is not set but the al-call-hierarchy release binary
-// exists at its canonical local path, use it automatically.
+// Set AL_SEM_BIN to a built `alsem` binary to enable this section, or AL_SEM_REPO to an
+// al-sem checkout. Absent both, `al-sem-paths.ts` probes the usual local checkout
+// locations and this section enables itself if one is present and built.
 // ---------------------------------------------------------------------------
 
 function isEngineAnalysis(result: unknown): result is EngineAnalysis {
@@ -326,22 +325,18 @@ function isEngineAnalysis(result: unknown): result is EngineAnalysis {
 	);
 }
 
-const ALCH_ENGINE_BIN =
-	"U:\\Git\\al-call-hierarchy\\target\\release\\alsem.exe".replace(/\\/g, "/");
-const REAL_BIN: string | undefined =
-	process.env.AL_SEM_BIN ??
-	(existsSync(ALCH_ENGINE_BIN) ? ALCH_ENGINE_BIN : undefined);
+// Resolved rather than hardcoded — see `al-sem-paths.ts`, which honours AL_SEM_BIN /
+// AL_SEM_REPO and probes both spellings of the engine checkout directory.
+const REAL_BIN: string | undefined = AL_SEM_BIN;
 
 // ws-implicit-trigger: has a Table 72100 "Quantity" OnValidate trigger and a
-// d1-db-op-in-loop finding that traces through it.
-const WS_IMPLICIT_TRIGGER =
-	"U:\\Git\\al-call-hierarchy\\tests\\r0-corpus\\ws-implicit-trigger".replace(
-		/\\/g,
-		"/",
-	);
+// d1-db-op-in-loop finding that traces through it. `undefined` when the engine checkout
+// or that fixture is missing; `""` then stands in, and the gate below skips the test.
+const RESOLVED_WS_IMPLICIT_TRIGGER = alSemCorpus("ws-implicit-trigger");
+const WS_IMPLICIT_TRIGGER = RESOLVED_WS_IMPLICIT_TRIGGER ?? "";
 
-describe("P3.2c real-binary smoke (gated: AL_SEM_BIN / canonical al-call-hierarchy path)", () => {
-	test.skipIf(!REAL_BIN || !existsSync(WS_IMPLICIT_TRIGGER))(
+describe("P3.2c real-binary smoke (gated: AL_SEM_BIN / a local al-sem checkout)", () => {
+	test.skipIf(!REAL_BIN || !RESOLVED_WS_IMPLICIT_TRIGGER)(
 		"real alsem.exe on ws-implicit-trigger: enclosingMember on inventory + evidencePath on finding",
 		async () => {
 			clearEngineCache();
