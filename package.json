@@ -50,7 +50,7 @@
 		"bun": ">=1.0.0"
 	},
 	"dependencies": {
-		"@anthropic-ai/sdk": "^0.115.0",
+		"@anthropic-ai/sdk": "^0.117.1",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"chalk": "^6.0.0",
 		"cli-table3": "^0.6.5",
