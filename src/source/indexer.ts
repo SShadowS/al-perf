@@ -1875,13 +1875,19 @@ function extractSourceTableTemporary(declNode: SyntaxNode): boolean {
 }
 
 /**
- * Recursively find all .al files in a directory.
+ * Recursively find all .al files in a directory, including folders whose names
+ * start with a dot: Continia AL repos keep ordinary AL source in a legacy
+ * `.dependencies/` folder, and a folder's name gives it no special meaning.
  */
 async function findALFiles(dirPath: string): Promise<string[]> {
 	const { Glob } = await import("bun");
 	const glob = new Glob("**/*.al");
 	const files: string[] = [];
-	for await (const file of glob.scan({ cwd: dirPath, absolute: true })) {
+	for await (const file of glob.scan({
+		cwd: dirPath,
+		absolute: true,
+		dot: true,
+	})) {
 		files.push(file);
 	}
 	return files;

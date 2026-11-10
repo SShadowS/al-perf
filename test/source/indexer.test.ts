@@ -1,5 +1,7 @@
 import { describe, expect, it, test } from "bun:test";
-import { resolve } from "path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join, resolve } from "path";
 import { buildSourceIndex, indexALFile } from "../../src/source/indexer.js";
 import type { RecordOpInfo } from "../../src/types/source-index.js";
 
@@ -739,5 +741,29 @@ describe("properties guarded by a preprocessor conditional", () => {
 		expect(
 			r.fields.find((x) => x.name === "Guarded Relation")!.tableRelationTarget,
 		).toBe("Test Table");
+	});
+});
+
+describe("folders whose names start with a dot", () => {
+	// A folder's name gives it no special meaning: Continia AL repos keep
+	// ordinary AL source in a legacy `.dependencies/` folder.
+	test("AL files under .dependencies/ are indexed like any other", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "alperf-dotdir-"));
+		try {
+			mkdirSync(join(dir, ".dependencies", "Legacy"), { recursive: true });
+			writeFileSync(
+				join(dir, "App.Codeunit.al"),
+				'codeunit 50100 "App Unit"\n{\n    procedure Run()\n    begin\n    end;\n}\n',
+			);
+			writeFileSync(
+				join(dir, ".dependencies", "Legacy", "Legacy.Codeunit.al"),
+				'codeunit 50101 "Legacy Unit"\n{\n    procedure Run()\n    begin\n    end;\n}\n',
+			);
+			const index = await buildSourceIndex(dir);
+			expect(index.objects.has("Codeunit_50100")).toBe(true);
+			expect(index.objects.has("Codeunit_50101")).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

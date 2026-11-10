@@ -25,7 +25,11 @@ import { buildTableIndex } from "./table-index.js";
 // objects without it, so `buildTableIndex` sees zero contributing
 // extensions and the whole merge silently vanishes on a cache hit while
 // the directory hash still matches.
-const CACHE_VERSION = 4;
+// 5: the indexer now reads folders whose names start with a dot (a legacy
+// `.dependencies/` folder holds ordinary AL source). The directory hash already
+// covered those files, so a version-4 entry would keep serving an index
+// without them.
+const CACHE_VERSION = 5;
 
 interface SerializedIndex {
 	files: ALFileInfo[];
